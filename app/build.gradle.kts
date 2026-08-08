@@ -58,5 +58,7 @@ dependencies {
     implementation("androidx.room:room-runtime:2.6.1")
     implementation("androidx.room:room-ktx:2.6.1")
     ksp("androidx.room:room-compiler:2.6.1")
+    // 讯飞语音 SDK（需手动放置 app/libs/msc.jar）
+    implementation(files("libs/msc.jar"))
     testImplementation("junit:junit:4.13.2")
 }

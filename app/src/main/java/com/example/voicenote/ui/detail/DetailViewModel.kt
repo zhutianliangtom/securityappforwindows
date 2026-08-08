@@ -31,7 +31,10 @@ class DetailViewModel(
     }
 
     fun toggleCategory(note: Note) {
-        viewModelScope.launch { repository.toggleCategory(note) }
+        viewModelScope.launch {
+            repository.toggleCategory(note)
+            _note.value = note.copy(category = if (note.category == "TODO") "DONE" else "TODO")
+        }
     }
 
     class Factory(

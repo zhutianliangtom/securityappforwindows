@@ -1,3 +1,5 @@
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
@@ -7,6 +9,7 @@ plugins {
 android {
     namespace = "com.example.voicenote"
     compileSdk = 36
+    buildToolsVersion = "36.0.0"
 
     defaultConfig {
         applicationId = "com.example.voicenote"
@@ -18,10 +21,12 @@ android {
 
     signingConfigs {
         create("release") {
-            val props = java.util.Properties()
-            val f = rootProject.file("keystore.properties")
+            val props = Properties()
+            // keystore.properties 位于 app 模块下（app/keystore.properties）
+            val f = project.file("keystore.properties")
             if (f.exists()) f.inputStream().use { props.load(it) }
-            storeFile = rootProject.file(props.getProperty("storeFile", "keystore/release.keystore"))
+            // storeFile 相对 app 模块（app/keystore/release.keystore）
+            storeFile = project.file(props.getProperty("storeFile", "keystore/release.keystore"))
             storePassword = props.getProperty("storePassword", "")
             keyAlias = props.getProperty("keyAlias", "")
             keyPassword = props.getProperty("keyPassword", "")

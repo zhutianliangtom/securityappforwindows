@@ -131,11 +131,7 @@ class DetailFragment : Fragment() {
     }
 
     private fun toggleCategory() {
-        val current = viewModel.note.value ?: return
-        viewModel.toggleCategory(current)
-        viewModel.note.value = current.copy(
-            category = if (current.category == "TODO") "DONE" else "TODO"
-        )
+        viewModel.note.value?.let { viewModel.toggleCategory(it) }
     }
 
     private fun confirmDelete() {

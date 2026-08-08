@@ -18,16 +18,24 @@ object PersonExtractor {
                 }
             }
         }
-        // 关联词 + 人名（2~3 字），如 和项目/约明天；若后面紧跟称谓词则拼接（项目经理）
+        // 关联词 + 人名（2~3 字），如 和项目/约明天；若后面紧跟称谓词则拼接（项目经理）。
+        // 懒惰匹配优先取 2 字，避免"项目经"吞掉称谓词"经理"
         val timeWords = listOf("今天", "明天", "后天", "昨天", "上午", "下午", "晚上", "中午", "早上", "凌晨", "周末", "下周")
-        val m = Regex("(和|跟|约|找|请|给)([\\u4e00-\\u9fa5]{2,3})").find(text) ?: return null
+        val m = Regex("(和|跟|约|找|请|给)([\\u4e00-\\u9fa5]{2,3}?)").find(text) ?: return null
         var candidate = m.groupValues[2]
         val afterIdx = m.range.last + 1
+        var matchedTitle = false
         for (t in titles) {
             if (afterIdx + t.length <= text.length && text.substring(afterIdx, afterIdx + t.length) == t) {
                 candidate += t
+                matchedTitle = true
                 break
             }
+        }
+        // 无称谓时补足第 3 个字（如 张小明），时间词由下方排除
+        if (!matchedTitle && candidate.length == 2 && afterIdx < text.length) {
+            val next = text[afterIdx]
+            if (next in '一'..'龥') candidate += next
         }
         if (timeWords.any { candidate.contains(it) }) return null
         return candidate

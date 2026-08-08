@@ -3,6 +3,10 @@ pluginManagement {
         google()
         mavenCentral()
         gradlePluginPortal()
+        // 国内镜像（加速）
+        maven("https://maven.aliyun.com/repository/google")
+        maven("https://maven.aliyun.com/repository/central")
+        maven("https://maven.aliyun.com/repository/gradle-plugin")
     }
 }
 dependencyResolutionManagement {
@@ -10,6 +14,9 @@ dependencyResolutionManagement {
     repositories {
         google()
         mavenCentral()
+        // 国内镜像（加速）
+        maven("https://maven.aliyun.com/repository/google")
+        maven("https://maven.aliyun.com/repository/central")
     }
 }
 rootProject.name = "VoiceNote"

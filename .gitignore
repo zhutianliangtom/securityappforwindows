@@ -11,3 +11,4 @@ app/build/
 app/keystore.properties
 *.keystore
 *.jks
+.sdk_tmp/

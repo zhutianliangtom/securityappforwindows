@@ -32,4 +32,6 @@
     <string name="edit">编辑</string>
     <string name="audio">录音</string>
     <string name="created_at">创建时间：%1$s</string>
+    <string name="confirm_title">确认笔记</string>
+    <string name="clear_reminder">清除提醒</string>
 </resources>

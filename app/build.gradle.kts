@@ -58,7 +58,8 @@ dependencies {
     implementation("androidx.room:room-runtime:2.6.1")
     implementation("androidx.room:room-ktx:2.6.1")
     ksp("androidx.room:room-compiler:2.6.1")
-    // 讯飞语音 SDK（需手动放置 app/libs/msc.jar）
-    implementation(files("libs/msc.jar"))
+    // 讯飞 SparkChain 语音听写 SDK（app/libs/ 本地 aar）
+    implementation(files("libs/SparkChain.aar", "libs/Codec.aar"))
+    implementation("com.google.code.gson:gson:2.8.8")
     testImplementation("junit:junit:4.13.2")
 }

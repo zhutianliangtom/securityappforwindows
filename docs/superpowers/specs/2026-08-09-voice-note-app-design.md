@@ -173,8 +173,20 @@ interface IRecognizer {
 - `app/src/main/assets` 放置 SDK 资源；`libs/` 放置 SDK so 与 jar/aar。
 - `MscConfig` / `SpeechUtility.createUtility` 初始化 AppID。
 - 在线听写参数：`domain=iat`、`language=zh_cn`、`accent=mandarin`、`asr_ptt=1`。
-- AppID 当前先用占位配置常量，用户后续替换。
 - 录音流由讯飞内部管理或自采 PCM 输入，按官方推荐方案实现。
+
+### 7.3 讯飞凭证配置（本地开发）
+用户已提供以下讯飞开放平台凭证，写入本地配置常量（不入库、不提交公共仓库，仅本地开发使用）：
+
+| 项目 | 值 |
+|---|---|
+| AppID | `b0c90dc2` |
+| APISecret | `OTUxYTA5MDU0NzcxNWVhOWJmMTE4OWM4` |
+| APIKey | `466ce52106ddebe0e8cd6ce3f0636477` |
+
+- MSC Android SDK 在线听写使用 **AppID** 初始化。
+- APIKey / APISecret 备用（如需 WebSocket WebAPI 集成时使用）。
+- 在代码中统一收敛为 `AppConfig` 常量，便于后续替换/切换离线。
 
 ## 8. 动画与 UI 规范（frontend-design 产出）
 

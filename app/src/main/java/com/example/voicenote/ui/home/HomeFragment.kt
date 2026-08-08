@@ -54,6 +54,19 @@ class HomeFragment : Fragment() {
         if (ok && !isRecording) startRecording() else showHint(getString(R.string.permission_denied))
     }
 
+    // 录音按钮呼吸脉冲动画（动效规范：500ms 循环）
+    private val pulseAnim by lazy {
+        android.view.animation.ScaleAnimation(
+            1f, 1.15f, 1f, 1.15f,
+            android.view.animation.Animation.RELATIVE_TO_SELF, 0.5f,
+            android.view.animation.Animation.RELATIVE_TO_SELF, 0.5f
+        ).apply {
+            duration = 500
+            repeatMode = android.view.animation.Animation.REVERSE
+            repeatCount = android.view.animation.Animation.INFINITE
+        }
+    }
+
     override fun onCreateView(
         inflater: LayoutInflater, container: ViewGroup?, savedInstanceState: Bundle?
     ): View {
@@ -112,6 +125,8 @@ class HomeFragment : Fragment() {
     private fun stopRecording() {
         isRecording = false
         binding.micButton.isSelected = false
+        binding.micButton.text = getString(R.string.mic_start)
+        binding.micButton.clearAnimation()
         binding.recordHint.text = getString(R.string.recognizing)
         recognizer?.stop(
             onResult = { text -> handleResult(text) },

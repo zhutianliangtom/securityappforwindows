@@ -43,15 +43,19 @@ class DetailFragment : Fragment() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        // 卡片放大进入 / 缩小收回
+        // 卡片放大进入 / 缩小收回（动效规范：320ms，Decelerate 1.6）
         sharedElementEnterTransition = TransitionSet().apply {
             ordering = TransitionSet.ORDERING_TOGETHER
+            duration = 320
+            interpolator = android.view.animation.DecelerateInterpolator(1.6f)
             addTransition(ChangeBounds())
             addTransition(ChangeTransform())
             addTransition(Fade(Fade.IN))
         }
         sharedElementReturnTransition = TransitionSet().apply {
             ordering = TransitionSet.ORDERING_TOGETHER
+            duration = 320
+            interpolator = android.view.animation.DecelerateInterpolator(1.6f)
             addTransition(ChangeBounds())
             addTransition(ChangeTransform())
             addTransition(Fade(Fade.OUT))

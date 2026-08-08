@@ -115,11 +115,12 @@ class HomeFragment : Fragment() {
         val file = File(requireContext().filesDir, "records/rec_${System.currentTimeMillis()}.wav")
         currentAudioFile = file
         recognizer = RecognizerFactory.create(requireContext())
-        recordManager = RecordManager(file)
-        recordManager!!.start { data, len -> recognizer?.writeAudio(data, len) }
+        // 先启动识别，再开始采集，避免音频先于 startListening 写入被丢弃
         recognizer!!.start { partial ->
             binding.recordHint.text = partial.ifBlank { getString(R.string.recording) }
         }
+        recordManager = RecordManager(file)
+        recordManager!!.start { data, len -> recognizer?.writeAudio(data, len) }
     }
 
     private fun stopRecording() {

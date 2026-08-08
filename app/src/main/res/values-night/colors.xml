@@ -12,4 +12,5 @@
     <color name="chip_bg">#2A3060</color>
     <color name="chip_text">#AEB8FF</color>
     <color name="mint">#2FBF9F</color>
+    <color name="card_bg">#1E2026</color>
 </resources>

@@ -73,7 +73,7 @@ class DetailFragment : Fragment() {
         super.onViewCreated(view, savedInstanceState)
         binding.root.transitionName = "note_detail"
 
-        binding.btnBack.setOnClickListener { parentFragmentManager.popBackStack() }
+        binding.toolbar.setNavigationOnClickListener { parentFragmentManager.popBackStack() }
         binding.btnPlay.setOnClickListener { togglePlay() }
         binding.btnSave.setOnClickListener { saveNote() }
         binding.btnDelete.setOnClickListener { confirmDelete() }

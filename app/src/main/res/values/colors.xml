@@ -12,5 +12,6 @@
     <color name="chip_bg">#E8ECFF</color>
     <color name="chip_text">#3A4BD8</color>
     <color name="mint">#2FBF9F</color>
+    <color name="card_bg">#FFFFFF</color>
     <color name="ic_launcher_background">#4056E0</color>
 </resources>

@@ -62,7 +62,7 @@ class RecordConfirmFragment : Fragment() {
             binding.tvTime.text = getString(R.string.event_time)
         }
         binding.btnSave.setOnClickListener { save() }
-        binding.btnBack.setOnClickListener { parentFragmentManager.popBackStack() }
+        binding.toolbar.setNavigationOnClickListener { parentFragmentManager.popBackStack() }
 
         viewLifecycleOwner.lifecycleScope.launch {
             viewModel.savedId.collect { id ->

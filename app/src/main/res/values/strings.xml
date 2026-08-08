@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">语音笔记</string>
+    <string name="tab_todo">待办</string>
+    <string name="tab_done">已完成</string>
+    <string name="mic_start">开始录音</string>
+    <string name="mic_stop">停止</string>
+    <string name="record_hint">轻点按钮，说出你要记录的内容</string>
+    <string name="recording">正在录音…</string>
+    <string name="recognizing">正在识别…</string>
+    <string name="recognize_failed">识别失败：%1$s</string>
+    <string name="empty_result">未识别到内容，请重试</string>
+    <string name="save">保存</string>
+    <string name="delete">删除</string>
+    <string name="back">返回</string>
+    <string name="category">分类</string>
+    <string name="event_time">时间</string>
+    <string name="location">地点</string>
+    <string name="person">人物</string>
+    <string name="summary">事件概况</string>
+    <string name="topic">主题</string>
+    <string name="content_label">内容</string>
+    <string name="reminder">提醒</string>
+    <string name="set_reminder">设置提醒</string>
+    <string name="mark_done">标记完成</string>
+    <string name="restore_todo">恢复为待办</string>
+    <string name="play">播放</string>
+    <string name="pause">暂停</string>
+    <string name="confirm_delete">确定删除这条笔记吗？</string>
+    <string name="permission_denied">需要录音和通知权限</string>
+    <string name="reminder_title">语音笔记提醒</string>
+    <string name="edit">编辑</string>
+    <string name="audio">录音</string>
+</resources>

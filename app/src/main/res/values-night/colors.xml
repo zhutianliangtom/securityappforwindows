@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="primary">#8F97FF</color>
+    <color name="on_primary">#1A1C4A</color>
+    <color name="primary_container">#3A44A8</color>
+    <color name="on_primary_container">#E4E7FF</color>
+    <color name="secondary">#FFB74D</color>
+    <color name="surface">#131318</color>
+    <color name="on_surface">#ECECF4</color>
+    <color name="surface_variant">#23232C</color>
+    <color name="error">#FF6B70</color>
+    <color name="chip_bg">#2A2F66</color>
+    <color name="chip_text">#B9C0FF</color>
+</resources>

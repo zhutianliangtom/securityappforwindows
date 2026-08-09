@@ -1,15 +1,27 @@
-.gradle/
-build/
-local.properties
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.egg-info/
+.eggs/
+*.log
+
+# PyInstaller
+build/__pycache__/
+dist/
+*.spec
+!build/WinAppMigrator.spec
+
+# Inno Setup
+Output/
+
+# IDE
+.vscode/
 .idea/
-*.iml
+*.swp
+*.swo
+
+# OS
+Thumbs.db
 .DS_Store
-captures/
-.externalNativeBuild/
-.cxx/
-app/build/
-app/keystore.properties
-*.keystore
-*.jks
-.sdk_tmp/
-.kotlin/

@@ -9,6 +9,7 @@ __pycache__/
 
 # PyInstaller
 build/__pycache__/
+build/WinAppMigrator/
 dist/
 *.spec
 !build/WinAppMigrator.spec

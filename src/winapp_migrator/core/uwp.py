@@ -12,6 +12,9 @@ logger = setup_logging()
 
 UWPPackage = dict
 
+# 无控制台程序运行子进程时不弹黑窗口
+NO_WINDOW = subprocess.CREATE_NO_WINDOW if hasattr(subprocess, "CREATE_NO_WINDOW") else 0
+
 class UWPManager:
     @staticmethod
     def list_packages() -> List[UWPPackage]:
@@ -29,6 +32,7 @@ class UWPManager:
                 check=False,
                 encoding="utf-8",
                 errors="ignore",
+                creationflags=NO_WINDOW,
             )
             if result.returncode != 0:
                 logger.warning("获取UWP列表失败: %s", result.stderr)
@@ -89,6 +93,7 @@ class UWPManager:
                 check=False,
                 encoding="utf-8",
                 errors="ignore",
+                creationflags=NO_WINDOW,
             )
             logger.info("重新注册UWP: %s", result.stdout)
             if result.returncode != 0:

@@ -44,13 +44,13 @@ def take_ownership(path: Path) -> bool:
     except Exception as e:
         logger.warning("启用特权失败: %s", e)
 
-    import subprocess
     try:
         result = subprocess.run(
             ["takeown", "/F", str(path), "/R", "/D", "Y"],
             capture_output=True,
             text=True,
             check=False,
+            creationflags=NO_WINDOW,
         )
         logger.debug("takeown 输出: %s", result.stdout)
         if result.returncode != 0:
@@ -79,6 +79,7 @@ def take_ownership(path: Path) -> bool:
             capture_output=True,
             text=True,
             check=False,
+            creationflags=NO_WINDOW,
         )
         logger.debug("icacls admin 输出: %s", result.stdout)
     except Exception as e:

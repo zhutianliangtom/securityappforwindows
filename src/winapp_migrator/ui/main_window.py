@@ -354,12 +354,15 @@ class MainWindow(QMainWindow):
         self._start_migration()
 
     def mousePressEvent(self, event):
-        if event.button() == Qt.MouseButton.LeftButton:
-            if event.position().y() < 52:
-                self._drag_pos = event.globalPosition().toPoint()
-                event.accept()
+        if event.button() == Qt.MouseButton.LeftButton and event.position().y() < 52:
+            self._drag_pos = event.globalPosition().toPoint()
+            event.accept()
 
     def mouseMoveEvent(self, event):
-        if event.buttons() == Qt.MouseButton.LeftButton and hasattr(self, "_drag_pos"):
+        if event.buttons() == Qt.MouseButton.LeftButton and self._drag_pos is not None:
             self.move(self.frameGeometry().topLeft() + event.globalPosition().toPoint() - self._drag_pos)
             event.accept()
+
+    def mouseReleaseEvent(self, event):
+        self._drag_pos = None
+        super().mouseReleaseEvent(event)

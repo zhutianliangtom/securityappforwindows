@@ -1,8 +1,0 @@
-<?xml version="1.0" encoding="utf-8"?>
-<resources>
-    <dimen name="card_corner">20dp</dimen>
-    <dimen name="card_elevation">2dp</dimen>
-    <dimen name="page_padding">16dp</dimen>
-    <dimen name="chip_padding">8dp</dimen>
-    <dimen name="chip_radius">999dp</dimen>
-</resources>

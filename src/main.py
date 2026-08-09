@@ -25,9 +25,9 @@ def main():
     app.setApplicationName("WinAppMigrator")
     app.setApplicationDisplayName("WinAppMigrator")
 
-    font_db = QFontDatabase()
     default_families = ["Microsoft YaHei UI", "Segoe UI", "PingFang SC"]
-    family = next((f for f in default_families if f in font_db.families()), "Arial")
+    available_families = QFontDatabase.families()
+    family = next((f for f in default_families if f in available_families), "Arial")
     app.setFont(QFont(family, 10))
 
     apply_palette(app)

@@ -17,10 +17,30 @@ def setup_logging() -> logging.Logger:
         fh = logging.FileHandler(log_file, encoding="utf-8")
         fh.setFormatter(fmt)
         logger.addHandler(fh)
-        sh = logging.StreamHandler(sys.stdout)
-        sh.setFormatter(fmt)
-        logger.addHandler(sh)
+        # windowed 模式下 stdout 可能为 None，仅作兜底，不阻塞
+        if sys.stdout is not None:
+            sh = logging.StreamHandler(sys.stdout)
+            sh.setFormatter(fmt)
+            logger.addHandler(sh)
     return logger
+
+def install_excepthook():
+    """将未捕获异常写入日志，便于排查运行时错误"""
+    import traceback
+    logger = setup_logging()
+
+    def hook(exc_type, exc_value, exc_tb):
+        if issubclass(exc_type, KeyboardInterrupt):
+            sys.__excepthook__(exc_type, exc_value, exc_tb)
+            return
+        msg = "".join(traceback.format_exception(exc_type, exc_value, exc_tb))
+        logger.critical("未捕获异常:\n%s", msg)
+        try:
+            sys.__excepthook__(exc_type, exc_value, exc_tb)
+        except Exception:
+            pass
+
+    sys.excepthook = hook
 
 def is_admin() -> bool:
     try:

@@ -15,9 +15,12 @@ from PyQt6.QtGui import QFont, QFontDatabase
 
 from winapp_migrator.ui.main_window import MainWindow
 from winapp_migrator.ui.styles import apply_palette
+from winapp_migrator.utils.helpers import install_excepthook
 
 
 def main():
+    install_excepthook()
+
     QApplication.setHighDpiScaleFactorRoundingPolicy(
         Qt.HighDpiScaleFactorRoundingPolicy.PassThrough
     )

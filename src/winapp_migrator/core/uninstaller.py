@@ -1,4 +1,5 @@
 """强力卸载：优先调用应用自带卸载器，再删除根目录、注册表关联项、快捷方式、数据/存档/聊天记录目录"""
+import os
 import shlex
 import subprocess
 import winreg
@@ -15,9 +16,12 @@ from winapp_migrator.core.migration import _terminate_processes, is_360_self_pro
 
 logger = setup_logging()
 
-# 注册表卸载项扫描位置
-_UNINSTALL_ROOTS = [winreg.HKEY_LOCAL_MACHINE, winreg.HKEY_CURRENT_USER]
-_UNINSTALL_KEY_PATH = r"Software\Microsoft\Windows\CurrentVersion\Uninstall"
+# 注册表卸载项扫描位置（含 32 位程序的 WOW6432Node 项）
+_UNINSTALL_LOCATIONS = [
+    (winreg.HKEY_LOCAL_MACHINE, r"Software\Microsoft\Windows\CurrentVersion\Uninstall"),
+    (winreg.HKEY_LOCAL_MACHINE, r"Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall"),
+    (winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Windows\CurrentVersion\Uninstall"),
+]
 # 安装目录下常见的自带卸载器文件名
 _COMMON_UNINSTALLERS = (
     "unins000.exe", "unins001.exe", "unins1.exe",
@@ -59,11 +63,29 @@ def _parse_uninstall_command(cmd: str) -> Optional[tuple[str, List[str]]]:
 
 
 def _query_native_uninstaller(app: AppInfo) -> Optional[tuple[str, List[str]]]:
-    """按 InstallLocation 匹配注册表卸载项，返回其 UninstallString 解析结果"""
+    """扫描注册表卸载项：按 InstallLocation / UninstallString 路径 / DisplayName 匹配"""
     root_str = str(app.install_location).lower().rstrip("\\")
-    for hive in _UNINSTALL_ROOTS:
+    name_str = (app.name or "").lower().strip()
+
+    def _norm(p: str) -> str:
+        return os.path.expandvars(p).lower().rstrip("\\")
+
+    def _loc_matches(loc: str) -> bool:
+        return bool(loc) and _norm(str(loc)) == root_str
+
+    def _exe_matches(exe: str) -> bool:
+        """UninstallString 指向的卸载器所在目录 == 安装根目录"""
         try:
-            base = winreg.OpenKey(hive, _UNINSTALL_KEY_PATH)
+            return str(Path(exe).resolve().parent).lower().rstrip("\\") == root_str
+        except OSError:
+            return _norm(str(Path(exe).parent)) == root_str
+
+    def _name_matches(dn: str) -> bool:
+        return bool(name_str) and bool(dn) and dn.lower().strip() == name_str
+
+    for hive, key_path in _UNINSTALL_LOCATIONS:
+        try:
+            base = winreg.OpenKey(hive, key_path)
         except OSError:
             continue
         try:
@@ -76,13 +98,20 @@ def _query_native_uninstaller(app: AppInfo) -> Optional[tuple[str, List[str]]]:
                 i += 1
                 try:
                     with winreg.OpenKey(base, sub) as k:
-                        loc, _ = winreg.QueryValueEx(k, "InstallLocation")
-                    if loc and str(loc).lower().rstrip("\\") == root_str:
-                        with winreg.OpenKey(base, sub) as k:
-                            us, _ = winreg.QueryValueEx(k, "UninstallString")
-                        cmd = _parse_uninstall_command(us)
-                        if cmd:
-                            return cmd
+                        def _qv(name):
+                            try:
+                                v, _ = winreg.QueryValueEx(k, name)
+                                return v
+                            except OSError:
+                                return None
+                        loc = _qv("InstallLocation")
+                        us = _qv("UninstallString")
+                        dn = _qv("DisplayName")
+                    cmd = _parse_uninstall_command(us)
+                    if not cmd:
+                        continue
+                    if _loc_matches(loc) or _exe_matches(cmd[0]) or _name_matches(dn):
+                        return cmd
                 except OSError:
                     continue
         finally:
@@ -91,7 +120,7 @@ def _query_native_uninstaller(app: AppInfo) -> Optional[tuple[str, List[str]]]:
 
 
 def _find_uninstaller_in_dir(app: AppInfo) -> Optional[tuple[str, List[str]]]:
-    """在安装根目录查找常见自带卸载器"""
+    """在安装根目录及一层子目录查找常见自带卸载器"""
     root = Path(app.install_location)
     if not root.is_dir():
         return None
@@ -99,6 +128,15 @@ def _find_uninstaller_in_dir(app: AppInfo) -> Optional[tuple[str, List[str]]]:
         p = root / name
         if p.is_file():
             return str(p), []
+    try:
+        for sub in root.iterdir():
+            if sub.is_dir():
+                for name in _COMMON_UNINSTALLERS:
+                    p = sub / name
+                    if p.is_file():
+                        return str(p), []
+    except OSError:
+        pass
     return None
 
 

@@ -1,7 +1,7 @@
-"""内存优化模块：核弹级方案
-1. NtOpenProcess 兜底 — 覆盖受保护进程（解决 142 OpenProcess 失败问题）
-2. 暂停进程 → 硬限制工作集为 1 字节 → 进程暂停中不会抖页
-3. 分配大内存块制造极端内存压力 → 强迫内核主动 trim
+"""内存优化模块：终极方案
+1. NtOpenProcess 兜底 + MmTrimAllSystemPagableMemory 系统级 trim
+2. 暂停进程 → 硬限制工作集为 1 字节
+3. 多轮压力循环：分配 80% RAM → trim → purge → 释放
 4. 多次清空 standby list
 """
 
@@ -10,7 +10,7 @@ import ctypes.wintypes as w
 import logging
 import os
 import gc
-from ctypes import byref, sizeof, c_size_t, c_void_p, POINTER, Structure, c_ulong, c_byte
+from ctypes import byref, sizeof, c_size_t, c_void_p, POINTER, Structure, c_byte
 
 logger = logging.getLogger(__name__)
 
@@ -91,7 +91,6 @@ class MEMORYSTATUSEX(Structure):
         ("ullAvailExtendedVirtual", w.ULARGE_INTEGER),
     ]
 
-# NtOpenProcess 结构体
 class CLIENT_ID(Structure):
     _fields_ = [("UniqueProcess", w.HANDLE), ("UniqueThread", w.HANDLE)]
 
@@ -199,6 +198,15 @@ NtOpenProcess = ntdll.NtOpenProcess
 NtOpenProcess.argtypes = [POINTER(w.HANDLE), w.DWORD, POINTER(OBJECT_ATTRIBUTES), POINTER(CLIENT_ID)]
 NtOpenProcess.restype = w.LONG
 
+# MmTrimAllSystemPagableMemory — 系统级 trim，比 EmptyWorkingSet 激进得多
+# 告诉内核立即回收所有可分页的系统内存（内核池、驱动、缓存等）
+try:
+    MmTrimAllSystemPagableMemory = ntdll.MmTrimAllSystemPagableMemory
+    MmTrimAllSystemPagableMemory.restype = w.LONG
+    _HAS_MM_TRIM = True
+except AttributeError:
+    _HAS_MM_TRIM = False
+
 # ============================================================
 # 保护列表
 # ============================================================
@@ -207,14 +215,18 @@ _SUSPEND_PROTECTED = {
     "system", "idle", "csrss", "wininit",
     "services", "lsass", "winlogon", "smss",
     "dwm", "explorer", "audiodg",
-    "winappmigrator", "svchost",
+    "winappmigrator",
+}
+
+# 可以 trim 但不暂停的进程（svchost 也从暂停保护中移出，改为 trim-only）
+_TRIM_ONLY_PROTECTED = {
+    "svchost", "services", "lsass", "csrss", "winlogon",
 }
 
 # 自身保护
 _WS_PROTECTED = {"winappmigrator"}
 
 # ACCESS 掩码
-_ACCESS_SUSPEND = PROCESS_SET_QUOTA | PROCESS_QUERY_INFORMATION | PROCESS_SUSPEND_RESUME
 _ACCESS_TRIM = PROCESS_SET_QUOTA | PROCESS_QUERY_INFORMATION
 _ACCESS_ALL = PROCESS_SET_QUOTA | PROCESS_QUERY_INFORMATION | PROCESS_SUSPEND_RESUME | PROCESS_VM_READ | PROCESS_VM_OPERATION | PROCESS_TERMINATE
 
@@ -232,12 +244,10 @@ def _make_object_attributes():
 
 def _open_process_fallback(pid: int, access: int) -> w.HANDLE | None:
     """OpenProcess → NtOpenProcess 兜底，覆盖受保护进程"""
-    # 方法 1: 标准 OpenProcess
     h = OpenProcess(access, False, pid)
     if h:
         return h
 
-    # 方法 2: NtOpenProcess（绕过 Win32 安全检查）
     cid = CLIENT_ID()
     cid.UniqueProcess = w.HANDLE(pid)
     cid.UniqueThread = None
@@ -279,10 +289,21 @@ def _enable_privileges() -> bool:
 
 
 def _purge_standby_list() -> bool:
-    """清空 standby list — 把踢出的页面真正释放为 Free 内存"""
+    """清空 standby list"""
     cmd = c_size_t(0)
     status = NtSetSystemInformation(0x50, byref(cmd), sizeof(cmd))
     return status == 0
+
+
+def _trim_system_memory() -> bool:
+    """系统级 trim — 回收所有可分页系统内存"""
+    if not _HAS_MM_TRIM:
+        return False
+    try:
+        MmTrimAllSystemPagableMemory()
+        return True
+    except Exception:
+        return False
 
 
 def _get_foreground_pids() -> set:
@@ -345,36 +366,30 @@ def _get_memory_status() -> dict:
 
 def _allocate_pressure(total_mb: float) -> list:
     """
-    分配大块内存制造极端内存压力，强迫内核主动 trim 所有进程工作集。
-    分配后立即 touch 每一页确保物理 RAM 被实际占用。
-    返回分配块列表，用于后续释放。
+    分配大块内存制造极端内存压力。
+    目标：80% 总 RAM，确保内核感受到强烈压力。
+    Touch 每一页确保物理 RAM 被实际占用。
     """
-    # 目标：分配可用内存的 70%，让内核感受到强烈压力
-    ms = _get_memory_status()
-    target_mb = min(ms["avail_mb"] * 0.7, total_mb * 0.6)
+    target_mb = total_mb * 0.8
     if target_mb < 100:
         return []
 
     chunks = []
     remaining = int(target_mb * 1024 * 1024)
-    # 每块 256MB，避免单次分配失败
     chunk_size = 256 * 1024 * 1024
 
-    while remaining > 64 * 1024 * 1024:  # 至少还剩 64MB
+    while remaining > 32 * 1024 * 1024:
         alloc_size = min(chunk_size, remaining)
         buf = VirtualAlloc(None, c_size_t(alloc_size), MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE)
         if not buf:
-            # 尝试更小的块
             chunk_size //= 2
             if chunk_size < 16 * 1024 * 1024:
                 break
             continue
 
-        # Touch 每一页（每 4KB 写一个字节），确保物理 RAM 真正被分配
+        # memset 零填充，确保每个页面都被 commit
         try:
-            arr = (c_byte * alloc_size).from_address(buf)
-            for offset in range(0, alloc_size, 4096):
-                arr[offset] = 0
+            ctypes.memset(buf, 0, alloc_size)
         except Exception:
             pass
 
@@ -393,15 +408,24 @@ def _free_pressure(chunks: list):
 
 
 def _should_suspend(name: str) -> bool:
-    return name not in _SUSPEND_PROTECTED
+    return name not in _SUSPEND_PROTECTED and name not in _TRIM_ONLY_PROTECTED
+
+
+def _trim_process(h, hard_limit: bool = False):
+    """对单个进程执行 trim"""
+    EmptyWorkingSet(h)
+    if hard_limit:
+        SetProcessWorkingSetSize(h, c_size_t(1), c_size_t(1))
+    else:
+        SetProcessWorkingSetSize(h, c_size_t(-1), c_size_t(-1))
 
 
 def optimize_memory(progress_callback=None) -> dict:
     """
-    核弹级方案：
-    1. NtOpenProcess 兜底 → 覆盖所有进程
-    2. 暂停 → 硬限制工作集为 1 字节 → 恢复
-    3. 分配大内存块制造压力
+    终极方案：
+    1. NtOpenProcess 兜底 + MmTrimAllSystemPagableMemory 系统级 trim
+    2. 暂停进程 → 硬限制工作集为 1 字节
+    3. 多轮压力循环：分配 80% RAM → trim → purge → 释放
     4. 多次清空 standby list
     """
 
@@ -413,16 +437,20 @@ def optimize_memory(progress_callback=None) -> dict:
             except Exception:
                 pass
 
+    NEG_ONE = c_size_t(-1)
+    ONE = c_size_t(1)
+    NEG_ONE_SZ = c_size_t(-1)
+
     # 1. 启用特权
-    notify(2, "启用 SeIncreaseQuotaPrivilege + SeDebugPrivilege...")
+    notify(1, "启用 SeIncreaseQuotaPrivilege + SeDebugPrivilege...")
     _enable_privileges()
 
     # 2. 基线
-    notify(4, "获取基线...")
+    notify(3, "获取基线...")
     mem_before = _get_memory_status()
     total_mb = mem_before["total_mb"]
 
-    notify(6, "枚举进程 (NtOpenProcess 兜底覆盖受保护进程)...")
+    notify(5, "枚举进程 (NtOpenProcess 兜底)...")
     all_procs = _enum_processes()
     proc_count = len(all_procs)
     ws_before = sum(p[2] for p in all_procs)
@@ -430,126 +458,126 @@ def optimize_memory(progress_callback=None) -> dict:
 
     protected_pids = {os.getpid()} | _get_foreground_pids()
 
-    ONE = c_size_t(1)
-    NEG_ONE = c_size_t(-1)
-
     ok_openprocess = 0
     ok_ntopen = 0
     fail_open = 0
     suspended = 0
+    trim_only = 0
 
     # ============================================================
-    # Phase 1: 暂停所有非核心进程
+    # Phase 1: 暂停所有非核心进程 + trim-only 进程
     # ============================================================
-    notify(8, "Phase 1: 暂停所有非核心进程...")
+    notify(7, "Phase 1: 暂停非核心进程 + trim-only 进程...")
 
-    suspended_handles = []  # (pid, handle, is_suspended)
+    suspended_handles = []  # (pid, h, was_suspended)
+    trim_only_handles = []  # (pid, h)
 
     for i, (pid, name, _ws) in enumerate(all_procs):
         if pid in protected_pids or pid <= 4:
             continue
-        if name in _SUSPEND_PROTECTED:
+        if name in _SUSPEND_PROTECTED and name not in _TRIM_ONLY_PROTECTED:
             continue
 
         can_suspend = _should_suspend(name)
-        access = _ACCESS_ALL if can_suspend else _ACCESS_TRIM
+        is_trim_only = name in _TRIM_ONLY_PROTECTED
+        access = _ACCESS_ALL if (can_suspend and not is_trim_only) else _ACCESS_TRIM
 
         h = _open_process_fallback(pid, access)
         if not h:
             fail_open += 1
             continue
 
-        is_ntopen = (OpenProcess(access, False, pid) is None)  # 检测是否走了 NtOpenProcess
-        if is_ntopen:
+        if OpenProcess(access, False, pid) is None:
             ok_ntopen += 1
         else:
             ok_openprocess += 1
 
-        if can_suspend:
+        if can_suspend and not is_trim_only:
             NtSuspendProcess(h)
             suspended += 1
             suspended_handles.append((pid, h, True))
+        elif is_trim_only:
+            trim_only_handles.append((pid, h))
+            trim_only += 1
         else:
             suspended_handles.append((pid, h, False))
 
         if i % 50 == 0:
-            notify(8 + int(i / max(proc_count, 1) * 12),
-                   f"已暂停 {suspended} 进程 (OpenProcess: {ok_openprocess}, NtOpen: {ok_ntopen}, 失败: {fail_open})...")
+            notify(7 + int(i / max(proc_count, 1) * 6),
+                   f"暂停 {suspended}, trim-only {trim_only}, OpenProcess={ok_openprocess}, NtOpen={ok_ntopen}, 失败={fail_open}")
 
-    notify(20, f"Phase 1 完成: 暂停 {suspended} 进程, OpenProcess={ok_openprocess}, NtOpen={ok_ntopen}, 失败={fail_open}")
+    notify(13, f"Phase 1 完成: 暂停 {suspended}, trim-only {trim_only}, OpenProcess={ok_openprocess}, NtOpen={ok_ntopen}, 失败={fail_open}")
 
     # ============================================================
-    # Phase 2: 硬限制工作集为 1 字节（进程已暂停，不会抖页！）
+    # Phase 2: 硬限制工作集为 1 字节（进程已暂停，不抖页）
     # ============================================================
-    notify(22, "Phase 2: 硬限制工作集为 1 字节 + EmptyWorkingSet...")
+    notify(15, "Phase 2: 硬限制工作集为 1 字节...")
 
-    for i, (pid, h, _was_suspended) in enumerate(suspended_handles):
-        EmptyWorkingSet(h)
-        SetProcessWorkingSetSize(h, ONE, ONE)
-
+    all_handles = suspended_handles + trim_only_handles
+    for i, (pid, h) in enumerate([(p, h) for p, h, *_ in all_handles]):
+        _trim_process(h, hard_limit=True)
         if i % 50 == 0:
-            notify(22 + int(i / max(len(suspended_handles), 1) * 10),
-                   f"硬限制工作集 {i+1}/{len(suspended_handles)}...")
+            notify(15 + int(i / max(len(all_handles), 1) * 5),
+                   f"硬限制 {i+1}/{len(all_handles)}...")
 
     # ============================================================
-    # Phase 3: 清空 standalone list
+    # Phase 3: 系统级 trim + purge
     # ============================================================
-    notify(33, "Phase 3: 清空 standby list...")
+    notify(21, "Phase 3: MmTrimAllSystemPagableMemory + standby purge...")
+    _trim_system_memory()
     _purge_standby_list()
 
     # ============================================================
-    # Phase 4: 分配大块内存制造极端内存压力
+    # Phase 4-6: 三轮压力循环
     # ============================================================
-    notify(36, "Phase 4: 分配大块内存制造极端压力 (强迫内核 trim)...")
-    pressure_chunks = _allocate_pressure(total_mb)
-    allocated_mb = sum(sz for _, sz in pressure_chunks) / (1024 * 1024)
-    notify(42, f"已分配 {allocated_mb:.0f} MB 压力内存, 再次清空 standby...")
-    _purge_standby_list()
+    total_allocated_mb = 0
+    for cycle in range(3):
+        base_pct = 23 + cycle * 15
+        notify(base_pct, f"Phase {4+cycle}: 压力循环 {cycle+1}/3 — 分配内存...")
 
-    # ============================================================
-    # Phase 5: 在压力下再压缩一轮
-    # ============================================================
-    notify(45, "Phase 5: 压力下第二轮压缩...")
-    for i, (pid, h, _was_suspended) in enumerate(suspended_handles):
-        EmptyWorkingSet(h)
-        SetProcessWorkingSetSize(h, ONE, ONE)
+        pressure_chunks = _allocate_pressure(total_mb)
+        allocated_mb = sum(sz for _, sz in pressure_chunks) / (1024 * 1024)
+        total_allocated_mb = max(total_allocated_mb, allocated_mb)
 
-        if i % 50 == 0:
-            notify(45 + int(i / max(len(suspended_handles), 1) * 8),
-                   f"压力压缩 {i+1}/{len(suspended_handles)}...")
+        notify(base_pct + 3, f"已分配 {allocated_mb:.0f} MB, 系统级 trim...")
+        _trim_system_memory()
 
-    notify(54, "压力下清空 standby list...")
-    _purge_standby_list()
+        notify(base_pct + 6, "压力下 trim 所有进程...")
+        for i, (pid, h) in enumerate([(p, h) for p, h, *_ in all_handles]):
+            _trim_process(h, hard_limit=True)
+            if i % 50 == 0:
+                notify(base_pct + 6 + int(i / max(len(all_handles), 1) * 3),
+                       f"压力 trim {i+1}/{len(all_handles)}...")
 
-    # ============================================================
-    # Phase 6: 释放压力内存
-    # ============================================================
-    notify(57, "Phase 6: 释放压力内存块...")
-    _free_pressure(pressure_chunks)
+        notify(base_pct + 10, "purge standby...")
+        _purge_standby_list()
+
+        notify(base_pct + 12, "释放压力内存...")
+        _free_pressure(pressure_chunks)
 
     # ============================================================
     # Phase 7: 恢复工作集限制 + 恢复进程
     # ============================================================
-    notify(60, "Phase 7: 恢复工作集限制 + 恢复进程...")
+    notify(68, "Phase 7: 恢复工作集限制 + 恢复进程...")
 
     for i, (pid, h, was_suspended) in enumerate(suspended_handles):
-        # 恢复工作集限制为标准值
         SetProcessWorkingSetSize(h, NEG_ONE, NEG_ONE)
-
         if was_suspended:
             NtResumeProcess(h)
-
         _close_handle_safe(h)
-
         if i % 50 == 0:
-            notify(60 + int(i / max(len(suspended_handles), 1) * 10),
+            notify(68 + int(i / max(len(suspended_handles), 1) * 5),
                    f"恢复 {i+1}/{len(suspended_handles)}...")
+
+    # 关闭 trim-only 句柄
+    for pid, h in trim_only_handles:
+        SetProcessWorkingSetSize(h, NEG_ONE, NEG_ONE)
+        _close_handle_safe(h)
 
     # ============================================================
     # Phase 8: 清空系统文件缓存
     # ============================================================
-    notify(72, "Phase 8: 清空系统文件缓存...")
-    NEG_ONE_SZ = c_size_t(-1)
+    notify(74, "Phase 8: 清空系统文件缓存...")
     try:
         SetSystemFileCacheSize(NEG_ONE_SZ, NEG_ONE_SZ, 0x2)
         SetSystemFileCacheSize(NEG_ONE_SZ, NEG_ONE_SZ, 0)
@@ -559,41 +587,41 @@ def optimize_memory(progress_callback=None) -> dict:
     # ============================================================
     # Phase 9: 压缩 System 进程 (PID 4)
     # ============================================================
-    notify(76, "Phase 9: 压缩 System 进程...")
+    notify(77, "Phase 9: 压缩 System 进程...")
     h_sys = _open_process_fallback(4, _ACCESS_TRIM)
     if h_sys:
-        EmptyWorkingSet(h_sys)
-        SetProcessWorkingSetSize(h_sys, NEG_ONE, NEG_ONE)
+        _trim_process(h_sys)
         _close_handle_safe(h_sys)
 
     # ============================================================
-    # Phase 10: 最终收尾压缩（不暂停，温和压缩）
+    # Phase 10: 最终系统级 trim + 最终收尾
     # ============================================================
-    notify(80, "Phase 10: 最终收尾压缩...")
+    notify(80, "Phase 10: 最终系统级 trim...")
+    _trim_system_memory()
+
+    notify(83, "最终收尾压缩...")
     for i, (pid, name, _ws) in enumerate(all_procs):
         if pid in protected_pids or pid <= 4 or name in _WS_PROTECTED:
             continue
         h = _open_process_fallback(pid, _ACCESS_TRIM)
         if h:
-            EmptyWorkingSet(h)
-            SetProcessWorkingSetSize(h, NEG_ONE, NEG_ONE)
+            _trim_process(h)
             _close_handle_safe(h)
-
         if i % 50 == 0:
-            notify(80 + int(i / max(proc_count, 1) * 10),
-                   f"收尾压缩 {i+1}/{proc_count}...")
+            notify(83 + int(i / max(proc_count, 1) * 5),
+                   f"收尾 {i+1}/{proc_count}...")
 
     # ============================================================
-    # 最终多次清空 standby list
+    # 最终多重 purge
     # ============================================================
-    notify(92, "最终清空 standby list (x3)...")
-    for _ in range(3):
+    notify(90, "最终 purge standby (x5)...")
+    for _ in range(5):
         _purge_standby_list()
 
     # ============================================================
     # 结果统计
     # ============================================================
-    notify(97, "计算结果...")
+    notify(96, "计算结果...")
     mem_after = _get_memory_status()
 
     all_procs2 = _enum_processes()
@@ -614,9 +642,10 @@ def optimize_memory(progress_callback=None) -> dict:
         f"优化后工作集: {ws_after_mb:.0f} MB",
         f"释放: {freed_mb:.0f} MB ({pct:.0f}%)",
         f"可用内存增加: {avail_gained:.0f} MB",
-        f"打开进程: {total_ok} (OpenProcess: {ok_openprocess}, NtOpen兜底: {ok_ntopen})",
-        f"暂停进程: {suspended}, 无法打开: {fail_open}",
-        f"压力内存: {allocated_mb:.0f} MB",
+        f"打开进程: {total_ok} (OpenProcess: {ok_openprocess}, NtOpen: {ok_ntopen})",
+        f"暂停进程: {suspended}, trim-only: {trim_only}, 失败: {fail_open}",
+        f"最大压力内存: {total_allocated_mb:.0f} MB",
+        f"MmTrimAllSystemPagableMemory: {'可用' if _HAS_MM_TRIM else '不可用'}",
     ]
 
     msg = f"释放 {freed_mb:.0f} MB ({pct:.0f}%)，可用内存 +{avail_gained:.0f} MB"

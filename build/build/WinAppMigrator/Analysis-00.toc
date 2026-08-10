@@ -775,13 +775,13 @@
    'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
    'CN\\ModularData\\ai-agent\\vm\\tools\\python\\python310.zip\\stringprep.pyc',
    'PYMODULE'),
-  ('tracemalloc',
-   'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
-   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\python310.zip\\tracemalloc.pyc',
-   'PYMODULE'),
   ('_py_abc',
    'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
    'CN\\ModularData\\ai-agent\\vm\\tools\\python\\python310.zip\\_py_abc.pyc',
+   'PYMODULE'),
+  ('tracemalloc',
+   'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
+   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\python310.zip\\tracemalloc.pyc',
    'PYMODULE'),
   ('winapp_migrator.utils.helpers',
    'C:\\Users\\zhuzhu\\Desktop\\my first android '
@@ -807,25 +807,29 @@
    'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
    'CN\\ModularData\\ai-agent\\vm\\tools\\python\\python310.dll',
    'BINARY'),
-  ('PyQt6\\Qt6\\plugins\\imageformats\\qico.dll',
+  ('PyQt6\\Qt6\\plugins\\imageformats\\qpdf.dll',
    'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
-   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\plugins\\imageformats\\qico.dll',
+   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\plugins\\imageformats\\qpdf.dll',
    'BINARY'),
-  ('PyQt6\\Qt6\\plugins\\imageformats\\qwebp.dll',
+  ('PyQt6\\Qt6\\plugins\\platforms\\qwindows.dll',
    'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
-   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\plugins\\imageformats\\qwebp.dll',
+   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\plugins\\platforms\\qwindows.dll',
    'BINARY'),
-  ('PyQt6\\Qt6\\plugins\\generic\\qtuiotouchplugin.dll',
+  ('PyQt6\\Qt6\\plugins\\platforms\\qminimal.dll',
    'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
-   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\plugins\\generic\\qtuiotouchplugin.dll',
+   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\plugins\\platforms\\qminimal.dll',
    'BINARY'),
-  ('PyQt6\\Qt6\\plugins\\imageformats\\qicns.dll',
+  ('PyQt6\\Qt6\\plugins\\iconengines\\qsvgicon.dll',
    'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
-   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\plugins\\imageformats\\qicns.dll',
+   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\plugins\\iconengines\\qsvgicon.dll',
    'BINARY'),
-  ('PyQt6\\Qt6\\plugins\\imageformats\\qwbmp.dll',
+  ('PyQt6\\Qt6\\plugins\\imageformats\\qtiff.dll',
    'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
-   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\plugins\\imageformats\\qwbmp.dll',
+   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\plugins\\imageformats\\qtiff.dll',
+   'BINARY'),
+  ('PyQt6\\Qt6\\plugins\\imageformats\\qjpeg.dll',
+   'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
+   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\plugins\\imageformats\\qjpeg.dll',
    'BINARY'),
   ('PyQt6\\Qt6\\plugins\\imageformats\\qsvg.dll',
    'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
@@ -835,37 +839,33 @@
    'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
    'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\plugins\\imageformats\\qtga.dll',
    'BINARY'),
-  ('PyQt6\\Qt6\\plugins\\imageformats\\qjpeg.dll',
+  ('PyQt6\\Qt6\\plugins\\platforms\\qoffscreen.dll',
    'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
-   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\plugins\\imageformats\\qjpeg.dll',
+   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\plugins\\platforms\\qoffscreen.dll',
    'BINARY'),
-  ('PyQt6\\Qt6\\plugins\\platforms\\qwindows.dll',
+  ('PyQt6\\Qt6\\plugins\\imageformats\\qicns.dll',
    'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
-   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\plugins\\platforms\\qwindows.dll',
+   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\plugins\\imageformats\\qicns.dll',
    'BINARY'),
-  ('PyQt6\\Qt6\\plugins\\imageformats\\qtiff.dll',
+  ('PyQt6\\Qt6\\plugins\\imageformats\\qwbmp.dll',
    'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
-   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\plugins\\imageformats\\qtiff.dll',
+   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\plugins\\imageformats\\qwbmp.dll',
    'BINARY'),
-  ('PyQt6\\Qt6\\plugins\\imageformats\\qpdf.dll',
+  ('PyQt6\\Qt6\\plugins\\generic\\qtuiotouchplugin.dll',
    'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
-   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\plugins\\imageformats\\qpdf.dll',
+   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\plugins\\generic\\qtuiotouchplugin.dll',
    'BINARY'),
-  ('PyQt6\\Qt6\\plugins\\platforms\\qminimal.dll',
+  ('PyQt6\\Qt6\\plugins\\imageformats\\qwebp.dll',
    'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
-   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\plugins\\platforms\\qminimal.dll',
+   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\plugins\\imageformats\\qwebp.dll',
    'BINARY'),
   ('PyQt6\\Qt6\\plugins\\imageformats\\qgif.dll',
    'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
    'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\plugins\\imageformats\\qgif.dll',
    'BINARY'),
-  ('PyQt6\\Qt6\\plugins\\iconengines\\qsvgicon.dll',
+  ('PyQt6\\Qt6\\plugins\\imageformats\\qico.dll',
    'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
-   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\plugins\\iconengines\\qsvgicon.dll',
-   'BINARY'),
-  ('PyQt6\\Qt6\\plugins\\platforms\\qoffscreen.dll',
-   'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
-   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\plugins\\platforms\\qoffscreen.dll',
+   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\plugins\\imageformats\\qico.dll',
    'BINARY'),
   ('PyQt6\\Qt6\\bin\\opengl32sw.dll',
    'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
@@ -943,69 +943,69 @@
    'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
    'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\QtWidgets.pyd',
    'EXTENSION'),
-  ('api-ms-win-crt-convert-l1-1-0.dll',
+  ('api-ms-win-crt-string-l1-1-0.dll',
    'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
-   'CN\\ModularData\\ai-agent\\vm\\tools\\app\\jre\\bin\\api-ms-win-crt-convert-l1-1-0.dll',
-   'BINARY'),
-  ('api-ms-win-crt-locale-l1-1-0.dll',
-   'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
-   'CN\\ModularData\\ai-agent\\vm\\tools\\app\\jre\\bin\\api-ms-win-crt-locale-l1-1-0.dll',
-   'BINARY'),
-  ('api-ms-win-crt-environment-l1-1-0.dll',
-   'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
-   'CN\\ModularData\\ai-agent\\vm\\tools\\app\\jre\\bin\\api-ms-win-crt-environment-l1-1-0.dll',
+   'CN\\ModularData\\ai-agent\\vm\\tools\\app\\jre\\bin\\api-ms-win-crt-string-l1-1-0.dll',
    'BINARY'),
   ('api-ms-win-crt-time-l1-1-0.dll',
    'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
    'CN\\ModularData\\ai-agent\\vm\\tools\\app\\jre\\bin\\api-ms-win-crt-time-l1-1-0.dll',
    'BINARY'),
-  ('api-ms-win-crt-process-l1-1-0.dll',
+  ('VCRUNTIME140.dll',
    'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
-   'CN\\ModularData\\ai-agent\\vm\\tools\\app\\jre\\bin\\api-ms-win-crt-process-l1-1-0.dll',
+   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\VCRUNTIME140.dll',
    'BINARY'),
-  ('api-ms-win-crt-filesystem-l1-1-0.dll',
+  ('api-ms-win-crt-environment-l1-1-0.dll',
    'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
-   'CN\\ModularData\\ai-agent\\vm\\tools\\app\\jre\\bin\\api-ms-win-crt-filesystem-l1-1-0.dll',
+   'CN\\ModularData\\ai-agent\\vm\\tools\\app\\jre\\bin\\api-ms-win-crt-environment-l1-1-0.dll',
    'BINARY'),
   ('api-ms-win-crt-heap-l1-1-0.dll',
    'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
    'CN\\ModularData\\ai-agent\\vm\\tools\\app\\jre\\bin\\api-ms-win-crt-heap-l1-1-0.dll',
    'BINARY'),
-  ('api-ms-win-crt-conio-l1-1-0.dll',
-   'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
-   'CN\\ModularData\\ai-agent\\vm\\tools\\app\\jre\\bin\\api-ms-win-crt-conio-l1-1-0.dll',
-   'BINARY'),
   ('api-ms-win-crt-runtime-l1-1-0.dll',
    'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
    'CN\\ModularData\\ai-agent\\vm\\tools\\app\\jre\\bin\\api-ms-win-crt-runtime-l1-1-0.dll',
-   'BINARY'),
-  ('api-ms-win-crt-math-l1-1-0.dll',
-   'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
-   'CN\\ModularData\\ai-agent\\vm\\tools\\app\\jre\\bin\\api-ms-win-crt-math-l1-1-0.dll',
    'BINARY'),
   ('api-ms-win-crt-stdio-l1-1-0.dll',
    'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
    'CN\\ModularData\\ai-agent\\vm\\tools\\app\\jre\\bin\\api-ms-win-crt-stdio-l1-1-0.dll',
    'BINARY'),
-  ('api-ms-win-crt-string-l1-1-0.dll',
+  ('api-ms-win-crt-math-l1-1-0.dll',
    'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
-   'CN\\ModularData\\ai-agent\\vm\\tools\\app\\jre\\bin\\api-ms-win-crt-string-l1-1-0.dll',
+   'CN\\ModularData\\ai-agent\\vm\\tools\\app\\jre\\bin\\api-ms-win-crt-math-l1-1-0.dll',
    'BINARY'),
-  ('VCRUNTIME140.dll',
+  ('api-ms-win-crt-conio-l1-1-0.dll',
    'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
-   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\VCRUNTIME140.dll',
+   'CN\\ModularData\\ai-agent\\vm\\tools\\app\\jre\\bin\\api-ms-win-crt-conio-l1-1-0.dll',
    'BINARY'),
-  ('PyQt6\\Qt6\\bin\\Qt6Gui.dll',
+  ('api-ms-win-crt-filesystem-l1-1-0.dll',
    'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
-   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\bin\\Qt6Gui.dll',
+   'CN\\ModularData\\ai-agent\\vm\\tools\\app\\jre\\bin\\api-ms-win-crt-filesystem-l1-1-0.dll',
+   'BINARY'),
+  ('api-ms-win-crt-locale-l1-1-0.dll',
+   'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
+   'CN\\ModularData\\ai-agent\\vm\\tools\\app\\jre\\bin\\api-ms-win-crt-locale-l1-1-0.dll',
+   'BINARY'),
+  ('api-ms-win-crt-process-l1-1-0.dll',
+   'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
+   'CN\\ModularData\\ai-agent\\vm\\tools\\app\\jre\\bin\\api-ms-win-crt-process-l1-1-0.dll',
+   'BINARY'),
+  ('api-ms-win-crt-convert-l1-1-0.dll',
+   'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
+   'CN\\ModularData\\ai-agent\\vm\\tools\\app\\jre\\bin\\api-ms-win-crt-convert-l1-1-0.dll',
    'BINARY'),
   ('PyQt6\\Qt6\\bin\\Qt6Core.dll',
    'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
    'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\bin\\Qt6Core.dll',
    'BINARY'),
-  ('api-ms-win-crt-utility-l1-1-0.dll',
+  ('PyQt6\\Qt6\\bin\\Qt6Pdf.dll',
    'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
-   'CN\\ModularData\\ai-agent\\vm\\tools\\app\\jre\\bin\\api-ms-win-crt-utility-l1-1-0.dll',
+   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\bin\\Qt6Pdf.dll',
+   'BINARY'),
+  ('PyQt6\\Qt6\\bin\\Qt6Gui.dll',
+   'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
+   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\bin\\Qt6Gui.dll',
    'BINARY'),
   ('VCRUNTIME140_1.dll',
    'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
@@ -1015,17 +1015,17 @@
    'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
    'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\bin\\MSVCP140.dll',
    'BINARY'),
-  ('PyQt6\\Qt6\\bin\\Qt6Network.dll',
-   'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
-   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\bin\\Qt6Network.dll',
-   'BINARY'),
   ('PyQt6\\Qt6\\bin\\Qt6Svg.dll',
    'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
    'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\bin\\Qt6Svg.dll',
    'BINARY'),
-  ('PyQt6\\Qt6\\bin\\Qt6Pdf.dll',
+  ('api-ms-win-crt-utility-l1-1-0.dll',
    'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
-   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\bin\\Qt6Pdf.dll',
+   'CN\\ModularData\\ai-agent\\vm\\tools\\app\\jre\\bin\\api-ms-win-crt-utility-l1-1-0.dll',
+   'BINARY'),
+  ('PyQt6\\Qt6\\bin\\Qt6Network.dll',
+   'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
+   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\bin\\Qt6Network.dll',
    'BINARY'),
   ('PyQt6\\Qt6\\bin\\Qt6Widgets.dll',
    'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
@@ -1055,6 +1055,14 @@
    'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
    'CN\\ModularData\\ai-agent\\vm\\tools\\app\\jre\\bin\\ucrtbase.dll',
    'BINARY'),
+  ('api-ms-win-core-synch-l1-2-0.dll',
+   'c:\\Users\\zhuzhu\\AppData\\Local\\Programs\\TRAE SOLO '
+   'CN\\resources\\app\\modules\\ai-agent\\bin\\api-ms-win-core-synch-l1-2-0.dll',
+   'BINARY'),
+  ('PyQt6\\Qt6\\bin\\MSVCP140_1.dll',
+   'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
+   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\bin\\MSVCP140_1.dll',
+   'BINARY'),
   ('PyQt6\\Qt6\\bin\\VCRUNTIME140.dll',
    'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
    'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\bin\\VCRUNTIME140.dll',
@@ -1063,21 +1071,33 @@
    'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
    'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\bin\\VCRUNTIME140_1.dll',
    'BINARY'),
-  ('PyQt6\\Qt6\\bin\\MSVCP140_1.dll',
+  ('api-ms-win-core-sysinfo-l1-1-0.dll',
    'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
-   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\bin\\MSVCP140_1.dll',
+   'CN\\ModularData\\ai-agent\\vm\\tools\\app\\jre\\bin\\api-ms-win-core-sysinfo-l1-1-0.dll',
    'BINARY'),
-  ('api-ms-win-core-synch-l1-2-0.dll',
-   'c:\\Users\\zhuzhu\\AppData\\Local\\Programs\\TRAE SOLO '
-   'CN\\resources\\app\\modules\\ai-agent\\bin\\api-ms-win-core-synch-l1-2-0.dll',
-   'BINARY'),
-  ('api-ms-win-core-kernel32-legacy-l1-1-1.dll',
+  ('api-ms-win-core-fibers-l1-1-1.dll',
    'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
-   'CN\\ModularData\\ai-agent\\vm\\tools\\app\\jre\\bin\\api-ms-win-core-kernel32-legacy-l1-1-1.dll',
+   'CN\\ModularData\\ai-agent\\vm\\tools\\app\\jre\\bin\\api-ms-win-core-fibers-l1-1-1.dll',
    'BINARY'),
-  ('api-ms-win-core-string-l1-1-0.dll',
+  ('api-ms-win-core-debug-l1-1-0.dll',
    'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
-   'CN\\ModularData\\ai-agent\\vm\\tools\\app\\jre\\bin\\api-ms-win-core-string-l1-1-0.dll',
+   'CN\\ModularData\\ai-agent\\vm\\tools\\app\\jre\\bin\\api-ms-win-core-debug-l1-1-0.dll',
+   'BINARY'),
+  ('api-ms-win-core-file-l1-1-0.dll',
+   'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
+   'CN\\ModularData\\ai-agent\\vm\\tools\\app\\jre\\bin\\api-ms-win-core-file-l1-1-0.dll',
+   'BINARY'),
+  ('api-ms-win-core-processenvironment-l1-1-0.dll',
+   'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
+   'CN\\ModularData\\ai-agent\\vm\\tools\\app\\jre\\bin\\api-ms-win-core-processenvironment-l1-1-0.dll',
+   'BINARY'),
+  ('api-ms-win-core-fibers-l1-1-0.dll',
+   'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
+   'CN\\ModularData\\ai-agent\\vm\\tools\\app\\jre\\bin\\api-ms-win-core-fibers-l1-1-0.dll',
+   'BINARY'),
+  ('api-ms-win-core-synch-l1-1-0.dll',
+   'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
+   'CN\\ModularData\\ai-agent\\vm\\tools\\app\\jre\\bin\\api-ms-win-core-synch-l1-1-0.dll',
    'BINARY'),
   ('api-ms-win-core-rtlsupport-l1-1-0.dll',
    'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
@@ -1087,53 +1107,21 @@
    'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
    'CN\\ModularData\\ai-agent\\vm\\tools\\app\\jre\\bin\\api-ms-win-core-profile-l1-1-0.dll',
    'BINARY'),
-  ('api-ms-win-core-datetime-l1-1-0.dll',
+  ('api-ms-win-core-libraryloader-l1-1-0.dll',
    'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
-   'CN\\ModularData\\ai-agent\\vm\\tools\\app\\jre\\bin\\api-ms-win-core-datetime-l1-1-0.dll',
-   'BINARY'),
-  ('api-ms-win-core-file-l1-2-0.dll',
-   'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
-   'CN\\ModularData\\ai-agent\\vm\\tools\\app\\jre\\bin\\api-ms-win-core-file-l1-2-0.dll',
-   'BINARY'),
-  ('api-ms-win-core-fibers-l1-1-1.dll',
-   'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
-   'CN\\ModularData\\ai-agent\\vm\\tools\\app\\jre\\bin\\api-ms-win-core-fibers-l1-1-1.dll',
-   'BINARY'),
-  ('api-ms-win-core-fibers-l1-1-0.dll',
-   'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
-   'CN\\ModularData\\ai-agent\\vm\\tools\\app\\jre\\bin\\api-ms-win-core-fibers-l1-1-0.dll',
-   'BINARY'),
-  ('api-ms-win-core-memory-l1-1-0.dll',
-   'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
-   'CN\\ModularData\\ai-agent\\vm\\tools\\app\\jre\\bin\\api-ms-win-core-memory-l1-1-0.dll',
-   'BINARY'),
-  ('api-ms-win-core-file-l2-1-0.dll',
-   'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
-   'CN\\ModularData\\ai-agent\\vm\\tools\\app\\jre\\bin\\api-ms-win-core-file-l2-1-0.dll',
+   'CN\\ModularData\\ai-agent\\vm\\tools\\app\\jre\\bin\\api-ms-win-core-libraryloader-l1-1-0.dll',
    'BINARY'),
   ('api-ms-win-core-localization-l1-2-0.dll',
    'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
    'CN\\ModularData\\ai-agent\\vm\\tools\\app\\jre\\bin\\api-ms-win-core-localization-l1-2-0.dll',
    'BINARY'),
-  ('api-ms-win-core-sysinfo-l1-1-0.dll',
+  ('api-ms-win-core-datetime-l1-1-0.dll',
    'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
-   'CN\\ModularData\\ai-agent\\vm\\tools\\app\\jre\\bin\\api-ms-win-core-sysinfo-l1-1-0.dll',
+   'CN\\ModularData\\ai-agent\\vm\\tools\\app\\jre\\bin\\api-ms-win-core-datetime-l1-1-0.dll',
    'BINARY'),
-  ('api-ms-win-core-errorhandling-l1-1-0.dll',
+  ('api-ms-win-core-util-l1-1-0.dll',
    'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
-   'CN\\ModularData\\ai-agent\\vm\\tools\\app\\jre\\bin\\api-ms-win-core-errorhandling-l1-1-0.dll',
-   'BINARY'),
-  ('api-ms-win-core-processenvironment-l1-1-0.dll',
-   'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
-   'CN\\ModularData\\ai-agent\\vm\\tools\\app\\jre\\bin\\api-ms-win-core-processenvironment-l1-1-0.dll',
-   'BINARY'),
-  ('api-ms-win-core-interlocked-l1-1-0.dll',
-   'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
-   'CN\\ModularData\\ai-agent\\vm\\tools\\app\\jre\\bin\\api-ms-win-core-interlocked-l1-1-0.dll',
-   'BINARY'),
-  ('api-ms-win-core-console-l1-1-0.dll',
-   'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
-   'CN\\ModularData\\ai-agent\\vm\\tools\\app\\jre\\bin\\api-ms-win-core-console-l1-1-0.dll',
+   'CN\\ModularData\\ai-agent\\vm\\tools\\app\\jre\\bin\\api-ms-win-core-util-l1-1-0.dll',
    'BINARY'),
   ('api-ms-win-core-processthreads-l1-1-1.dll',
    'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
@@ -1143,45 +1131,57 @@
    'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
    'CN\\ModularData\\ai-agent\\vm\\tools\\app\\jre\\bin\\api-ms-win-core-heap-l1-1-0.dll',
    'BINARY'),
-  ('api-ms-win-core-handle-l1-1-0.dll',
+  ('api-ms-win-core-errorhandling-l1-1-0.dll',
    'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
-   'CN\\ModularData\\ai-agent\\vm\\tools\\app\\jre\\bin\\api-ms-win-core-handle-l1-1-0.dll',
-   'BINARY'),
-  ('api-ms-win-core-util-l1-1-0.dll',
-   'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
-   'CN\\ModularData\\ai-agent\\vm\\tools\\app\\jre\\bin\\api-ms-win-core-util-l1-1-0.dll',
-   'BINARY'),
-  ('api-ms-win-core-timezone-l1-1-0.dll',
-   'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
-   'CN\\ModularData\\ai-agent\\vm\\tools\\app\\jre\\bin\\api-ms-win-core-timezone-l1-1-0.dll',
-   'BINARY'),
-  ('api-ms-win-core-libraryloader-l1-1-0.dll',
-   'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
-   'CN\\ModularData\\ai-agent\\vm\\tools\\app\\jre\\bin\\api-ms-win-core-libraryloader-l1-1-0.dll',
-   'BINARY'),
-  ('api-ms-win-core-namedpipe-l1-1-0.dll',
-   'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
-   'CN\\ModularData\\ai-agent\\vm\\tools\\app\\jre\\bin\\api-ms-win-core-namedpipe-l1-1-0.dll',
-   'BINARY'),
-  ('api-ms-win-core-synch-l1-1-0.dll',
-   'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
-   'CN\\ModularData\\ai-agent\\vm\\tools\\app\\jre\\bin\\api-ms-win-core-synch-l1-1-0.dll',
-   'BINARY'),
-  ('api-ms-win-core-file-l1-1-0.dll',
-   'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
-   'CN\\ModularData\\ai-agent\\vm\\tools\\app\\jre\\bin\\api-ms-win-core-file-l1-1-0.dll',
-   'BINARY'),
-  ('api-ms-win-core-sysinfo-l1-2-0.dll',
-   'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
-   'CN\\ModularData\\ai-agent\\vm\\tools\\app\\jre\\bin\\api-ms-win-core-sysinfo-l1-2-0.dll',
+   'CN\\ModularData\\ai-agent\\vm\\tools\\app\\jre\\bin\\api-ms-win-core-errorhandling-l1-1-0.dll',
    'BINARY'),
   ('api-ms-win-core-processthreads-l1-1-0.dll',
    'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
    'CN\\ModularData\\ai-agent\\vm\\tools\\app\\jre\\bin\\api-ms-win-core-processthreads-l1-1-0.dll',
    'BINARY'),
-  ('api-ms-win-core-debug-l1-1-0.dll',
+  ('api-ms-win-core-memory-l1-1-0.dll',
    'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
-   'CN\\ModularData\\ai-agent\\vm\\tools\\app\\jre\\bin\\api-ms-win-core-debug-l1-1-0.dll',
+   'CN\\ModularData\\ai-agent\\vm\\tools\\app\\jre\\bin\\api-ms-win-core-memory-l1-1-0.dll',
+   'BINARY'),
+  ('api-ms-win-core-namedpipe-l1-1-0.dll',
+   'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
+   'CN\\ModularData\\ai-agent\\vm\\tools\\app\\jre\\bin\\api-ms-win-core-namedpipe-l1-1-0.dll',
+   'BINARY'),
+  ('api-ms-win-core-handle-l1-1-0.dll',
+   'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
+   'CN\\ModularData\\ai-agent\\vm\\tools\\app\\jre\\bin\\api-ms-win-core-handle-l1-1-0.dll',
+   'BINARY'),
+  ('api-ms-win-core-file-l1-2-0.dll',
+   'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
+   'CN\\ModularData\\ai-agent\\vm\\tools\\app\\jre\\bin\\api-ms-win-core-file-l1-2-0.dll',
+   'BINARY'),
+  ('api-ms-win-core-string-l1-1-0.dll',
+   'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
+   'CN\\ModularData\\ai-agent\\vm\\tools\\app\\jre\\bin\\api-ms-win-core-string-l1-1-0.dll',
+   'BINARY'),
+  ('api-ms-win-core-kernel32-legacy-l1-1-1.dll',
+   'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
+   'CN\\ModularData\\ai-agent\\vm\\tools\\app\\jre\\bin\\api-ms-win-core-kernel32-legacy-l1-1-1.dll',
+   'BINARY'),
+  ('api-ms-win-core-timezone-l1-1-0.dll',
+   'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
+   'CN\\ModularData\\ai-agent\\vm\\tools\\app\\jre\\bin\\api-ms-win-core-timezone-l1-1-0.dll',
+   'BINARY'),
+  ('api-ms-win-core-file-l2-1-0.dll',
+   'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
+   'CN\\ModularData\\ai-agent\\vm\\tools\\app\\jre\\bin\\api-ms-win-core-file-l2-1-0.dll',
+   'BINARY'),
+  ('api-ms-win-core-interlocked-l1-1-0.dll',
+   'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
+   'CN\\ModularData\\ai-agent\\vm\\tools\\app\\jre\\bin\\api-ms-win-core-interlocked-l1-1-0.dll',
+   'BINARY'),
+  ('api-ms-win-core-sysinfo-l1-2-0.dll',
+   'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
+   'CN\\ModularData\\ai-agent\\vm\\tools\\app\\jre\\bin\\api-ms-win-core-sysinfo-l1-2-0.dll',
+   'BINARY'),
+  ('api-ms-win-core-console-l1-1-0.dll',
+   'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
+   'CN\\ModularData\\ai-agent\\vm\\tools\\app\\jre\\bin\\api-ms-win-core-console-l1-1-0.dll',
    'BINARY')],
  [],
  [],
@@ -1194,109 +1194,29 @@
   ('assets\\icon.ico',
    'C:\\Users\\zhuzhu\\Desktop\\my first android app\\assets\\icon.ico',
    'DATA'),
-  ('PyQt6\\Qt6\\translations\\qtbase_lg.qm',
+  ('PyQt6\\Qt6\\translations\\qt_lg.qm',
    'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
-   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\translations\\qtbase_lg.qm',
+   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_lg.qm',
+   'DATA'),
+  ('PyQt6\\Qt6\\translations\\qt_help_nn.qm',
+   'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
+   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_help_nn.qm',
+   'DATA'),
+  ('PyQt6\\Qt6\\translations\\qtbase_uk.qm',
+   'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
+   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\translations\\qtbase_uk.qm',
    'DATA'),
   ('PyQt6\\Qt6\\translations\\qt_help_bg.qm',
    'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
    'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_help_bg.qm',
    'DATA'),
-  ('PyQt6\\Qt6\\translations\\qtbase_ja.qm',
+  ('PyQt6\\Qt6\\translations\\qt_help_en.qm',
    'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
-   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\translations\\qtbase_ja.qm',
+   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_help_en.qm',
    'DATA'),
-  ('PyQt6\\Qt6\\translations\\qt_gd.qm',
+  ('PyQt6\\Qt6\\translations\\qt_sk.qm',
    'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
-   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_gd.qm',
-   'DATA'),
-  ('PyQt6\\Qt6\\translations\\qtbase_nl.qm',
-   'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
-   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\translations\\qtbase_nl.qm',
-   'DATA'),
-  ('PyQt6\\Qt6\\translations\\qt_gl.qm',
-   'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
-   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_gl.qm',
-   'DATA'),
-  ('PyQt6\\Qt6\\translations\\qt_zh_TW.qm',
-   'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
-   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_zh_TW.qm',
-   'DATA'),
-  ('PyQt6\\Qt6\\translations\\qt_help_ru.qm',
-   'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
-   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_help_ru.qm',
-   'DATA'),
-  ('PyQt6\\Qt6\\translations\\qtbase_en.qm',
-   'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
-   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\translations\\qtbase_en.qm',
-   'DATA'),
-  ('PyQt6\\Qt6\\translations\\qtbase_gd.qm',
-   'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
-   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\translations\\qtbase_gd.qm',
-   'DATA'),
-  ('PyQt6\\Qt6\\translations\\qt_help_fr.qm',
-   'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
-   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_help_fr.qm',
-   'DATA'),
-  ('PyQt6\\Qt6\\translations\\qt_help_de.qm',
-   'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
-   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_help_de.qm',
-   'DATA'),
-  ('PyQt6\\Qt6\\translations\\qt_lg.qm',
-   'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
-   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_lg.qm',
-   'DATA'),
-  ('PyQt6\\Qt6\\translations\\qtbase_da.qm',
-   'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
-   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\translations\\qtbase_da.qm',
-   'DATA'),
-  ('PyQt6\\Qt6\\translations\\qt_nn.qm',
-   'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
-   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_nn.qm',
-   'DATA'),
-  ('PyQt6\\Qt6\\translations\\qt_help_sl.qm',
-   'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
-   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_help_sl.qm',
-   'DATA'),
-  ('PyQt6\\Qt6\\translations\\qt_da.qm',
-   'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
-   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_da.qm',
-   'DATA'),
-  ('PyQt6\\Qt6\\translations\\qt_zh_CN.qm',
-   'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
-   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_zh_CN.qm',
-   'DATA'),
-  ('PyQt6\\Qt6\\translations\\qt_pt_PT.qm',
-   'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
-   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_pt_PT.qm',
-   'DATA'),
-  ('PyQt6\\Qt6\\translations\\qt_hr.qm',
-   'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
-   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_hr.qm',
-   'DATA'),
-  ('PyQt6\\Qt6\\translations\\qtbase_de.qm',
-   'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
-   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\translations\\qtbase_de.qm',
-   'DATA'),
-  ('PyQt6\\Qt6\\translations\\qtbase_ca.qm',
-   'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
-   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\translations\\qtbase_ca.qm',
-   'DATA'),
-  ('PyQt6\\Qt6\\translations\\qt_fa.qm',
-   'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
-   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_fa.qm',
-   'DATA'),
-  ('PyQt6\\Qt6\\translations\\qt_sv.qm',
-   'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
-   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_sv.qm',
-   'DATA'),
-  ('PyQt6\\Qt6\\translations\\qt_ka.qm',
-   'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
-   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_ka.qm',
-   'DATA'),
-  ('PyQt6\\Qt6\\translations\\qtbase_lv.qm',
-   'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
-   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\translations\\qtbase_lv.qm',
+   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_sk.qm',
    'DATA'),
   ('PyQt6\\Qt6\\translations\\qtbase_ko.qm',
    'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
@@ -1306,141 +1226,133 @@
    'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
    'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_help_ka.qm',
    'DATA'),
-  ('PyQt6\\Qt6\\translations\\qt_sk.qm',
+  ('PyQt6\\Qt6\\translations\\qtbase_it.qm',
    'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
-   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_sk.qm',
+   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\translations\\qtbase_it.qm',
    'DATA'),
-  ('PyQt6\\Qt6\\translations\\qt_help_uk.qm',
+  ('PyQt6\\Qt6\\translations\\qt_zh_TW.qm',
    'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
-   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_help_uk.qm',
+   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_zh_TW.qm',
    'DATA'),
-  ('PyQt6\\Qt6\\translations\\qtbase_hr.qm',
+  ('PyQt6\\Qt6\\translations\\qt_help_sv.qm',
    'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
-   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\translations\\qtbase_hr.qm',
+   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_help_sv.qm',
    'DATA'),
-  ('PyQt6\\Qt6\\translations\\qtbase_fi.qm',
+  ('PyQt6\\Qt6\\translations\\qt_hu.qm',
    'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
-   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\translations\\qtbase_fi.qm',
+   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_hu.qm',
    'DATA'),
-  ('PyQt6\\Qt6\\translations\\qt_help_da.qm',
+  ('PyQt6\\Qt6\\translations\\qtbase_nn.qm',
    'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
-   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_help_da.qm',
-   'DATA'),
-  ('PyQt6\\Qt6\\translations\\qt_help_gl.qm',
-   'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
-   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_help_gl.qm',
-   'DATA'),
-  ('PyQt6\\Qt6\\translations\\qt_de.qm',
-   'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
-   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_de.qm',
-   'DATA'),
-  ('PyQt6\\Qt6\\translations\\qt_fi.qm',
-   'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
-   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_fi.qm',
-   'DATA'),
-  ('PyQt6\\Qt6\\translations\\qtbase_hu.qm',
-   'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
-   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\translations\\qtbase_hu.qm',
-   'DATA'),
-  ('PyQt6\\Qt6\\translations\\qtbase_pl.qm',
-   'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
-   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\translations\\qtbase_pl.qm',
-   'DATA'),
-  ('PyQt6\\Qt6\\translations\\qtbase_sv.qm',
-   'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
-   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\translations\\qtbase_sv.qm',
+   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\translations\\qtbase_nn.qm',
    'DATA'),
   ('PyQt6\\Qt6\\translations\\qt_pl.qm',
    'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
    'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_pl.qm',
    'DATA'),
-  ('PyQt6\\Qt6\\translations\\qt_ca.qm',
+  ('PyQt6\\Qt6\\translations\\qtbase_pt_BR.qm',
    'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
-   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_ca.qm',
+   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\translations\\qtbase_pt_BR.qm',
    'DATA'),
-  ('PyQt6\\Qt6\\translations\\qt_help_ko.qm',
+  ('PyQt6\\Qt6\\translations\\qt_ka.qm',
    'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
-   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_help_ko.qm',
-   'DATA'),
-  ('PyQt6\\Qt6\\translations\\qt_help_nn.qm',
-   'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
-   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_help_nn.qm',
-   'DATA'),
-  ('PyQt6\\Qt6\\translations\\qt_cs.qm',
-   'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
-   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_cs.qm',
-   'DATA'),
-  ('PyQt6\\Qt6\\translations\\qtbase_cs.qm',
-   'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
-   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\translations\\qtbase_cs.qm',
+   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_ka.qm',
    'DATA'),
   ('PyQt6\\Qt6\\translations\\qt_tr.qm',
    'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
    'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_tr.qm',
    'DATA'),
-  ('PyQt6\\Qt6\\translations\\qt_help_nl.qm',
+  ('PyQt6\\Qt6\\translations\\qt_help_hr.qm',
    'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
-   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_help_nl.qm',
-   'DATA'),
-  ('PyQt6\\Qt6\\translations\\qt_nl.qm',
-   'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
-   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_nl.qm',
-   'DATA'),
-  ('PyQt6\\Qt6\\translations\\qt_lt.qm',
-   'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
-   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_lt.qm',
-   'DATA'),
-  ('PyQt6\\Qt6\\translations\\qtbase_uk.qm',
-   'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
-   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\translations\\qtbase_uk.qm',
-   'DATA'),
-  ('PyQt6\\Qt6\\translations\\qt_en.qm',
-   'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
-   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_en.qm',
-   'DATA'),
-  ('PyQt6\\Qt6\\translations\\qt_es.qm',
-   'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
-   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_es.qm',
-   'DATA'),
-  ('PyQt6\\Qt6\\translations\\qtbase_ka.qm',
-   'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
-   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\translations\\qtbase_ka.qm',
-   'DATA'),
-  ('PyQt6\\Qt6\\translations\\qt_ja.qm',
-   'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
-   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_ja.qm',
-   'DATA'),
-  ('PyQt6\\Qt6\\translations\\qt_it.qm',
-   'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
-   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_it.qm',
-   'DATA'),
-  ('PyQt6\\Qt6\\translations\\qt_help_sk.qm',
-   'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
-   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_help_sk.qm',
-   'DATA'),
-  ('PyQt6\\Qt6\\translations\\qt_help_es.qm',
-   'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
-   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_help_es.qm',
-   'DATA'),
-  ('PyQt6\\Qt6\\translations\\qt_lv.qm',
-   'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
-   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_lv.qm',
+   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_help_hr.qm',
    'DATA'),
   ('PyQt6\\Qt6\\translations\\qtbase_sk.qm',
    'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
    'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\translations\\qtbase_sk.qm',
    'DATA'),
-  ('PyQt6\\Qt6\\translations\\qt_ko.qm',
+  ('PyQt6\\Qt6\\translations\\qtbase_zh_CN.qm',
    'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
-   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_ko.qm',
+   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\translations\\qtbase_zh_CN.qm',
+   'DATA'),
+  ('PyQt6\\Qt6\\translations\\qtbase_fr.qm',
+   'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
+   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\translations\\qtbase_fr.qm',
+   'DATA'),
+  ('PyQt6\\Qt6\\translations\\qt_help_sl.qm',
+   'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
+   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_help_sl.qm',
+   'DATA'),
+  ('PyQt6\\Qt6\\translations\\qt_lt.qm',
+   'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
+   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_lt.qm',
    'DATA'),
   ('PyQt6\\Qt6\\translations\\qt_help_cs.qm',
    'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
    'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_help_cs.qm',
    'DATA'),
-  ('PyQt6\\Qt6\\translations\\qtbase_zh_TW.qm',
+  ('PyQt6\\Qt6\\translations\\qtbase_gd.qm',
    'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
-   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\translations\\qtbase_zh_TW.qm',
+   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\translations\\qtbase_gd.qm',
+   'DATA'),
+  ('PyQt6\\Qt6\\translations\\qt_gd.qm',
+   'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
+   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_gd.qm',
+   'DATA'),
+  ('PyQt6\\Qt6\\translations\\qt_en.qm',
+   'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
+   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_en.qm',
+   'DATA'),
+  ('PyQt6\\Qt6\\translations\\qtbase_en.qm',
+   'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
+   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\translations\\qtbase_en.qm',
+   'DATA'),
+  ('PyQt6\\Qt6\\translations\\qtbase_lv.qm',
+   'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
+   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\translations\\qtbase_lv.qm',
+   'DATA'),
+  ('PyQt6\\Qt6\\translations\\qt_ru.qm',
+   'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
+   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_ru.qm',
+   'DATA'),
+  ('PyQt6\\Qt6\\translations\\qtbase_es.qm',
+   'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
+   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\translations\\qtbase_es.qm',
+   'DATA'),
+  ('PyQt6\\Qt6\\translations\\qt_pt_BR.qm',
+   'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
+   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_pt_BR.qm',
+   'DATA'),
+  ('PyQt6\\Qt6\\translations\\qt_lv.qm',
+   'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
+   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_lv.qm',
+   'DATA'),
+  ('PyQt6\\Qt6\\translations\\qt_help_es.qm',
+   'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
+   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_help_es.qm',
+   'DATA'),
+  ('PyQt6\\Qt6\\translations\\qtbase_ca.qm',
+   'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
+   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\translations\\qtbase_ca.qm',
+   'DATA'),
+  ('PyQt6\\Qt6\\translations\\qtbase_fa.qm',
+   'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
+   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\translations\\qtbase_fa.qm',
+   'DATA'),
+  ('PyQt6\\Qt6\\translations\\qt_it.qm',
+   'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
+   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_it.qm',
+   'DATA'),
+  ('PyQt6\\Qt6\\translations\\qt_sl.qm',
+   'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
+   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_sl.qm',
+   'DATA'),
+  ('PyQt6\\Qt6\\translations\\qt_cs.qm',
+   'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
+   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_cs.qm',
+   'DATA'),
+  ('PyQt6\\Qt6\\translations\\qtbase_sv.qm',
+   'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
+   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\translations\\qtbase_sv.qm',
    'DATA'),
   ('PyQt6\\Qt6\\translations\\qt_bg.qm',
    'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
@@ -1450,77 +1362,57 @@
    'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
    'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\translations\\qtbase_bg.qm',
    'DATA'),
-  ('PyQt6\\Qt6\\translations\\qt_help_ar.qm',
+  ('PyQt6\\Qt6\\translations\\qt_fi.qm',
    'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
-   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_help_ar.qm',
+   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_fi.qm',
    'DATA'),
-  ('PyQt6\\Qt6\\translations\\qt_help_pl.qm',
+  ('PyQt6\\Qt6\\translations\\qt_pt_PT.qm',
    'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
-   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_help_pl.qm',
+   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_pt_PT.qm',
    'DATA'),
-  ('PyQt6\\Qt6\\translations\\qt_sl.qm',
+  ('PyQt6\\Qt6\\translations\\qtbase_pl.qm',
    'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
-   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_sl.qm',
+   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\translations\\qtbase_pl.qm',
    'DATA'),
-  ('PyQt6\\Qt6\\translations\\qtbase_fr.qm',
+  ('PyQt6\\Qt6\\translations\\qtbase_da.qm',
    'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
-   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\translations\\qtbase_fr.qm',
-   'DATA'),
-  ('PyQt6\\Qt6\\translations\\qtbase_pt_BR.qm',
-   'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
-   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\translations\\qtbase_pt_BR.qm',
-   'DATA'),
-  ('PyQt6\\Qt6\\translations\\qt_help_zh_CN.qm',
-   'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
-   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_help_zh_CN.qm',
+   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\translations\\qtbase_da.qm',
    'DATA'),
   ('PyQt6\\Qt6\\translations\\qt_fr.qm',
    'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
    'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_fr.qm',
    'DATA'),
-  ('PyQt6\\Qt6\\translations\\qt_help_en.qm',
+  ('PyQt6\\Qt6\\translations\\qtbase_tr.qm',
    'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
-   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_help_en.qm',
+   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\translations\\qtbase_tr.qm',
+   'DATA'),
+  ('PyQt6\\Qt6\\translations\\qt_help_uk.qm',
+   'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
+   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_help_uk.qm',
+   'DATA'),
+  ('PyQt6\\Qt6\\translations\\qt_help_sk.qm',
+   'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
+   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_help_sk.qm',
+   'DATA'),
+  ('PyQt6\\Qt6\\translations\\qt_da.qm',
+   'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
+   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_da.qm',
+   'DATA'),
+  ('PyQt6\\Qt6\\translations\\qt_nn.qm',
+   'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
+   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_nn.qm',
+   'DATA'),
+  ('PyQt6\\Qt6\\translations\\qt_zh_CN.qm',
+   'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
+   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_zh_CN.qm',
+   'DATA'),
+  ('PyQt6\\Qt6\\translations\\qt_help_pl.qm',
+   'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
+   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_help_pl.qm',
    'DATA'),
   ('PyQt6\\Qt6\\translations\\qt_help_hu.qm',
    'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
    'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_help_hu.qm',
-   'DATA'),
-  ('PyQt6\\Qt6\\translations\\qt_help_zh_TW.qm',
-   'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
-   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_help_zh_TW.qm',
-   'DATA'),
-  ('PyQt6\\Qt6\\translations\\qtbase_it.qm',
-   'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
-   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\translations\\qtbase_it.qm',
-   'DATA'),
-  ('PyQt6\\Qt6\\translations\\qt_help_hr.qm',
-   'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
-   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_help_hr.qm',
-   'DATA'),
-  ('PyQt6\\Qt6\\translations\\qt_help_it.qm',
-   'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
-   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_help_it.qm',
-   'DATA'),
-  ('PyQt6\\Qt6\\translations\\qt_help_pt_BR.qm',
-   'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
-   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_help_pt_BR.qm',
-   'DATA'),
-  ('PyQt6\\Qt6\\translations\\qt_uk.qm',
-   'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
-   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_uk.qm',
-   'DATA'),
-  ('PyQt6\\Qt6\\translations\\qtbase_ru.qm',
-   'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
-   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\translations\\qtbase_ru.qm',
-   'DATA'),
-  ('PyQt6\\Qt6\\translations\\qtbase_es.qm',
-   'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
-   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\translations\\qtbase_es.qm',
-   'DATA'),
-  ('PyQt6\\Qt6\\translations\\qt_help_ca.qm',
-   'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
-   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_help_ca.qm',
    'DATA'),
   ('PyQt6\\Qt6\\translations\\qt_help_ja.qm',
    'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
@@ -1530,59 +1422,175 @@
    'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
    'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_help_tr.qm',
    'DATA'),
-  ('PyQt6\\Qt6\\translations\\qtbase_fa.qm',
+  ('PyQt6\\Qt6\\translations\\qt_help_gl.qm',
    'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
-   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\translations\\qtbase_fa.qm',
+   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_help_gl.qm',
    'DATA'),
-  ('PyQt6\\Qt6\\translations\\qt_pt_BR.qm',
+  ('PyQt6\\Qt6\\translations\\qtbase_ja.qm',
    'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
-   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_pt_BR.qm',
+   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\translations\\qtbase_ja.qm',
    'DATA'),
-  ('PyQt6\\Qt6\\translations\\qt_hu.qm',
+  ('PyQt6\\Qt6\\translations\\qt_help_zh_CN.qm',
    'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
-   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_hu.qm',
+   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_help_zh_CN.qm',
    'DATA'),
-  ('PyQt6\\Qt6\\translations\\qt_help_sv.qm',
+  ('PyQt6\\Qt6\\translations\\qtbase_nl.qm',
    'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
-   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_help_sv.qm',
+   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\translations\\qtbase_nl.qm',
    'DATA'),
-  ('PyQt6\\Qt6\\translations\\qtbase_zh_CN.qm',
+  ('PyQt6\\Qt6\\translations\\qt_ja.qm',
    'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
-   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\translations\\qtbase_zh_CN.qm',
+   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_ja.qm',
    'DATA'),
   ('PyQt6\\Qt6\\translations\\qt_he.qm',
    'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
    'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_he.qm',
    'DATA'),
-  ('PyQt6\\Qt6\\translations\\qt_ru.qm',
+  ('PyQt6\\Qt6\\translations\\qtbase_fi.qm',
    'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
-   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_ru.qm',
+   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\translations\\qtbase_fi.qm',
    'DATA'),
-  ('PyQt6\\Qt6\\translations\\qtbase_nn.qm',
+  ('PyQt6\\Qt6\\translations\\qt_es.qm',
    'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
-   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\translations\\qtbase_nn.qm',
+   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_es.qm',
    'DATA'),
-  ('PyQt6\\Qt6\\translations\\qtbase_ar.qm',
+  ('PyQt6\\Qt6\\translations\\qt_help_pt_BR.qm',
    'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
-   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\translations\\qtbase_ar.qm',
+   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_help_pt_BR.qm',
    'DATA'),
-  ('PyQt6\\Qt6\\translations\\qtbase_he.qm',
+  ('PyQt6\\Qt6\\translations\\qt_help_zh_TW.qm',
    'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
-   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\translations\\qtbase_he.qm',
+   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_help_zh_TW.qm',
+   'DATA'),
+  ('PyQt6\\Qt6\\translations\\qtbase_lg.qm',
+   'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
+   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\translations\\qtbase_lg.qm',
+   'DATA'),
+  ('PyQt6\\Qt6\\translations\\qtbase_hr.qm',
+   'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
+   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\translations\\qtbase_hr.qm',
    'DATA'),
   ('PyQt6\\Qt6\\translations\\qt_ar.qm',
    'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
    'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_ar.qm',
    'DATA'),
-  ('PyQt6\\Qt6\\translations\\qtbase_tr.qm',
+  ('PyQt6\\Qt6\\translations\\qtbase_de.qm',
    'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
-   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\translations\\qtbase_tr.qm',
+   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\translations\\qtbase_de.qm',
+   'DATA'),
+  ('PyQt6\\Qt6\\translations\\qt_help_da.qm',
+   'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
+   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_help_da.qm',
+   'DATA'),
+  ('PyQt6\\Qt6\\translations\\qt_help_ru.qm',
+   'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
+   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_help_ru.qm',
+   'DATA'),
+  ('PyQt6\\Qt6\\translations\\qt_help_nl.qm',
+   'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
+   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_help_nl.qm',
+   'DATA'),
+  ('PyQt6\\Qt6\\translations\\qt_gl.qm',
+   'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
+   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_gl.qm',
+   'DATA'),
+  ('PyQt6\\Qt6\\translations\\qtbase_he.qm',
+   'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
+   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\translations\\qtbase_he.qm',
+   'DATA'),
+  ('PyQt6\\Qt6\\translations\\qt_hr.qm',
+   'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
+   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_hr.qm',
+   'DATA'),
+  ('PyQt6\\Qt6\\translations\\qtbase_ru.qm',
+   'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
+   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\translations\\qtbase_ru.qm',
+   'DATA'),
+  ('PyQt6\\Qt6\\translations\\qt_de.qm',
+   'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
+   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_de.qm',
+   'DATA'),
+  ('PyQt6\\Qt6\\translations\\qt_help_ca.qm',
+   'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
+   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_help_ca.qm',
+   'DATA'),
+  ('PyQt6\\Qt6\\translations\\qt_ca.qm',
+   'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
+   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_ca.qm',
+   'DATA'),
+  ('PyQt6\\Qt6\\translations\\qtbase_ar.qm',
+   'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
+   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\translations\\qtbase_ar.qm',
+   'DATA'),
+  ('PyQt6\\Qt6\\translations\\qt_nl.qm',
+   'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
+   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_nl.qm',
+   'DATA'),
+  ('PyQt6\\Qt6\\translations\\qtbase_ka.qm',
+   'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
+   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\translations\\qtbase_ka.qm',
+   'DATA'),
+  ('PyQt6\\Qt6\\translations\\qt_help_ar.qm',
+   'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
+   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_help_ar.qm',
+   'DATA'),
+  ('PyQt6\\Qt6\\translations\\qtbase_zh_TW.qm',
+   'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
+   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\translations\\qtbase_zh_TW.qm',
+   'DATA'),
+  ('PyQt6\\Qt6\\translations\\qt_help_de.qm',
+   'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
+   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_help_de.qm',
+   'DATA'),
+  ('PyQt6\\Qt6\\translations\\qt_sv.qm',
+   'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
+   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_sv.qm',
+   'DATA'),
+  ('PyQt6\\Qt6\\translations\\qtbase_hu.qm',
+   'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
+   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\translations\\qtbase_hu.qm',
+   'DATA'),
+  ('PyQt6\\Qt6\\translations\\qt_ko.qm',
+   'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
+   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_ko.qm',
+   'DATA'),
+  ('PyQt6\\Qt6\\translations\\qt_help_ko.qm',
+   'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
+   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_help_ko.qm',
+   'DATA'),
+  ('PyQt6\\Qt6\\translations\\qtbase_cs.qm',
+   'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
+   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\translations\\qtbase_cs.qm',
+   'DATA'),
+  ('PyQt6\\Qt6\\translations\\qt_help_fr.qm',
+   'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
+   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_help_fr.qm',
+   'DATA'),
+  ('PyQt6\\Qt6\\translations\\qt_fa.qm',
+   'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
+   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_fa.qm',
+   'DATA'),
+  ('PyQt6\\Qt6\\translations\\qt_help_it.qm',
+   'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
+   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_help_it.qm',
+   'DATA'),
+  ('PyQt6\\Qt6\\translations\\qt_uk.qm',
+   'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
+   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_uk.qm',
    'DATA'),
   ('base_library.zip',
    'C:\\Users\\zhuzhu\\Desktop\\my first android '
    'app\\build\\build\\WinAppMigrator\\base_library.zip',
    'DATA')],
- [('encodings.zlib_codec',
+ [('reprlib',
+   'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
+   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\python310.zip\\reprlib.pyc',
+   'PYMODULE'),
+  ('sre_constants',
+   'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
+   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\python310.zip\\sre_constants.pyc',
+   'PYMODULE'),
+  ('encodings.zlib_codec',
    'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
    'CN\\ModularData\\ai-agent\\vm\\tools\\python\\python310.zip\\encodings\\zlib_codec.pyc',
    'PYMODULE'),
@@ -2070,89 +2078,13 @@
    'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
    'CN\\ModularData\\ai-agent\\vm\\tools\\python\\python310.zip\\encodings\\__init__.pyc',
    'PYMODULE'),
-  ('functools',
-   'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
-   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\python310.zip\\functools.pyc',
-   'PYMODULE'),
-  ('re',
-   'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
-   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\python310.zip\\re.pyc',
-   'PYMODULE'),
-  ('copyreg',
-   'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
-   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\python310.zip\\copyreg.pyc',
-   'PYMODULE'),
-  ('traceback',
-   'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
-   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\python310.zip\\traceback.pyc',
-   'PYMODULE'),
-  ('io',
-   'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
-   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\python310.zip\\io.pyc',
-   'PYMODULE'),
-  ('locale',
-   'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
-   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\python310.zip\\locale.pyc',
-   'PYMODULE'),
-  ('linecache',
-   'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
-   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\python310.zip\\linecache.pyc',
-   'PYMODULE'),
-  ('keyword',
-   'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
-   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\python310.zip\\keyword.pyc',
-   'PYMODULE'),
-  ('_collections_abc',
-   'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
-   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\python310.zip\\_collections_abc.pyc',
-   'PYMODULE'),
-  ('sre_parse',
-   'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
-   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\python310.zip\\sre_parse.pyc',
-   'PYMODULE'),
-  ('warnings',
-   'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
-   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\python310.zip\\warnings.pyc',
-   'PYMODULE'),
-  ('sre_compile',
-   'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
-   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\python310.zip\\sre_compile.pyc',
-   'PYMODULE'),
-  ('heapq',
-   'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
-   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\python310.zip\\heapq.pyc',
-   'PYMODULE'),
   ('operator',
    'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
    'CN\\ModularData\\ai-agent\\vm\\tools\\python\\python310.zip\\operator.pyc',
    'PYMODULE'),
-  ('reprlib',
+  ('linecache',
    'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
-   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\python310.zip\\reprlib.pyc',
-   'PYMODULE'),
-  ('posixpath',
-   'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
-   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\python310.zip\\posixpath.pyc',
-   'PYMODULE'),
-  ('codecs',
-   'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
-   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\python310.zip\\codecs.pyc',
-   'PYMODULE'),
-  ('types',
-   'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
-   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\python310.zip\\types.pyc',
-   'PYMODULE'),
-  ('genericpath',
-   'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
-   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\python310.zip\\genericpath.pyc',
-   'PYMODULE'),
-  ('_weakrefset',
-   'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
-   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\python310.zip\\_weakrefset.pyc',
-   'PYMODULE'),
-  ('enum',
-   'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
-   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\python310.zip\\enum.pyc',
+   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\python310.zip\\linecache.pyc',
    'PYMODULE'),
   ('collections.abc',
    'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
@@ -2162,25 +2094,93 @@
    'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
    'CN\\ModularData\\ai-agent\\vm\\tools\\python\\python310.zip\\collections\\__init__.pyc',
    'PYMODULE'),
-  ('abc',
+  ('_weakrefset',
    'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
-   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\python310.zip\\abc.pyc',
-   'PYMODULE'),
-  ('sre_constants',
-   'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
-   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\python310.zip\\sre_constants.pyc',
+   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\python310.zip\\_weakrefset.pyc',
    'PYMODULE'),
   ('weakref',
    'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
    'CN\\ModularData\\ai-agent\\vm\\tools\\python\\python310.zip\\weakref.pyc',
    'PYMODULE'),
+  ('posixpath',
+   'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
+   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\python310.zip\\posixpath.pyc',
+   'PYMODULE'),
+  ('functools',
+   'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
+   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\python310.zip\\functools.pyc',
+   'PYMODULE'),
+  ('sre_parse',
+   'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
+   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\python310.zip\\sre_parse.pyc',
+   'PYMODULE'),
+  ('io',
+   'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
+   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\python310.zip\\io.pyc',
+   'PYMODULE'),
+  ('locale',
+   'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
+   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\python310.zip\\locale.pyc',
+   'PYMODULE'),
+  ('types',
+   'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
+   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\python310.zip\\types.pyc',
+   'PYMODULE'),
+  ('sre_compile',
+   'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
+   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\python310.zip\\sre_compile.pyc',
+   'PYMODULE'),
+  ('genericpath',
+   'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
+   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\python310.zip\\genericpath.pyc',
+   'PYMODULE'),
+  ('codecs',
+   'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
+   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\python310.zip\\codecs.pyc',
+   'PYMODULE'),
+  ('abc',
+   'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
+   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\python310.zip\\abc.pyc',
+   'PYMODULE'),
+  ('_collections_abc',
+   'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
+   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\python310.zip\\_collections_abc.pyc',
+   'PYMODULE'),
+  ('heapq',
+   'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
+   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\python310.zip\\heapq.pyc',
+   'PYMODULE'),
+  ('traceback',
+   'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
+   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\python310.zip\\traceback.pyc',
+   'PYMODULE'),
+  ('warnings',
+   'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
+   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\python310.zip\\warnings.pyc',
+   'PYMODULE'),
   ('stat',
    'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
    'CN\\ModularData\\ai-agent\\vm\\tools\\python\\python310.zip\\stat.pyc',
    'PYMODULE'),
+  ('copyreg',
+   'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
+   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\python310.zip\\copyreg.pyc',
+   'PYMODULE'),
+  ('enum',
+   'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
+   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\python310.zip\\enum.pyc',
+   'PYMODULE'),
+  ('re',
+   'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
+   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\python310.zip\\re.pyc',
+   'PYMODULE'),
   ('ntpath',
    'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
    'CN\\ModularData\\ai-agent\\vm\\tools\\python\\python310.zip\\ntpath.pyc',
+   'PYMODULE'),
+  ('keyword',
+   'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
+   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\python310.zip\\keyword.pyc',
    'PYMODULE'),
   ('os',
    'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '

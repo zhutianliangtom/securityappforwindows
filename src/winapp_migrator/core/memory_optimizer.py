@@ -1,4 +1,4 @@
-"""内存优化模块：激进硬限制工作集，强制换出到虚拟内存（硬盘）"""
+"""内存优化模块：激进压缩工作集，强制换出到虚拟内存（硬盘）"""
 
 import base64
 import os
@@ -44,7 +44,7 @@ def _run_ps(script: str, timeout: int = 120) -> tuple:
 
 
 def optimize_memory(progress_callback=None) -> dict:
-    """激进压缩：SetProcessWorkingSetSizeEx 硬限制 + 多轮 EmptyWorkingSet"""
+    """激进压缩：EmptyWorkingSet + SetProcessWorkingSetSize(-1,-1) 多轮"""
 
     def notify(pct: int, msg: str):
         logger.info("[%d%%] %s", pct, msg)
@@ -66,8 +66,6 @@ $sig = @"
 public static extern bool EmptyWorkingSet(IntPtr hProcess);
 [DllImport("kernel32.dll", SetLastError=true)]
 public static extern bool SetProcessWorkingSetSize(IntPtr hProcess, IntPtr dwMinimumWorkingSetSize, IntPtr dwMaximumWorkingSetSize);
-[DllImport("kernel32.dll", SetLastError=true)]
-public static extern bool SetProcessWorkingSetSizeEx(IntPtr hProcess, IntPtr dwMinimumWorkingSetSize, IntPtr dwMaximumWorkingSetSize, uint Flags);
 [DllImport("kernel32.dll", SetLastError=true)]
 public static extern bool SetSystemFileCacheSize(IntPtr MinimumFileCacheSize, IntPtr MaximumFileCacheSize, uint Flags);
 "@
@@ -94,49 +92,32 @@ if ($fgPid -gt 0) {{
     }}
 }}
 
-# --- 基线 ---
-$os = Get-CimInstance Win32_OperatingSystem
-$totalMB = $os.TotalVisibleMemorySize / 1024
-$availBefore = (Get-Counter "\Memory\Available MBytes" -ErrorAction SilentlyContinue).CounterSamples.CookedValue
-if (-not $availBefore) {{ $availBefore = $os.FreePhysicalMemory / 1024 }}
-$inUseBefore = $totalMB - $availBefore
+# --- 基线：统计所有进程总 WorkingSet ---
+$totalMB = (Get-CimInstance Win32_OperatingSystem).TotalVisibleMemorySize / 1024
+$wsBefore = 0
+$procCount = 0
+$allProcs = Get-Process | Sort-Object WorkingSet64 -Descending
+foreach ($p in $allProcs) {{
+    try {{ $wsBefore += $p.WorkingSet64 }} catch {{ }}
+    $procCount++
+}}
+$wsBeforeMB = $wsBefore / 1MB
 
-# QUOTA_LIMITS_HARDWS_MIN_ENABLE (0x1) | QUOTA_LIMITS_HARDWS_MAX_ENABLE (0x2) = 0x3
-# 硬限制工作集，Windows 必须遵守，不可协商
-$HARD_LIMIT = 0x3
-$pageSize = [IntPtr]::new(4096)
 $negOne = [IntPtr]::new(-1)
-
 $emptyOk = 0
-$hardOk = 0
 $fail = 0
 
-# 按 WorkingSet 从大到小排序
-$allProcs = Get-Process | Sort-Object WorkingSet64 -Descending
-
 # ============================================================
-# 阶段 1: EmptyWorkingSet + SetProcessWorkingSetSizeEx 硬限制
+# 阶段 1: EmptyWorkingSet + SetProcessWorkingSetSize(-1,-1)
 # ============================================================
 foreach ($p in $allProcs) {{
     if ($protected -contains $p.Id) {{ continue }}
     if ($protectedNames -contains $p.ProcessName.ToLower()) {{ continue }}
-
     try {{
         [WAM.MemOpt]::EmptyWorkingSet($p.Handle) | Out-Null
+        [WAM.MemOpt]::SetProcessWorkingSetSize($p.Handle, $negOne, $negOne) | Out-Null
         $emptyOk++
-    }} catch {{ }}
-
-    try {{
-        # SetProcessWorkingSetSizeEx + 硬限制 flag = 强制 Windows 遵守
-        [WAM.MemOpt]::SetProcessWorkingSetSizeEx($p.Handle, $pageSize, $pageSize, $HARD_LIMIT) | Out-Null
-        $hardOk++
-    }} catch {{
-        # 回退：部分进程没有 PROCESS_SET_QUOTA 权限，用普通 SetProcessWorkingSetSize
-        try {{
-            [WAM.MemOpt]::SetProcessWorkingSetSize($p.Handle, $pageSize, $pageSize) | Out-Null
-            $hardOk++
-        }} catch {{ $fail++ }}
-    }}
+    }} catch {{ $fail++ }}
 }}
 
 # ============================================================
@@ -146,79 +127,97 @@ try {{
     [WAM.MemOpt]::SetSystemFileCacheSize($negOne, $negOne, 0x2) | Out-Null
     [WAM.MemOpt]::SetSystemFileCacheSize($negOne, $negOne, 0) | Out-Null
 }} catch {{ }}
-
 try {{
     $sysProc = Get-Process -Id 4 -ErrorAction Stop
     [WAM.MemOpt]::EmptyWorkingSet($sysProc.Handle) | Out-Null
+    [WAM.MemOpt]::SetProcessWorkingSetSize($sysProc.Handle, $negOne, $negOne) | Out-Null
 }} catch {{ }}
 
 # ============================================================
-# 阶段 3: 第二轮 EmptyWorkingSet（刚设硬限制的进程可能还没完全清空）
+# 阶段 3: 第二轮 EmptyWorkingSet
 # ============================================================
 foreach ($p in $allProcs) {{
     if ($protected -contains $p.Id) {{ continue }}
     if ($protectedNames -contains $p.ProcessName.ToLower()) {{ continue }}
-    try {{
-        [WAM.MemOpt]::EmptyWorkingSet($p.Handle) | Out-Null
-    }} catch {{ }}
+    try {{ [WAM.MemOpt]::EmptyWorkingSet($p.Handle) | Out-Null }} catch {{ }}
 }}
 
 # ============================================================
-# 阶段 4: 第三轮（收尾，确保最大化释放）
+# 阶段 4: 第三轮（200ms 间隔让系统完成写入）
 # ============================================================
 Start-Sleep -Milliseconds 200
 foreach ($p in $allProcs) {{
     if ($protected -contains $p.Id) {{ continue }}
     if ($protectedNames -contains $p.ProcessName.ToLower()) {{ continue }}
-    try {{
-        [WAM.MemOpt]::EmptyWorkingSet($p.Handle) | Out-Null
-    }} catch {{ }}
+    try {{ [WAM.MemOpt]::EmptyWorkingSet($p.Handle) | Out-Null }} catch {{ }}
 }}
 
 # ============================================================
-# 结果统计
+# 结果：统计压缩后的总 WorkingSet
 # ============================================================
-$availAfter = (Get-Counter "\Memory\Available MBytes" -ErrorAction SilentlyContinue).CounterSamples.CookedValue
-if (-not $availAfter) {{ $availAfter = (Get-CimInstance Win32_OperatingSystem).FreePhysicalMemory / 1024 }}
-$inUseAfter = $totalMB - $availAfter
-$freedMB = $availAfter - $availBefore
+$wsAfter = 0
+$allProcs2 = Get-Process
+foreach ($p in $allProcs2) {{
+    try {{ $wsAfter += $p.WorkingSet64 }} catch {{ }}
+}}
+$wsAfterMB = $wsAfter / 1MB
+$freedMB = $wsBeforeMB - $wsAfterMB
+
+# 同时获取 Available MBytes 作为辅助指标
+$availAfter = 0
+try {{
+    $perfMem = Get-CimInstance Win32_PerfFormattedData_PerfOS_Memory -ErrorAction Stop
+    $availAfter = $perfMem.AvailableMBytes
+}} catch {{ }}
+if ($availAfter -le 0) {{
+    try {{
+        $availAfter = (Get-Counter "\Memory\Available MBytes" -ErrorAction Stop).CounterSamples.CookedValue
+    }} catch {{ }}
+}}
+if ($availAfter -le 0) {{
+    $availAfter = (Get-CimInstance Win32_OperatingSystem).FreePhysicalMemory / 1024
+}}
 
 Write-Output "TOTAL=$totalMB"
-Write-Output "INUSE_BEFORE=$inUseBefore"
-Write-Output "INUSE_AFTER=$inUseAfter"
+Write-Output "WS_BEFORE=$wsBeforeMB"
+Write-Output "WS_AFTER=$wsAfterMB"
 Write-Output "FREED=$freedMB"
+Write-Output "AVAIL_AFTER=$availAfter"
 Write-Output "EMPTY_OK=$emptyOk"
-Write-Output "HARD_OK=$hardOk"
 Write-Output "FAIL=$fail"
+Write-Output "PROC_COUNT=$procCount"
 '''
     notify(10, "正在激进压缩所有后台进程到虚拟内存...")
     out, err, rc = _run_ps(script, timeout=90)
 
     total_mb = 0.0
-    inuse_before = 0.0
-    inuse_after = 0.0
+    ws_before = 0.0
+    ws_after = 0.0
     freed_mb = 0.0
+    avail_after = 0.0
     empty_ok = 0
-    hard_ok = 0
     fail = 0
+    proc_count = 0
 
     for line in out.splitlines():
         line = line.strip()
         try:
             if line.startswith("TOTAL="):
                 total_mb = float(line.split("=", 1)[1])
-            elif line.startswith("INUSE_BEFORE="):
-                inuse_before = float(line.split("=", 1)[1])
-            elif line.startswith("INUSE_AFTER="):
-                inuse_after = float(line.split("=", 1)[1])
+            elif line.startswith("WS_BEFORE="):
+                ws_before = float(line.split("=", 1)[1])
+            elif line.startswith("WS_AFTER="):
+                ws_after = float(line.split("=", 1)[1])
             elif line.startswith("FREED="):
                 freed_mb = float(line.split("=", 1)[1])
+            elif line.startswith("AVAIL_AFTER="):
+                avail_after = float(line.split("=", 1)[1])
             elif line.startswith("EMPTY_OK="):
                 empty_ok = int(line.split("=", 1)[1])
-            elif line.startswith("HARD_OK="):
-                hard_ok = int(line.split("=", 1)[1])
             elif line.startswith("FAIL="):
                 fail = int(line.split("=", 1)[1])
+            elif line.startswith("PROC_COUNT="):
+                proc_count = int(line.split("=", 1)[1])
         except Exception:
             pass
 
@@ -227,25 +226,24 @@ Write-Output "FAIL=$fail"
 
     notify(100, "优化完成")
 
-    pct = freed_mb / max(inuse_before, 1) * 100 if inuse_before > 0 else 0
+    pct = freed_mb / max(ws_before, 1) * 100 if ws_before > 0 else 0
 
     details = [
         f"总内存: {total_mb:.0f} MB",
-        f"优化前使用: {inuse_before:.0f} MB",
-        f"优化后使用: {inuse_after:.0f} MB",
+        f"优化前工作集: {ws_before:.0f} MB",
+        f"优化后工作集: {ws_after:.0f} MB",
         f"释放: {freed_mb:.0f} MB ({pct:.0f}%)",
-        f"EmptyWorkingSet: {empty_ok} 个进程",
-        f"硬限制工作集: {hard_ok} 个进程",
+        f"压缩了 {empty_ok} / {proc_count} 个进程",
     ]
 
-    msg = f"释放 {freed_mb:.0f} MB ({pct:.0f}%)，当前使用 {inuse_after:.0f} MB"
+    msg = f"释放 {freed_mb:.0f} MB ({pct:.0f}%)，当前可用 {avail_after:.0f} MB"
 
     return {
         "success": True,
         "message": msg,
         "freed_mb": round(freed_mb, 1),
-        "inuse_before_mb": round(inuse_before, 0),
-        "inuse_after_mb": round(inuse_after, 0),
+        "inuse_before_mb": round(ws_before, 0),
+        "inuse_after_mb": round(ws_after, 0),
         "processes_trimmed": empty_ok,
         "processes_killed": 0,
         "services_stopped": 0,

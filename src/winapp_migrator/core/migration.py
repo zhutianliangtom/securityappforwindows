@@ -35,7 +35,9 @@ def migrate_folder(
             progress_callback(percent, msg)
 
     report(3, "结束占用进程...")
-    _terminate_processes(source)
+    blocked = _terminate_processes(source)
+    if blocked:
+        report(3, f"以下进程无法自动结束（可能受保护），请手动关闭后重试: {', '.join(blocked)}")
 
     report(5, "获取目标目录权限...")
     parent = source.parent
@@ -121,27 +123,158 @@ def _verify_copy(src: Path, dst: Path) -> bool:
         logger.error("校验失败: %s", e)
         return False
 
-def _terminate_processes(directory: Path):
-    """强制结束运行目录内可执行文件的进程（按可执行文件路径精确匹配），避免复制/删除被占用"""
+def _terminate_processes(directory: Path) -> list:
+    """强制结束运行目录内的进程，返回无法结束的进程列表（受保护/拒绝访问）
+
+    强化算法（针对 360/UU远程 等带自我保护、SYSTEM 权限或守护进程的软件）：
+    - 先提升 SeDebugPrivilege，允许结束 SYSTEM 等高权限进程
+    - CIM 按可执行路径前缀匹配，路径取不到时按目录根部 exe 名称兜底匹配
+    - 进程树自底向上结束（先杀子进程再杀父进程）
+    - 每个进程依次尝试 Stop-Process / taskkill / WMI Terminate / 直接 TerminateProcess
+    - 三轮清理，应对守护进程重启与延迟启动
+    """
     import base64
     import subprocess
     script = r'''
+$ErrorActionPreference = "SilentlyContinue"
 $src = __SRC__
-Get-Process -ErrorAction SilentlyContinue | Where-Object {
-    try { $_.Path -like ($src + '*') } catch { $false }
-} | Stop-Process -Force -ErrorAction SilentlyContinue
-Start-Sleep -Milliseconds 800
+$exeNames = @()
+try {
+    $exeNames = @(Get-ChildItem -Path $src -Filter *.exe -File -ErrorAction Stop | ForEach-Object { $_.Name.ToLower() })
+} catch {}
+
+# 1) 启用 SeDebugPrivilege，允许结束 SYSTEM 等更高权限进程
+Add-Type @"
+using System;
+using System.Runtime.InteropServices;
+public struct WM_TP { public uint Count; public long Luid; public uint Attr; }
+public static class WMPriv {
+    [DllImport("advapi32.dll", SetLastError=true)]
+    public static extern bool OpenProcessToken(IntPtr h, uint a, out IntPtr t);
+    [DllImport("advapi32.dll", SetLastError=true)]
+    public static extern bool LookupPrivilegeValue(string s, string n, out long l);
+    [DllImport("advapi32.dll", SetLastError=true)]
+    public static extern bool AdjustTokenPrivileges(IntPtr t, bool d, ref WM_TP p, uint l, IntPtr x, IntPtr y);
+    public static void EnableDebug() {
+        IntPtr tok; long luid;
+        if (!OpenProcessToken((IntPtr)(-1), 0x28, out tok)) return;
+        if (!LookupPrivilegeValue(null, "SeDebugPrivilege", out luid)) return;
+        WM_TP tp = new WM_TP();
+        tp.Count = 1; tp.Luid = luid; tp.Attr = 2;
+        AdjustTokenPrivileges(tok, false, ref tp, 0, IntPtr.Zero, IntPtr.Zero);
+    }
+}
+"@
+[WMPriv]::EnableDebug()
+
+# 2) 直接调用 TerminateProcess 作为最终手段
+Add-Type @"
+using System;
+using System.Runtime.InteropServices;
+public static class WMKill {
+    [DllImport("kernel32.dll", SetLastError=true)]
+    public static extern IntPtr OpenProcess(uint a, bool i, uint p);
+    [DllImport("kernel32.dll", SetLastError=true)]
+    public static extern bool TerminateProcess(IntPtr h, uint c);
+    public static bool NtKill(uint pid) {
+        IntPtr h = OpenProcess(0x0400 | 0x0001, false, pid);
+        if (h == IntPtr.Zero) h = OpenProcess(0x0001, false, pid);
+        if (h == IntPtr.Zero) return false;
+        bool ok = TerminateProcess(h, 1);
+        return ok;
+    }
+}
+"@
+
+function Get-TargetProcs([string]$prefix) {
+    $procs = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object {
+        $exe = $_.ExecutablePath
+        $hit = $false
+        if ($exe) { $hit = $exe.StartsWith($prefix, [System.StringComparison]::OrdinalIgnoreCase) }
+        if (-not $hit -and $exeNames.Count -gt 0 -and $_.Name) {
+            $hit = $exeNames -contains $_.Name.ToLower()
+        }
+        $hit
+    })
+    return $procs
+}
+
+function Get-Desc([hashtable]$byParent, [System.Collections.ArrayList]$out, [int]$parentId) {
+    if ($byParent.ContainsKey($parentId)) {
+        foreach ($c in $byParent[$parentId]) {
+            [void]$out.Add($c)
+            Get-Desc -byParent $byParent -out $out -parentId ([int]$c.ProcessId)
+        }
+    }
+}
+
+function Kill-One($p) {
+    $id = [int]$p.ProcessId
+    if ($id -le 0) { return $false }
+    Stop-Process -Id $id -Force -ErrorAction SilentlyContinue
+    Start-Sleep -Milliseconds 60
+    if (-not (Get-Process -Id $id -ErrorAction SilentlyContinue)) { return $false }
+    & taskkill /F /T /PID $id 2>$null | Out-Null
+    Start-Sleep -Milliseconds 60
+    if (-not (Get-Process -Id $id -ErrorAction SilentlyContinue)) { return $false }
+    Invoke-CimMethod -ClassName Win32_Process -Filter ("ProcessId = " + $id) -MethodName Terminate -ErrorAction SilentlyContinue | Out-Null
+    Start-Sleep -Milliseconds 60
+    if (-not (Get-Process -Id $id -ErrorAction SilentlyContinue)) { return $false }
+    [void][WMKill]::NtKill($id)
+    Start-Sleep -Milliseconds 60
+    return [bool](Get-Process -Id $id -ErrorAction SilentlyContinue)
+}
+
+$blocked = New-Object System.Collections.ArrayList
+for ($round = 0; $round -lt 3; $round++) {
+    $procs = @(Get-TargetProcs -prefix $src)
+    if ($procs.Count -eq 0) { break }
+    $byParent = @{}
+    foreach ($p in $procs) {
+        $pp = [int]$p.ParentProcessId
+        if (-not $byParent.ContainsKey($pp)) { $byParent[$pp] = @() }
+        $byParent[$pp] += $p
+    }
+    # 子进程先于父进程结束，避免守护进程趁父进程存活时重启子进程
+    $order = New-Object System.Collections.ArrayList
+    $visited = @{}
+    foreach ($p in $procs) {
+        $desc = New-Object System.Collections.ArrayList
+        Get-Desc -byParent $byParent -out $desc -parentId ([int]$p.ProcessId)
+        foreach ($d in $desc) {
+            if (-not $visited.ContainsKey([int]$d.ProcessId)) {
+                $visited[[int]$d.ProcessId] = $true
+                [void]$order.Add($d)
+            }
+        }
+        if (-not $visited.ContainsKey([int]$p.ProcessId)) {
+            $visited[[int]$p.ProcessId] = $true
+            [void]$order.Add($p)
+        }
+    }
+    foreach ($p in $order) {
+        if (Kill-One $p) {
+            $nm = $p.Name
+            if (-not $nm) { $nm = ("PID " + $p.ProcessId) }
+            [void]$blocked.Add(($nm + " (PID " + $p.ProcessId + ")"))
+        }
+    }
+    Start-Sleep -Milliseconds (400 + 400 * $round)
+}
+$blocked | Select-Object -Unique
 '''
-    src_lit = "'" + str(directory).replace("'", "''") + "'"
+    src_lit = "'" + str(directory.resolve()).replace("'", "''") + "'"
     encoded = base64.b64encode(script.replace("__SRC__", src_lit).encode("utf-16-le")).decode("ascii")
     try:
-        subprocess.run(
+        result = subprocess.run(
             ["powershell", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
              "-EncodedCommand", encoded],
-            capture_output=True, creationflags=subprocess.CREATE_NO_WINDOW, timeout=30,
+            capture_output=True, creationflags=subprocess.CREATE_NO_WINDOW, timeout=90,
         )
+        text = (result.stdout or b"").decode("utf-8", "replace")
+        return [ln.strip() for ln in text.splitlines() if ln.strip()]
     except Exception:
-        pass
+        return []
 
 
 def _create_junction(link: Path, target: Path):

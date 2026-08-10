@@ -71,7 +71,9 @@ class Uninstaller:
         }
 
         notify(10, "强制结束占用进程...")
-        _terminate_processes(plan.root)
+        blocked = _terminate_processes(plan.root)
+        if blocked:
+            result["failed"].append("以下进程无法自动结束（可能受保护）: " + ", ".join(blocked))
 
         notify(20, "删除快捷方式...")
         result["shortcuts_removed"] = remove_shortcuts(plan.root)

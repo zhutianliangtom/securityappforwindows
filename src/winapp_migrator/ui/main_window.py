@@ -250,10 +250,9 @@ class MainWindow(QMainWindow):
             bitmask >>= 1
         self.drive_combo.clear()
         for d in drives:
-            if d.upper() != "C:":
-                self.drive_combo.addItem(f"{d}\\", d)
+            self.drive_combo.addItem(f"{d}\\", d)
         if self.drive_combo.count() == 0:
-            self.drive_combo.addItem("D:\\", "D:")
+            self.drive_combo.addItem("C:\\", "C:")
 
     def _check_admin(self):
         if is_admin():

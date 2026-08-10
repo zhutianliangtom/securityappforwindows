@@ -47,9 +47,11 @@ if errorlevel 1 goto :err
 echo.
 echo ============================================
 echo  DONE.  Output:
-echo    dist\WinAppMigrator_Setup.exe   (installer)
-echo    dist\uninstall.exe              (uninstaller)
+echo    dist\WinAppMigrator_Setup.exe   (single-file installer)
 echo ============================================
+rem Remove the intermediate uninstall.exe; it is already embedded
+rem inside WinAppMigrator_Setup.exe and copied to the install dir at setup time.
+del /q "dist\uninstall.exe" 2>nul
 exit /b 0
 
 :err

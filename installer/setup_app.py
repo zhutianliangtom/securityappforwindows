@@ -34,7 +34,9 @@ UNINSTALL_REG_PATH = r"Software\Microsoft\Windows\CurrentVersion\Uninstall\WinAp
 # ------------------------------------------------------------
 # 模式判断
 # ------------------------------------------------------------
-IS_UNINSTALL = "--uninstall" in sys.argv
+# 卸载器 exe 名为 uninstall* 时直接进入卸载模式（无需参数）
+_IS_UNINSTALL_EXE = os.path.basename(sys.executable).lower().startswith("uninstall")
+IS_UNINSTALL = "--uninstall" in sys.argv or _IS_UNINSTALL_EXE
 IS_RESUME = "--resume" in sys.argv  # 卸载器 temp 副本静默执行
 
 # ------------------------------------------------------------
@@ -59,10 +61,6 @@ QLabel {{ color: {PALETTE['text']}; background: transparent; }}
 QFrame#nav {{ background: white; border: 1px solid {PALETTE['border']}; border-radius: 14px; }}
 QLabel#title {{ font-size: 22px; font-weight: 700; color: {PALETTE['primary']}; }}
 QLabel#hint {{ font-size: 13px; color: {PALETTE['text_secondary']}; }}
-QLabel#stepActive {{ font-size: 14px; font-weight: 700; color: {PALETTE['primary']};
-    padding: 8px 12px; background: {PALETTE['primary_light']}; border-radius: 8px; }}
-QLabel#stepIdle {{ font-size: 14px; color: {PALETTE['text_secondary']};
-    padding: 8px 12px; }}
 QLabel#bigEmoji {{ font-size: 40px; }}
 QLabel#doneTitle {{ font-size: 24px; font-weight: 700; color: {PALETTE['success']}; }}
 QPushButton {{
@@ -81,11 +79,7 @@ QLineEdit {{
     padding: 8px 12px; min-height: 20px;
 }}
 QLineEdit:focus {{ border: 1px solid {PALETTE['primary']}; }}
-QCheckBox {{ font-size: 14px; }}
-QCheckBox::indicator {{ width: 18px; height: 18px; border-radius: 4px;
-    border: 1px solid {PALETTE['border']}; background: white; }}
-QCheckBox::indicator:checked {{ background: {PALETTE['primary']};
-    border-color: {PALETTE['primary']}; }}
+QCheckBox {{ font-size: 14px; background: transparent; }}
 QProgressBar {{
     border: none; border-radius: 6px; background-color: {PALETTE['border']};
     text-align: center; height: 18px; font-size: 12px;
@@ -292,7 +286,7 @@ class InstallWizard(QMainWindow):
         logo.setObjectName("bigEmoji")
         nav_layout.addWidget(logo)
         name = QLabel(APP_NAME)
-        name.setObjectName("title")
+        name.setStyleSheet("font-size: 16px; font-weight: 700; color: #2563EB;")
         name.setWordWrap(True)
         nav_layout.addWidget(name)
         nav_layout.addSpacing(12)
@@ -450,9 +444,14 @@ class InstallWizard(QMainWindow):
     def _refresh_steps(self):
         cur = self.stack.currentIndex()
         for i, lb in enumerate(self.step_labels):
-            lb.setObjectName("stepActive" if i == cur else "stepIdle")
-            lb.style().unpolish(lb)
-            lb.style().polish(lb)
+            if i == cur:
+                lb.setStyleSheet(
+                    "background: #DBEAFE; color: #2563EB; font-weight: 700; "
+                    "padding: 8px 12px; border-radius: 8px; "
+                    "border-left: 4px solid #2563EB;"
+                )
+            else:
+                lb.setStyleSheet("color: #64748B; padding: 8px 12px;")
 
     def _sync_buttons(self):
         cur = self.stack.currentIndex()
@@ -490,6 +489,7 @@ class InstallWizard(QMainWindow):
             self.stack.setCurrentIndex(3)
             self._refresh_steps()
             self._sync_buttons()
+        elif cur == 3:
             self._start_install()
         elif cur == 4:
             self.close()

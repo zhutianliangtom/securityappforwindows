@@ -10,9 +10,15 @@ __pycache__/
 # PyInstaller
 build/__pycache__/
 build/WinAppMigrator/
+build/setup/
+build/uninstall/
+build/build/
 dist/
+dist_new/
 *.spec
 !build/WinAppMigrator.spec
+!installer/setup.spec
+!installer/uninstall.spec
 
 # Inno Setup
 Output/

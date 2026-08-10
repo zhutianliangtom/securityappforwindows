@@ -132,6 +132,13 @@ class UninstallConfirmDialog(QDialog):
             layout.addWidget(info)
         else:
             self._add_section(layout, "安装根目录（将删除）", [str(plan.root)])
+            native = getattr(plan, "native_uninstaller", None)
+            if native:
+                native_exe = native[0] if isinstance(native, tuple) else native
+                self._add_section(
+                    layout, "🛠 自带卸载器（将优先调用）",
+                    [native_exe, "运行完成后再执行下方清理，以正确保留卸载钩子。"],
+                )
             if plan.data_dirs:
                 self._add_section(layout, "数据/存档/聊天记录目录（将删除）", [str(d) for d in plan.data_dirs])
             else:

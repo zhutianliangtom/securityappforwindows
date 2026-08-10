@@ -42,7 +42,7 @@ class MigrationOrchestrator:
                 "target": str(target),
                 "registry_changed": 0,
                 "blocked": blocked,
-                "blocked_360": is_360_self_protection(blocked, source),
+                "blocked_360": is_360_self_protection(blocked),
             }
 
         # 1. 完全移动主目录 + 各数据目录
@@ -57,7 +57,7 @@ class MigrationOrchestrator:
                 "success": False,
                 "message": result.message,
                 "blocked": all_blocked,
-                "blocked_360": is_360_self_protection(all_blocked, source),
+                "blocked_360": is_360_self_protection(all_blocked),
             }
         moved.append((source, target))
 
@@ -73,7 +73,7 @@ class MigrationOrchestrator:
                     "success": False,
                     "message": f"数据目录迁移失败: {extra}\n{r.message}",
                     "blocked": all_blocked,
-                    "blocked_360": is_360_self_protection(all_blocked, source),
+                    "blocked_360": is_360_self_protection(all_blocked),
                 }
             moved.append((extra, extra_target))
 

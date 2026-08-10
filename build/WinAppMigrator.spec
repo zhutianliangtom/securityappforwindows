@@ -21,6 +21,7 @@ a = Analysis(
         'winapp_migrator.utils.helpers',
         'pywintypes',
         'win32api',
+        'win32gui',
         'win32security',
         'win32con',
     ],

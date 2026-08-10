@@ -1,3 +1,4 @@
+import os
 import re
 from pathlib import Path
 
@@ -7,9 +8,18 @@ from PyQt6.QtWidgets import (
     QFileIconProvider
 )
 from PyQt6.QtCore import Qt, QSize, QRect, QFileInfo
-from PyQt6.QtGui import QColor, QPainter, QIcon, QFont, QFontMetrics
+from PyQt6.QtGui import QColor, QPainter, QIcon, QFont, QFontMetrics, QPixmap
 
 from winapp_migrator.ui.styles import PALETTE
+
+# 卸载/安装类程序名，图标无意义，查找主程序时排除
+_BANNED_EXE = {
+    "unins", "unins000", "unins001", "uninst", "uninstall", "uninstaller",
+    "setup", "install", "installer", "update", "updater", "redist",
+}
+# UWP 包内常见 logo 命名，优先选用
+_UWP_LOGO_HINTS = ("storelogo", "square150x150logo", "square44x44logo", "applogo")
+
 
 class Card(QWidget):
     def __init__(self, title="", parent=None):
@@ -59,8 +69,8 @@ class AppItemDelegate(QStyledItemDelegate):
     def __init__(self, parent=None):
         super().__init__(parent)
         self._provider = QFileIconProvider()
-        self._icon_cache = {}  # id(app) -> QIcon
-        self._exe_cache = {}   # id(app) -> str | None
+        self._icon_cache = {}      # id(app) -> QIcon
+        self._source_cache = {}    # id(app) -> 图标源文件路径(str | None)
 
     def sizeHint(self, option, index):
         return QSize(0, self.ROW_HEIGHT)
@@ -170,44 +180,133 @@ class AppItemDelegate(QStyledItemDelegate):
 
     def _icon_for(self, app) -> QIcon:
         key = id(app)
-        if key in self._icon_cache:
-            return self._icon_cache[key]
-        icon = self._resolve_icon(app)
-        self._icon_cache[key] = icon
-        return icon
+        if key not in self._icon_cache:
+            self._icon_cache[key] = self._resolve_icon(app)
+        return self._icon_cache[key]
+
+    def _icon_source(self, app) -> str | None:
+        """带缓存的图标源文件解析"""
+        key = id(app)
+        if key not in self._source_cache:
+            self._source_cache[key] = self._find_icon_file(app)
+        return self._source_cache[key]
 
     def _resolve_icon(self, app) -> QIcon:
-        exe = self._find_exe(app)
-        if exe:
-            try:
-                icon = self._provider.icon(QFileInfo(exe))
-                if not icon.isNull():
-                    return icon
-            except Exception:
-                pass
+        source = self._icon_source(app)
+        if not source:
+            return QIcon()
+        # 1. 系统文件图标（exe/ico/dll 直接有效）
+        try:
+            icon = self._provider.icon(QFileInfo(source))
+            if not icon.isNull():
+                return icon
+        except Exception:
+            pass
+        # 2. ExtractIconEx 从 exe/dll/ico 直接提取图标资源
+        pix = self._extract_icon(source)
+        if pix is not None:
+            return QIcon(pix)
+        # 3. UWP logo png 直接加载
+        if source.lower().endswith(".png"):
+            pix = QPixmap(source)
+            if not pix.isNull():
+                return QIcon(pix)
         return QIcon()
 
-    def _find_exe(self, app) -> str | None:
-        key = id(app)
-        if key in self._exe_cache:
-            return self._exe_cache[key]
-        result = None
-        exe = app.executable or ""
-        m = re.search(r'"([^"]+)"', exe) or re.search(r'([^",]+)', exe)
+    def _find_icon_file(self, app) -> str | None:
+        """解析图标源文件：DisplayIcon 指定文件 > 安装目录内评分最佳 exe/ico/UWP logo"""
+        # 1. 注册表 DisplayIcon 直接指定
+        if app.app_type != "UWP" and app.executable:
+            f = self._parse_display_icon(app.executable)
+            if f:
+                return f
+        base = app.install_location
+        if not base or not base.is_dir():
+            return None
+        # 2. 目录内搜索（深度<=2），按与 app 名称的匹配度评分
+        name = (app.name or "").lower()
+        best, best_score = None, -1
+        try:
+            for dirpath, dirnames, filenames in os.walk(base):
+                depth = len(Path(dirpath).relative_to(base).parts)
+                if depth > 2:
+                    dirnames.clear()
+                    continue
+                for fn in filenames:
+                    low = fn.lower()
+                    stem = fn[:-4]
+                    is_png = low.endswith(".png") and app.app_type == "UWP"
+                    if not (low.endswith(".exe") or low.endswith(".ico") or is_png):
+                        continue
+                    if low.endswith(".exe") and stem.lower() in _BANNED_EXE:
+                        continue
+                    if is_png:
+                        # UWP logo 文件名与 app 名无关，按命名 hint 给分；splash 图排除
+                        s = stem.lower()
+                        if "splash" in s:
+                            continue
+                        score = 70 - depth * 5 if (s in _UWP_LOGO_HINTS or "logo" in s or "icon" in s) else -1
+                    else:
+                        score = self._score_name(stem, name) - depth * 5
+                    if score > best_score:
+                        best_score = score
+                        best = str(Path(dirpath) / fn)
+        except Exception:
+            pass
+        return best
+
+    @staticmethod
+    def _score_name(stem: str, app_name: str) -> int:
+        """文件主名与 app 名称的匹配得分，越高越可能是主程序"""
+        stem, name = stem.lower(), app_name.lower()
+        if not stem:
+            return -1
+        if stem == name:
+            return 100
+        if name.startswith(stem) or stem.startswith(name):
+            return 80
+        if stem in name or name in stem:
+            return 60
+        return 10
+
+    @staticmethod
+    def _parse_display_icon(raw: str) -> str | None:
+        """解析注册表 DisplayIcon：支持 "path",0、path,-101、裸路径，含环境变量"""
+        if not raw:
+            return None
+        raw = raw.strip()
+        m = re.search(r'"([^"]+)"', raw)
         if m:
-            p = Path(m.group(1).strip())
+            p = Path(os.path.expandvars(m.group(1).strip()))
+            return str(p) if p.is_file() else None
+        if "," in raw:
+            p = Path(os.path.expandvars(raw.split(",")[0].strip()))
             if p.is_file():
-                result = str(p)
-        if not result:
-            try:
-                for f in app.install_location.iterdir():
-                    if f.is_file() and f.suffix.lower() == ".exe":
-                        result = str(f)
-                        break
-            except Exception:
-                pass
-        self._exe_cache[key] = result
-        return result
+                return str(p)
+        p = Path(os.path.expandvars(raw))
+        if p.is_file():
+            return str(p)
+        m = re.search(r"([A-Za-z]:[^,]+?\.(?:exe|ico|dll))", raw, re.IGNORECASE)
+        if m:
+            p = Path(os.path.expandvars(m.group(1)))
+            return str(p) if p.is_file() else None
+        return None
+
+    @staticmethod
+    def _extract_icon(path: str):
+        """ExtractIconEx 提取文件图标资源，返回 QPixmap；失败返回 None"""
+        try:
+            import win32gui
+            large, small = win32gui.ExtractIconEx(path, 0)
+            handles = list(large) + list(small)
+            if not handles:
+                return None
+            pix = QPixmap.fromWinHICON(handles[0])
+            for h in handles:
+                win32gui.DestroyIcon(h)
+            return pix if not pix.isNull() else None
+        except Exception:
+            return None
 
     @staticmethod
     def _format_size(size):

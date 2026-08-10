@@ -52,7 +52,7 @@ QMainWindow, QWidget {{
     background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
         stop:0 {PALETTE['bg_top']}, stop:1 {PALETTE['bg_bottom']});
     color: {PALETTE['text']};
-    font-family: "Microsoft YaHei UI", "Segoe UI", sans-serif;
+    font-family: "Microsoft YaHei UI", "Segoe UI", "Segoe UI Emoji", sans-serif;
     font-size: 14px;
 }}
 QLabel {{ color: {PALETTE['text']}; background: transparent; }}
@@ -324,8 +324,11 @@ class InstallWizard(QMainWindow):
         self.btn_cancel = QPushButton("取消")
         self.btn_cancel.setObjectName("ghost")
         self.btn_cancel.clicked.connect(self.close)
+        self.btn_run = QPushButton("🚀 立即启动")
+        self.btn_run.clicked.connect(self._launch_app)
         btns.addWidget(self.btn_back)
         btns.addWidget(self.btn_next)
+        btns.addWidget(self.btn_run)
         btns.addWidget(self.btn_cancel)
         right.addLayout(btns)
         root.addLayout(right, 1)
@@ -454,6 +457,7 @@ class InstallWizard(QMainWindow):
     def _sync_buttons(self):
         cur = self.stack.currentIndex()
         self.btn_back.setVisible(cur in (1, 2, 3))
+        self.btn_run.setVisible(cur == 4)
         if cur == 0:
             self.btn_next.setText("下一步 →")
         elif cur == 3:
@@ -475,13 +479,29 @@ class InstallWizard(QMainWindow):
         cur = self.stack.currentIndex()
         if cur == 0:
             self.stack.setCurrentIndex(1)
+            self._refresh_steps()
+            self._sync_buttons()
+            self._update_disk_hint()
         elif cur == 1:
             self.stack.setCurrentIndex(2)
+            self._refresh_steps()
+            self._sync_buttons()
         elif cur == 2:
             self.stack.setCurrentIndex(3)
+            self._refresh_steps()
+            self._sync_buttons()
             self._start_install()
         elif cur == 4:
             self.close()
+
+    def _launch_app(self):
+        exe = Path(self.install_dir) / f"{APP_NAME}.exe"
+        if exe.is_file():
+            try:
+                subprocess.Popen([str(exe)], cwd=str(exe.parent))
+            except OSError as e:
+                QMessageBox.warning(self, "启动失败", f"无法启动应用：{e}")
+        self.close()
 
     def _on_dir_changed(self, text: str):
         self.install_dir = text.strip()
@@ -554,6 +574,7 @@ class InstallWizard(QMainWindow):
         self.btn_back.setEnabled(False)
         self.btn_next.setEnabled(False)
         self.btn_cancel.setEnabled(False)
+        self.installing = True
         self.install_worker = InstallWorker(src, dst, self.chk_desktop.isChecked(), self)
         self.install_worker.progress.connect(self._on_install_progress)
         self.install_worker.done.connect(self._on_install_done)
@@ -565,6 +586,7 @@ class InstallWizard(QMainWindow):
         self.install_status.setText(f"{msg}（{done}/{total}）")
 
     def _on_install_done(self, ok: bool, err: str):
+        self.installing = False
         self.btn_back.setEnabled(True)
         self.btn_next.setEnabled(True)
         self.btn_cancel.setEnabled(True)
@@ -578,6 +600,13 @@ class InstallWizard(QMainWindow):
             self.stack.setCurrentIndex(3)
             self._refresh_steps()
             self._sync_buttons()
+
+    def closeEvent(self, event):
+        if getattr(self, "installing", False):
+            event.ignore()
+            QMessageBox.information(self, "安装进行中", "正在安装，请稍候…")
+            return
+        super().closeEvent(event)
 
 
 # ------------------------------------------------------------
@@ -640,12 +669,14 @@ class UninstallWizard(QMainWindow):
         self.btn_cancel.setEnabled(False)
         self.btn_confirm.setEnabled(False)
         self.progress.setVisible(True)
+        self.working = True
         self.worker = UninstallWorker(self.install_dir, self)
         self.worker.progress.connect(self.status.setText)
         self.worker.done.connect(self._on_done)
         self.worker.start()
 
     def _on_done(self, ok: bool, msg: str):
+        self.working = False
         if ok:
             QMessageBox.information(
                 self, "卸载完成",
@@ -658,12 +689,27 @@ class UninstallWizard(QMainWindow):
             self.btn_confirm.setEnabled(True)
             QMessageBox.critical(self, "卸载失败", f"发生错误：\n{msg}")
 
+    def closeEvent(self, event):
+        if getattr(self, "working", False):
+            event.ignore()
+            QMessageBox.information(self, "正在卸载", "正在卸载，请稍候…")
+            return
+        super().closeEvent(event)
+
 
 # ------------------------------------------------------------
 # 卸载器 temp 副本：静默删除目录并自毁
 # ------------------------------------------------------------
 def resume_uninstall(target_dir: Path):
     time.sleep(1.5)  # 等待原卸载器进程退出
+    # 若主程序仍在运行会锁住目录，先强制结束
+    try:
+        subprocess.run(
+            ["taskkill", "/F", "/IM", f"{APP_NAME}.exe"],
+            capture_output=True, creationflags=subprocess.CREATE_NO_WINDOW, timeout=10,
+        )
+    except OSError:
+        pass
     for _ in range(6):
         try:
             if target_dir.exists():

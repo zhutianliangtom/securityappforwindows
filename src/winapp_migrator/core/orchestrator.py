@@ -1,10 +1,12 @@
+import shutil
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Callable, List, Optional
 
-from winapp_migrator.utils.helpers import setup_logging
+from winapp_migrator.utils.helpers import setup_logging, safe_remove
 from winapp_migrator.core.app_scanner import AppInfo
 from winapp_migrator.core.migration import migrate_folder
 from winapp_migrator.core.registry import RegistryPathUpdater
+from winapp_migrator.core.shortcut import update_shortcuts
 from winapp_migrator.core.uwp import UWPManager
 
 logger = setup_logging()
@@ -19,6 +21,7 @@ class MigrationOrchestrator:
         target_drive: Path,
         progress_callback: Optional[Callable[[int, str], None]] = None,
         update_registry: bool = True,
+        extra_dirs: Optional[List[Path]] = None,
     ) -> dict:
         source = app.install_location
         target = target_drive / "WinAppMigrator" / app.app_type / source.name
@@ -40,26 +43,68 @@ class MigrationOrchestrator:
                 "registry_changed": 0,
             }
 
-        result = migrate_folder(source, target, progress_callback, use_junction=True)
-        registry_changed = 0
-        registry_errors = 0
+        # 1. 完全移动主目录 + 各数据目录
+        self._notify(progress_callback, 5, "开始迁移...")
+        moved: List[tuple[Path, Path]] = []
+        result = migrate_folder(source, target, progress_callback, mode="move")
+        if not result.success:
+            return {"success": False, "message": result.message}
+        moved.append((source, target))
 
-        if result.success and update_registry:
-            self._notify(progress_callback, 95, "更新注册表路径引用...")
+        for extra in extra_dirs or []:
+            extra_target = target_drive / "WinAppMigrator" / "Data" / extra.name
+            self._notify(progress_callback, None, f"迁移数据目录: {extra}")
+            r = migrate_folder(extra, extra_target, progress_callback, mode="move")
+            if not r.success:
+                self._rollback(moved)
+                return {"success": False, "message": f"数据目录迁移失败: {extra}\n{r.message}"}
+            moved.append((extra, extra_target))
+
+        # 2. 更新主安装目录的注册表 + 快捷方式引用（数据目录仅迁移文件）
+        registry_changed, registry_errors = 0, 0
+        shortcuts_changed = 0
+        if update_registry:
+            self._notify(progress_callback, None, "更新注册表路径引用...")
             registry_changed, registry_errors = self.registry_updater.update_paths(source, target)
+        self._notify(progress_callback, None, "更新快捷方式...")
+        shortcuts_changed += update_shortcuts(source, target)
+
+        # 3. 清理旧目录备份
+        for old, _new in moved:
+            backup = Path(str(old) + ".migrator_backup")
+            if backup.exists():
+                if safe_remove(backup):
+                    self._notify(progress_callback, None, f"已删除旧目录: {old}")
+                else:
+                    self._notify(progress_callback, None, f"旧目录备份保留: {backup}")
 
         self._notify(progress_callback, 100, "完成")
         return {
-            "success": result.success,
+            "success": True,
             "message": result.message,
             "details": result.details,
             "source": str(source),
             "target": str(target),
             "registry_changed": registry_changed,
             "registry_errors": registry_errors,
+            "shortcuts_changed": shortcuts_changed,
         }
 
-    def _notify(self, callback, percent: int, message: str):
-        logger.info("[%d%%] %s", percent, message)
+    def _rollback(self, moved: List[tuple[Path, Path]]):
+        """回滚已迁移的目录：删除新位置，恢复旧位置"""
+        for old, new in reversed(moved):
+            try:
+                shutil.rmtree(new, ignore_errors=True)
+            except Exception:
+                pass
+            backup = Path(str(old) + ".migrator_backup")
+            if backup.exists():
+                try:
+                    backup.rename(old)
+                except Exception:
+                    pass
+
+    def _notify(self, callback, percent, message: str):
+        logger.info("[%s%%] %s", percent, message)
         if callback:
-            callback(percent, message)
+            callback(percent or 0, message)

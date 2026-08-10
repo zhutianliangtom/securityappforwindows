@@ -3,8 +3,8 @@ import re
 from pathlib import Path
 
 from PyQt6.QtWidgets import (
-    QWidget, QHBoxLayout, QVBoxLayout, QLabel, QPushButton,
-    QSizePolicy, QGraphicsDropShadowEffect, QStyledItemDelegate, QStyle,
+    QWidget, QDialog, QHBoxLayout, QVBoxLayout, QLabel, QPushButton,
+    QCheckBox, QSizePolicy, QGraphicsDropShadowEffect, QStyledItemDelegate, QStyle,
     QFileIconProvider
 )
 from PyQt6.QtCore import Qt, QSize, QRect, QFileInfo
@@ -60,6 +60,51 @@ class SecondaryButton(QPushButton):
         self.setObjectName("secondary")
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setMinimumHeight(40)
+
+
+class DataDirDialog(QDialog):
+    """迁移前勾选要一并移动的数据目录（AppData/文档等安装目录之外的目录）"""
+
+    def __init__(self, candidates, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("选择要一并迁移的数据目录")
+        self.setMinimumWidth(600)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(20, 20, 20, 20)
+        layout.setSpacing(10)
+
+        tip = QLabel("检测到以下与安装目录之外的关联数据目录，勾选后将一并移动到目标盘：")
+        tip.setWordWrap(True)
+        tip.setStyleSheet(f"color: {PALETTE['text']}; font-size: 13px; font-weight: 600;")
+        layout.addWidget(tip)
+
+        self._boxes = []
+        self._items = []
+        for p in candidates:
+            cb = QCheckBox(str(p))
+            cb.setChecked(True)
+            cb.setStyleSheet("font-size: 13px; padding: 4px 0;")
+            self._boxes.append(cb)
+            self._items.append(p)
+            layout.addWidget(cb)
+
+        hint = QLabel("提示：如微信/QQ 的聊天记录目录。迁移后若应用找不到数据，请在应用设置内重新指定该目录。")
+        hint.setWordWrap(True)
+        hint.setStyleSheet(f"color: {PALETTE['text_secondary']}; font-size: 11px;")
+        layout.addWidget(hint)
+
+        btn_layout = QHBoxLayout()
+        btn_layout.addStretch()
+        skip_btn = QPushButton("仅迁移主目录")
+        skip_btn.clicked.connect(lambda: self.done(QDialog.DialogCode.Rejected))
+        btn_layout.addWidget(skip_btn)
+        ok_btn = PrimaryButton("迁移勾选目录")
+        ok_btn.clicked.connect(self.accept)
+        btn_layout.addWidget(ok_btn)
+        layout.addLayout(btn_layout)
+
+    def selected(self):
+        return [p for cb, p in zip(self._boxes, self._items) if cb.isChecked()]
 
 
 class AppItemDelegate(QStyledItemDelegate):

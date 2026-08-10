@@ -9,17 +9,19 @@ from winapp_migrator.core.permissions import take_ownership
 logger = setup_logging()
 
 class MigrationResult:
-    def __init__(self, success: bool, message: str, details: list[str] = None):
+    def __init__(self, success: bool, message: str, details: list[str] = None, backup_path: Path = None):
         self.success = success
         self.message = message
         self.details = details or []
+        self.backup_path = backup_path
 
 def migrate_folder(
     source: Path,
     target: Path,
     progress_callback: Optional[Callable[[int, str], None]] = None,
-    use_junction: bool = True,
+    mode: str = "junction",
 ) -> MigrationResult:
+    """迁移目录。mode="junction" 时旧路径保留目录联接；mode="move" 完全移动，备份由调用方清理"""
     if not source.exists():
         return MigrationResult(False, f"源目录不存在: {source}")
     if target.exists():
@@ -60,7 +62,8 @@ def migrate_folder(
         shutil.rmtree(target, ignore_errors=True)
         return MigrationResult(False, f"无法重命名原目录: {e}")
 
-    if use_junction:
+    report(80, "处理旧目录...")
+    if mode == "junction":
         report(80, "创建目录联接保证兼容性...")
         try:
             _create_junction(source, target)
@@ -73,19 +76,22 @@ def migrate_folder(
             except Exception:
                 pass
             return MigrationResult(False, f"创建目录联接失败: {e}")
-    else:
-        report(80, "跳过目录联接（完全移动模式）")
 
-    report(90, "清理备份...")
-    try:
-        shutil.rmtree(backup, ignore_errors=True)
-        details.append("已清理备份")
-    except Exception as e:
-        logger.warning("清理备份失败: %s", e)
-        details.append(f"备份保留在: {backup}")
+        report(90, "清理备份...")
+        try:
+            shutil.rmtree(backup, ignore_errors=True)
+            details.append("已清理备份")
+        except Exception as e:
+            logger.warning("清理备份失败: %s", e)
+            details.append(f"备份保留在: {backup}")
 
-    report(100, "迁移完成")
-    return MigrationResult(True, f"成功迁移到 {target}", details)
+        report(100, "迁移完成")
+        return MigrationResult(True, f"成功迁移到 {target}", details)
+
+    # 完全移动模式：旧目录已重命名为备份，等待调用方更新引用后清理
+    report(80, "旧目录已重命名为备份，更新引用后将删除")
+    details.append("旧目录已移除，待引用更新后清理备份")
+    return MigrationResult(True, f"成功迁移到 {target}", details, backup_path=backup)
 
 def _verify_copy(src: Path, dst: Path) -> bool:
     try:

@@ -8,15 +8,16 @@ from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit,
     QComboBox, QPushButton, QListWidget, QListWidgetItem, QProgressBar,
     QTextEdit, QMessageBox, QApplication, QSizePolicy, QSpacerItem,
-    QFileDialog
+    QFileDialog, QDialog
 )
 from PyQt6.QtCore import Qt, QSize, QThread, pyqtSignal, QPropertyAnimation, QEasingCurve
 from PyQt6.QtGui import QIcon, QFont, QFontDatabase
 
 from winapp_migrator.utils.helpers import setup_logging, is_admin, ensure_admin, format_size, get_directory_size
 from winapp_migrator.ui.styles import GLOBAL_QSS, PALETTE, apply_palette
-from winapp_migrator.ui.widgets import Card, PrimaryButton, SecondaryButton, AppItemDelegate
+from winapp_migrator.ui.widgets import Card, PrimaryButton, SecondaryButton, AppItemDelegate, DataDirDialog
 from winapp_migrator.core.app_scanner import AppScanner, AppInfo
+from winapp_migrator.core.data_dirs import detect_data_dirs
 from winapp_migrator.core.orchestrator import MigrationOrchestrator
 
 logger = setup_logging()
@@ -54,15 +55,16 @@ class MigrateWorker(QThread):
     progress = pyqtSignal(int, str)
     finished = pyqtSignal(dict)
 
-    def __init__(self, app: AppInfo, target_drive: Path, parent=None):
+    def __init__(self, app: AppInfo, target_drive: Path, extra_dirs=None, parent=None):
         super().__init__(parent)
         self.app = app
         self.target_drive = target_drive
+        self.extra_dirs = extra_dirs or []
         self.orchestrator = MigrationOrchestrator()
 
     def run(self):
         try:
-            result = self.orchestrator.migrate(self.app, self.target_drive, self.progress.emit)
+            result = self.orchestrator.migrate(self.app, self.target_drive, self.progress.emit, extra_dirs=self.extra_dirs)
             self.finished.emit(result)
         except Exception as e:
             logger.exception("迁移异常")
@@ -327,21 +329,36 @@ class MainWindow(QMainWindow):
             self,
             "确认迁移",
             f"确定将 <b>{self.selected_app.name}</b> 迁移到 {drive}:\\ 吗？\n"
-            f"原位置将保留目录联接以保证应用可正常启动。",
+            f"迁移后旧安装目录将被删除，注册表与快捷方式将更新到新路径。",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
         )
         if reply != QMessageBox.StandardButton.Yes:
             return
+
+        extra_dirs = self._choose_extra_dirs()
 
         self.migrate_btn.setEnabled(False)
         self.refresh_btn.setEnabled(False)
         self.progress.setValue(0)
         self.log_edit.clear()
 
-        self.migrate_worker = MigrateWorker(self.selected_app, drive)
+        self.migrate_worker = MigrateWorker(self.selected_app, drive, extra_dirs)
         self.migrate_worker.progress.connect(self._on_progress)
         self.migrate_worker.finished.connect(self._on_migrate_finished)
         self.migrate_worker.start()
+
+    def _choose_extra_dirs(self):
+        """检测并让用户勾选要一并迁移的数据目录，返回勾选的目录列表"""
+        try:
+            candidates = detect_data_dirs(self.selected_app)
+        except Exception:
+            candidates = []
+        if not candidates:
+            return []
+        dlg = DataDirDialog(candidates, self)
+        if dlg.exec() == QDialog.DialogCode.Accepted:
+            return dlg.selected()
+        return []
 
     def _on_progress(self, percent: int, message: str):
         self.progress.setValue(percent)
@@ -357,7 +374,8 @@ class MainWindow(QMainWindow):
                 "迁移成功",
                 f"{result['message']}\n\n"
                 f"新位置: {result['target']}\n"
-                f"注册表更新: {result.get('registry_changed', 0)} 处",
+                f"注册表更新: {result.get('registry_changed', 0)} 处\n"
+                f"快捷方式更新: {result.get('shortcuts_changed', 0)} 个",
             )
         else:
             self.progress.setValue(0)

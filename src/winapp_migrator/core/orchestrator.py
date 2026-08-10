@@ -29,6 +29,7 @@ class MigrationOrchestrator:
         logger.info("开始迁移 %s (%s): %s -> %s", app.name, app.app_type, source, target)
 
         if app.app_type == "UWP":
+            _terminate_processes(source)
             success, message = UWPManager.migrate_package(
                 app.package_name or app.name,
                 Path(target.anchor),  # UWP 按盘符注册，取目标盘

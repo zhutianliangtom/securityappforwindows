@@ -34,6 +34,9 @@ def migrate_folder(
         if progress_callback:
             progress_callback(percent, msg)
 
+    report(3, "结束占用进程...")
+    _terminate_processes(source)
+
     report(5, "获取目标目录权限...")
     parent = source.parent
     if not os.access(parent, os.W_OK):
@@ -117,6 +120,29 @@ def _verify_copy(src: Path, dst: Path) -> bool:
     except Exception as e:
         logger.error("校验失败: %s", e)
         return False
+
+def _terminate_processes(directory: Path):
+    """强制结束运行目录内可执行文件的进程（按可执行文件路径精确匹配），避免复制/删除被占用"""
+    import base64
+    import subprocess
+    script = r'''
+$src = __SRC__
+Get-Process -ErrorAction SilentlyContinue | Where-Object {
+    try { $_.Path -like ($src + '*') } catch { $false }
+} | Stop-Process -Force -ErrorAction SilentlyContinue
+Start-Sleep -Milliseconds 800
+'''
+    src_lit = "'" + str(directory).replace("'", "''") + "'"
+    encoded = base64.b64encode(script.replace("__SRC__", src_lit).encode("utf-16-le")).decode("ascii")
+    try:
+        subprocess.run(
+            ["powershell", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+             "-EncodedCommand", encoded],
+            capture_output=True, creationflags=subprocess.CREATE_NO_WINDOW, timeout=30,
+        )
+    except Exception:
+        pass
+
 
 def _create_junction(link: Path, target: Path):
     """在 link 处创建指向 target 的目录联接（junction），链接目录由标准库内部创建"""

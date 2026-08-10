@@ -13,7 +13,7 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt, QThread, pyqtSignal, QPropertyAnimation, QEasingCurve
 from PyQt6.QtGui import QIcon, QFont, QFontDatabase
 
-from winapp_migrator.utils.helpers import setup_logging, is_admin, ensure_admin, format_size
+from winapp_migrator.utils.helpers import setup_logging, is_admin, ensure_admin, format_size, get_directory_size
 from winapp_migrator.ui.styles import GLOBAL_QSS, PALETTE, apply_palette
 from winapp_migrator.ui.widgets import Card, PrimaryButton, SecondaryButton, AppListItem
 from winapp_migrator.core.app_scanner import AppScanner, AppInfo
@@ -32,6 +32,23 @@ class ScanWorker(QThread):
             self.finished.emit(apps)
         except Exception as e:
             self.error.emit(str(e))
+
+class SizeWorker(QThread):
+    """后台逐个计算应用目录大小，避免拖慢扫描"""
+    sizes_ready = pyqtSignal(dict)
+
+    def __init__(self, apps: List[AppInfo], parent=None):
+        super().__init__(parent)
+        self.apps = apps
+
+    def run(self):
+        sizes = {}
+        for app in self.apps:
+            try:
+                sizes[id(app)] = get_directory_size(app.install_location)
+            except Exception:
+                sizes[id(app)] = 0
+        self.sizes_ready.emit(sizes)
 
 class MigrateWorker(QThread):
     progress = pyqtSignal(int, str)
@@ -252,6 +269,17 @@ class MainWindow(QMainWindow):
         self._filter_apps()
         self.status_label.setText(f"共扫描到 {len(apps)} 个应用")
         self.refresh_btn.setEnabled(True)
+        # 列表先秒出，大小由后台线程补齐
+        self.size_worker = SizeWorker(apps, self)
+        self.size_worker.sizes_ready.connect(self._on_sizes_ready)
+        self.size_worker.start()
+
+    def _on_sizes_ready(self, sizes: dict):
+        for i in range(self.app_list.count()):
+            item = self.app_list.item(i)
+            widget = self.app_list.itemWidget(item)
+            if widget and id(widget.app_info) in sizes:
+                widget.update_size(sizes[id(widget.app_info)])
 
     def _on_scan_error(self, msg: str):
         self.status_label.setText(f"扫描失败: {msg}")
@@ -354,15 +382,9 @@ class MainWindow(QMainWindow):
         self._start_migration()
 
     def mousePressEvent(self, event):
+        # 标题栏区域按下左键时，交给系统原生拖动，避免 DPI 缩放导致的坐标漂移
         if event.button() == Qt.MouseButton.LeftButton and event.position().y() < 52:
-            self._drag_pos = event.globalPosition().toPoint()
+            window = self.windowHandle()
+            if window is not None:
+                window.startSystemMove()
             event.accept()
-
-    def mouseMoveEvent(self, event):
-        if event.buttons() == Qt.MouseButton.LeftButton and self._drag_pos is not None:
-            self.move(self.frameGeometry().topLeft() + event.globalPosition().toPoint() - self._drag_pos)
-            event.accept()
-
-    def mouseReleaseEvent(self, event):
-        self._drag_pos = None
-        super().mouseReleaseEvent(event)

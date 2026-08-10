@@ -60,19 +60,27 @@ def format_size(size_bytes: int) -> str:
         size_bytes /= 1024.0
     return f"{size_bytes:.2f} PB"
 
-def get_directory_size(path: Path) -> int:
+def get_directory_size(path: Path, max_depth: int = 3) -> int:
+    """统计目录大小，限制递归深度以加快扫描速度"""
     total = 0
-    try:
-        for entry in os.scandir(path):
-            try:
-                if entry.is_dir(follow_symlinks=False):
-                    total += get_directory_size(Path(entry.path))
-                else:
-                    total += entry.stat(follow_symlinks=False).st_size
-            except (OSError, PermissionError):
-                continue
-    except (OSError, PermissionError):
-        pass
+
+    def walk(p: Path, depth: int):
+        nonlocal total
+        if depth > max_depth:
+            return
+        try:
+            for entry in os.scandir(p):
+                try:
+                    if entry.is_dir(follow_symlinks=False):
+                        walk(Path(entry.path), depth + 1)
+                    else:
+                        total += entry.stat(follow_symlinks=False).st_size
+                except (OSError, PermissionError):
+                    continue
+        except (OSError, PermissionError):
+            pass
+
+    walk(path, 0)
     return total
 
 def safe_remove(path: Path) -> bool:

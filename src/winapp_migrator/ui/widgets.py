@@ -86,7 +86,11 @@ class AppListItem(QWidget):
         size = QLabel(self._format_size(app_info.size_bytes))
         size.setStyleSheet(f"font-size: 12px; color: {PALETTE['text_secondary']};")
         size.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        self.size_label = size
         layout.addWidget(size)
+
+    def update_size(self, size_bytes: int):
+        self.size_label.setText(self._format_size(size_bytes))
 
     def _format_size(self, size):
         for unit in ["B", "KB", "MB", "GB", "TB"]:

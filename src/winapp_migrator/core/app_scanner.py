@@ -72,7 +72,7 @@ class AppScanner:
                     install_location=loc_path,
                     version=item.get("Version", ""),
                     app_type="UWP",
-                    size_bytes=get_directory_size(loc_path),
+                    size_bytes=0,
                     package_name=item.get("PackageFullName", ""),
                 ))
         except Exception as e:
@@ -174,7 +174,7 @@ class AppScanner:
                         install_location=entry,
                         version="",
                         app_type="Win32",
-                        size_bytes=get_directory_size(entry),
+                        size_bytes=0,
                     ))
             except Exception as e:
                 logger.warning("扫描文件夹失败 %s: %s", base, e)

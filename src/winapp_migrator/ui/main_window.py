@@ -795,9 +795,10 @@ class MainWindow(QMainWindow):
         reply = QMessageBox.question(
             self,
             "确认优化内存",
-            "将压缩所有进程的内存工作集，释放系统文件缓存。\n\n"
-            "不会终止任何进程，不会影响任何正在运行的程序。\n"
-            "内存释放后进程需要时自动恢复，完全安全。\n\n确定继续？",
+            "将强制把后台进程/服务的内存页面换出到虚拟内存（硬盘），\n"
+            "释放物理 RAM 供前台程序使用。\n\n"
+            "不会终止任何进程。后台进程被访问时会从硬盘换回，\n"
+            "可能有短暂延迟，不影响前台程序。\n\n确定继续？",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
         )
         if reply != QMessageBox.StandardButton.Yes:

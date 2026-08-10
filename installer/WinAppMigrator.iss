@@ -39,7 +39,8 @@ Name: "chinesesimplified"; MessagesFile: "ChineseSimplified.isl"
 WelcomeLabel2=🫠 听说你的 C 盘又红了？🫠%n%n💡 别担心，这不是你的问题 — 是 Windows 的问题（确信）。%n%n🏠 本工具将把你的应用从 C 盘连根拔起，%n搬到它们该去的广袤天地。%n%n🛸 准备好了吗？让我们开始这场搬家大冒险！%n%n        🚚 💨 💨 💨
 
 ; --- 准备安装页 ---
-ReadyLabel2=📋 万事俱备，只欠东风%n（东风 = 你点一下「安装」按钮）%n%n按下安装后，我们会把 WinAppMigrator 安置妥当，%n从此你的 C 盘将获得新生 🌱🌱🌱%n%n⚠️ 免责声明：%n本工具不负责安抚被迁移应用的思乡情绪。%n它们在新家过得好不好，取决于新盘符的风水 🧧
+ReadyLabel2a=📋 万事俱备，只欠东风%n（东风 = 你点一下「安装」按钮）%n%n按下安装后，我们会把 WinAppMigrator 安置妥当，%n从此你的 C 盘将获得新生 🌱🌱🌱%n%n⚠️ 免责声明：%n本工具不负责安抚被迁移应用的思乡情绪。%n它们在新家过得好不好，取决于新盘符的风水 🧧
+ReadyLabel2b=📋 万事俱备，只欠东风%n（东风 = 你点一下「安装」按钮）%n%n按下安装后，我们会把 WinAppMigrator 安置妥当，%n从此你的 C 盘将获得新生 🌱🌱🌱%n%n⚠️ 免责声明：%n本工具不负责安抚被迁移应用的思乡情绪。%n它们在新家过得好不好，取决于新盘符的风水 🧧
 
 ; --- 完成页 ---
 FinishedLabel=🎉 🎉 🎉  恭喜！安装完成  🎉 🎉 🎉%n%n⚔️ WinAppMigrator 已就位，随时待命。%n%n现在打开它，开始拯救你的 C 盘吧，勇士！%n%n%n📌 记住：%n  🔴 红色的 C 盘 = 病，得治。%n  💊 本工具 = 你的处方药。%n%n      C 盘：谢谢你... 🥹
@@ -98,7 +99,8 @@ begin
   WizardForm.FinishedLabel.Font.Size := 11;
 
   { 准备安装页正文 — 放大 }
-  WizardForm.ReadyLabel2.Font.Size := 11;
+  WizardForm.ReadyLabel2a.Font.Size := 11;
+  WizardForm.ReadyLabel2b.Font.Size := 11;
 end;
 
 procedure CurPageChanged(CurPageID: Integer);

@@ -8,7 +8,7 @@ from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit,
     QComboBox, QPushButton, QListWidget, QListWidgetItem, QProgressBar,
     QTextEdit, QMessageBox, QApplication, QSizePolicy, QSpacerItem,
-    QFileDialog, QDialog
+    QFileDialog, QDialog, QScrollArea, QFrame
 )
 from PyQt6.QtCore import Qt, QSize, QThread, pyqtSignal, QPropertyAnimation, QEasingCurve
 from PyQt6.QtGui import QIcon, QFont, QFontDatabase
@@ -288,7 +288,22 @@ class MainWindow(QMainWindow):
         left = self._build_left_panel()
         right = self._build_right_panel()
         layout.addWidget(left, stretch=2)
-        layout.addWidget(right, stretch=1)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setWidget(right)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setStyleSheet(f"QScrollArea {{ background: transparent; border: none; }}")
+        # 将 Card 的阴影移到 ScrollArea 上，避免被 viewport 裁剪
+        right.setGraphicsEffect(None)
+        from PyQt6.QtWidgets import QGraphicsDropShadowEffect
+        from PyQt6.QtGui import QColor
+        shadow = QGraphicsDropShadowEffect(scroll)
+        shadow.setBlurRadius(24)
+        shadow.setColor(QColor(37, 99, 235, 30))
+        shadow.setOffset(0, 4)
+        scroll.setGraphicsEffect(shadow)
+        layout.addWidget(scroll, stretch=1)
         return content
 
     def _build_left_panel(self):

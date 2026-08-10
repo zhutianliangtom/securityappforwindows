@@ -82,6 +82,10 @@ class MainWindow(QMainWindow):
         self.selected_app: AppInfo = None
 
         self._setup_ui()
+        # 迁移进度平滑动画
+        self.progress_anim = QPropertyAnimation(self.progress, b"value", self)
+        self.progress_anim.setDuration(350)
+        self.progress_anim.setEasingCurve(QEasingCurve.Type.OutCubic)
         self._check_admin()
         self._start_scan()
 
@@ -187,7 +191,18 @@ class MainWindow(QMainWindow):
 
         self.status_label = QLabel("就绪")
         self.status_label.setStyleSheet(f"color: {PALETTE['text_secondary']}; font-size: 12px;")
-        layout.addWidget(self.status_label)
+
+        # 扫描进行中的忙碌动画条
+        self.scan_progress = QProgressBar()
+        self.scan_progress.setRange(0, 0)  # busy 模式：持续滚动
+        self.scan_progress.setFixedHeight(8)
+        self.scan_progress.setTextVisible(False)
+        self.scan_progress.hide()
+
+        status_row = QHBoxLayout()
+        status_row.addWidget(self.status_label)
+        status_row.addWidget(self.scan_progress, stretch=1)
+        layout.addLayout(status_row)
 
         return card
 
@@ -213,7 +228,6 @@ class MainWindow(QMainWindow):
         self.drive_combo.currentIndexChanged.connect(self._refresh_target_path)
         target_row.addWidget(self.target_path_edit, stretch=1)
         browse_btn = QPushButton("浏览...")
-        browse_btn.setFixedWidth(80)
         browse_btn.clicked.connect(self._browse_target)
         target_row.addWidget(browse_btn)
         layout.addLayout(target_row)
@@ -423,8 +437,12 @@ class MainWindow(QMainWindow):
         return []
 
     def _on_progress(self, percent: int, message: str):
-        self.progress.setValue(percent)
         self.log_edit.append(f"[{percent}%] {message}")
+        # 进度平滑过渡动画
+        self.progress_anim.stop()
+        self.progress_anim.setStartValue(self.progress.value())
+        self.progress_anim.setEndValue(percent)
+        self.progress_anim.start()
 
     def _on_migrate_finished(self, result: dict):
         self.migrate_btn.setEnabled(True)

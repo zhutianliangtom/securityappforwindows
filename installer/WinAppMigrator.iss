@@ -97,10 +97,6 @@ begin
 
   { 完成页正文 — 放大 }
   WizardForm.FinishedLabel.Font.Size := 11;
-
-  { 准备安装页正文 — 放大 }
-  WizardForm.ReadyLabel2a.Font.Size := 11;
-  WizardForm.ReadyLabel2b.Font.Size := 11;
 end;
 
 procedure CurPageChanged(CurPageID: Integer);

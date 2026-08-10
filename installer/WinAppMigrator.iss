@@ -28,7 +28,8 @@ WizardSizePercent=130
 WizardResizable=yes
 
 [Languages]
-Name: "chinesesimplified"; MessagesFile: "compiler:Languages\ChineseSimplified.isl"
+; 用户已手动魔改 Default.isl 为中文版
+Name: "chinesesimplified"; MessagesFile: "compiler:Default.isl"
 
 ; ============================================================
 ; 自定义消息 — 注入灵魂 Pro Max

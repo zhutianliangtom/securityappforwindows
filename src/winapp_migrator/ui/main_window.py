@@ -519,9 +519,10 @@ class MainWindow(QMainWindow):
         if not path.is_absolute():
             QMessageBox.warning(self, "路径无效", "目标路径必须是绝对路径，例如 D:\\Apps\\微信")
             return None
-        if path.exists():
-            QMessageBox.warning(self, "路径无效", f"目标路径已存在，请更换: {path}")
-            return None
+        # 盘符根目录（如 C:\）作为目标时，自动在其下创建 app 同名目录
+        if path.anchor and str(path).rstrip("\\").lower() == path.anchor.rstrip("\\").lower():
+            path = path / self.selected_app.name
+        # 目标已存在不在此拒绝，交由 _start_migration 提供 覆盖/自动改名 处理
         if path == self.selected_app.install_location:
             QMessageBox.warning(self, "路径无效", "目标路径不能与源路径相同")
             return None

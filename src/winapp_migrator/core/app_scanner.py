@@ -179,12 +179,12 @@ class AppScanner:
             for sub in ("Program Files", "Program Files (x86)", "Programs", "Software",
                         "Apps", "App", "Application", "工具", "软件", "应用"):
                 self._scan_folder(root / sub, seen, system_names)
-            # 2. 非系统盘根目录的一级子目录（C 盘根目录含大量系统目录，跳过）
+            # 2. 非系统盘根目录递归扫描（C 盘根目录含大量系统目录，跳过）
             if str(root.resolve()).lower() == system_root:
                 continue
-            self._scan_folder(root, seen, system_names, top=True)
+            self._scan_folder(root, seen, system_names, top=True, max_depth=3)
 
-    def _scan_folder(self, base: Path, seen: set, system_names: set, top: bool = False):
+    def _scan_folder(self, base: Path, seen: set, system_names: set, top: bool = False, max_depth: int = 1):
         if not base.exists():
             return
         try:
@@ -203,6 +203,10 @@ class AppScanner:
                 key = str(entry).lower()
                 if key in seen:
                     continue
+                # 容器目录（无 exe 且未达深度上限）：继续向下寻找真实应用目录
+                if max_depth > 1 and not self._dir_has_exe(entry):
+                    self._scan_folder(entry, seen, system_names, top=False, max_depth=max_depth - 1)
+                    continue
                 seen.add(key)
                 self.apps.append(AppInfo(
                     name=entry.name,
@@ -215,6 +219,17 @@ class AppScanner:
         except (PermissionError, OSError) as e:
             # 拒绝访问等容错：记录并跳过该目录，不影响其余扫描
             logger.warning("扫描目录失败 %s: %s", base, e)
+
+    @staticmethod
+    def _dir_has_exe(path: Path) -> bool:
+        """判断目录内是否直接包含可执行文件（含 exe 的目录视为应用目录）"""
+        try:
+            for entry in path.iterdir():
+                if entry.is_file() and entry.suffix.lower() == ".exe":
+                    return True
+        except OSError:
+            return False
+        return False
 
     @staticmethod
     def _get_drives():

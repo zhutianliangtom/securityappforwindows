@@ -1,5 +1,6 @@
 # -*- mode: python ; coding: utf-8 -*-
 from PyInstaller.building.build_main import Analysis, PYZ, EXE, COLLECT
+from PyInstaller.utils.hooks import collect_submodules
 
 block_cipher = None
 
@@ -27,7 +28,8 @@ a = Analysis(
         'win32gui',
         'win32security',
         'win32con',
-        'win32com.client',
+        # win32com 为动态包，需完整收集子模块（快捷方式 TargetPath 读取依赖）
+        *collect_submodules('win32com'),
     ],
     hookspath=[],
     hooksconfig={},

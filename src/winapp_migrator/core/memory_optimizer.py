@@ -1,10 +1,16 @@
-"""内存优化模块：纯 Python ctypes 直调 Win32 API，无 PowerShell 开销"""
+"""内存优化模块：核弹级方案
+1. NtOpenProcess 兜底 — 覆盖受保护进程（解决 142 OpenProcess 失败问题）
+2. 暂停进程 → 硬限制工作集为 1 字节 → 进程暂停中不会抖页
+3. 分配大内存块制造极端内存压力 → 强迫内核主动 trim
+4. 多次清空 standby list
+"""
 
 import ctypes
 import ctypes.wintypes as w
 import logging
 import os
-from ctypes import byref, sizeof, c_size_t, c_void_p, POINTER, Structure
+import gc
+from ctypes import byref, sizeof, c_size_t, c_void_p, POINTER, Structure, c_ulong, c_byte
 
 logger = logging.getLogger(__name__)
 
@@ -15,15 +21,23 @@ kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
 advapi32 = ctypes.WinDLL("advapi32", use_last_error=True)
 psapi = ctypes.WinDLL("psapi", use_last_error=True)
 user32 = ctypes.WinDLL("user32", use_last_error=True)
+ntdll = ctypes.WinDLL("ntdll", use_last_error=True)
 
 # --- 常量 ---
 TH32CS_SNAPPROCESS = 0x02
 PROCESS_SET_QUOTA = 0x0100
 PROCESS_QUERY_INFORMATION = 0x0400
 PROCESS_VM_READ = 0x0010
+PROCESS_VM_OPERATION = 0x0008
+PROCESS_SUSPEND_RESUME = 0x0800
+PROCESS_TERMINATE = 0x0001
 TOKEN_ADJUST_PRIVILEGES = 0x0020
 TOKEN_QUERY = 0x0008
 SE_PRIVILEGE_ENABLED = 0x2
+MEM_COMMIT = 0x1000
+MEM_RESERVE = 0x2000
+MEM_RELEASE = 0x8000
+PAGE_READWRITE = 0x04
 
 # --- 结构体 ---
 class PROCESSENTRY32W(Structure):
@@ -64,7 +78,37 @@ class LUID_AND_ATTRIBUTES(Structure):
 class TOKEN_PRIVILEGES(Structure):
     _fields_ = [("PrivilegeCount", w.DWORD), ("Privileges", LUID_AND_ATTRIBUTES * 1)]
 
-# --- 函数签名 ---
+class MEMORYSTATUSEX(Structure):
+    _fields_ = [
+        ("dwLength", w.DWORD),
+        ("dwMemoryLoad", w.DWORD),
+        ("ullTotalPhys", w.ULARGE_INTEGER),
+        ("ullAvailPhys", w.ULARGE_INTEGER),
+        ("ullTotalPageFile", w.ULARGE_INTEGER),
+        ("ullAvailPageFile", w.ULARGE_INTEGER),
+        ("ullTotalVirtual", w.ULARGE_INTEGER),
+        ("ullAvailVirtual", w.ULARGE_INTEGER),
+        ("ullAvailExtendedVirtual", w.ULARGE_INTEGER),
+    ]
+
+# NtOpenProcess 结构体
+class CLIENT_ID(Structure):
+    _fields_ = [("UniqueProcess", w.HANDLE), ("UniqueThread", w.HANDLE)]
+
+class UNICODE_STRING(Structure):
+    _fields_ = [("Length", w.USHORT), ("MaximumLength", w.USHORT), ("Buffer", c_void_p)]
+
+class OBJECT_ATTRIBUTES(Structure):
+    _fields_ = [
+        ("Length", w.ULONG),
+        ("RootDirectory", w.HANDLE),
+        ("ObjectName", POINTER(UNICODE_STRING)),
+        ("Attributes", w.ULONG),
+        ("SecurityDescriptor", c_void_p),
+        ("SecurityQualityOfService", c_void_p),
+    ]
+
+# --- kernel32 ---
 CreateToolhelp32Snapshot = kernel32.CreateToolhelp32Snapshot
 CreateToolhelp32Snapshot.argtypes = [w.DWORD, w.DWORD]
 CreateToolhelp32Snapshot.restype = w.HANDLE
@@ -85,21 +129,39 @@ CloseHandle = kernel32.CloseHandle
 CloseHandle.argtypes = [w.HANDLE]
 CloseHandle.restype = w.BOOL
 
-EmptyWorkingSet = psapi.EmptyWorkingSet
-EmptyWorkingSet.argtypes = [w.HANDLE]
-EmptyWorkingSet.restype = w.BOOL
-
 SetProcessWorkingSetSize = kernel32.SetProcessWorkingSetSize
 SetProcessWorkingSetSize.argtypes = [w.HANDLE, c_size_t, c_size_t]
 SetProcessWorkingSetSize.restype = w.BOOL
+
+GetCurrentProcess = kernel32.GetCurrentProcess
+GetCurrentProcess.restype = w.HANDLE
+
+SetSystemFileCacheSize = kernel32.SetSystemFileCacheSize
+SetSystemFileCacheSize.argtypes = [c_size_t, c_size_t, w.DWORD]
+SetSystemFileCacheSize.restype = w.BOOL
+
+GlobalMemoryStatusEx = kernel32.GlobalMemoryStatusEx
+GlobalMemoryStatusEx.argtypes = [POINTER(MEMORYSTATUSEX)]
+GlobalMemoryStatusEx.restype = w.BOOL
+
+VirtualAlloc = kernel32.VirtualAlloc
+VirtualAlloc.argtypes = [c_void_p, c_size_t, w.DWORD, w.DWORD]
+VirtualAlloc.restype = c_void_p
+
+VirtualFree = kernel32.VirtualFree
+VirtualFree.argtypes = [c_void_p, c_size_t, w.DWORD]
+VirtualFree.restype = w.BOOL
+
+# --- psapi ---
+EmptyWorkingSet = psapi.EmptyWorkingSet
+EmptyWorkingSet.argtypes = [w.HANDLE]
+EmptyWorkingSet.restype = w.BOOL
 
 GetProcessMemoryInfo = psapi.GetProcessMemoryInfo
 GetProcessMemoryInfo.argtypes = [w.HANDLE, POINTER(PROCESS_MEMORY_COUNTERS_EX), w.DWORD]
 GetProcessMemoryInfo.restype = w.BOOL
 
-GetCurrentProcess = kernel32.GetCurrentProcess
-GetCurrentProcess.restype = w.HANDLE
-
+# --- advapi32 ---
 OpenProcessToken = advapi32.OpenProcessToken
 OpenProcessToken.argtypes = [w.HANDLE, w.DWORD, POINTER(w.HANDLE)]
 OpenProcessToken.restype = w.BOOL
@@ -112,10 +174,7 @@ AdjustTokenPrivileges = advapi32.AdjustTokenPrivileges
 AdjustTokenPrivileges.argtypes = [w.HANDLE, w.BOOL, POINTER(TOKEN_PRIVILEGES), w.DWORD, c_void_p, c_void_p]
 AdjustTokenPrivileges.restype = w.BOOL
 
-SetSystemFileCacheSize = kernel32.SetSystemFileCacheSize
-SetSystemFileCacheSize.argtypes = [c_size_t, c_size_t, w.DWORD]
-SetSystemFileCacheSize.restype = w.BOOL
-
+# --- user32 ---
 GetForegroundWindow = user32.GetForegroundWindow
 GetForegroundWindow.restype = w.HANDLE
 
@@ -123,62 +182,110 @@ GetWindowThreadProcessId = user32.GetWindowThreadProcessId
 GetWindowThreadProcessId.argtypes = [w.HANDLE, POINTER(w.DWORD)]
 GetWindowThreadProcessId.restype = w.DWORD
 
-GlobalMemoryStatusEx = kernel32.GlobalMemoryStatusEx
+# --- ntdll ---
+NtSuspendProcess = ntdll.NtSuspendProcess
+NtSuspendProcess.argtypes = [w.HANDLE]
+NtSuspendProcess.restype = w.LONG
 
-class MEMORYSTATUSEX(Structure):
-    _fields_ = [
-        ("dwLength", w.DWORD),
-        ("dwMemoryLoad", w.DWORD),
-        ("ullTotalPhys", w.ULARGE_INTEGER),
-        ("ullAvailPhys", w.ULARGE_INTEGER),
-        ("ullTotalPageFile", w.ULARGE_INTEGER),
-        ("ullAvailPageFile", w.ULARGE_INTEGER),
-        ("ullTotalVirtual", w.ULARGE_INTEGER),
-        ("ullAvailVirtual", w.ULARGE_INTEGER),
-        ("ullAvailExtendedVirtual", w.ULARGE_INTEGER),
-    ]
+NtResumeProcess = ntdll.NtResumeProcess
+NtResumeProcess.argtypes = [w.HANDLE]
+NtResumeProcess.restype = w.LONG
 
-GlobalMemoryStatusEx.argtypes = [POINTER(MEMORYSTATUSEX)]
-GlobalMemoryStatusEx.restype = w.BOOL
+NtSetSystemInformation = ntdll.NtSetSystemInformation
+NtSetSystemInformation.argtypes = [w.DWORD, c_void_p, w.ULONG]
+NtSetSystemInformation.restype = w.LONG
+
+NtOpenProcess = ntdll.NtOpenProcess
+NtOpenProcess.argtypes = [POINTER(w.HANDLE), w.DWORD, POINTER(OBJECT_ATTRIBUTES), POINTER(CLIENT_ID)]
+NtOpenProcess.restype = w.LONG
 
 # ============================================================
 # 保护列表
 # ============================================================
-_PROTECTED_NAMES = {
+# 绝不暂停的核心进程
+_SUSPEND_PROTECTED = {
     "system", "idle", "csrss", "wininit",
     "services", "lsass", "winlogon", "smss",
     "dwm", "explorer", "audiodg",
-    "winappmigrator",
+    "winappmigrator", "svchost",
 }
 
+# 自身保护
+_WS_PROTECTED = {"winappmigrator"}
 
-def _get_last_error():
-    return ctypes.get_last_error()
+# ACCESS 掩码
+_ACCESS_SUSPEND = PROCESS_SET_QUOTA | PROCESS_QUERY_INFORMATION | PROCESS_SUSPEND_RESUME
+_ACCESS_TRIM = PROCESS_SET_QUOTA | PROCESS_QUERY_INFORMATION
+_ACCESS_ALL = PROCESS_SET_QUOTA | PROCESS_QUERY_INFORMATION | PROCESS_SUSPEND_RESUME | PROCESS_VM_READ | PROCESS_VM_OPERATION | PROCESS_TERMINATE
 
 
-def _enable_quota_privilege() -> bool:
-    """启用 SeIncreaseQuotaPrivilege，确保 OpenProcess(PROCESS_SET_QUOTA) 成功"""
+def _make_object_attributes():
+    oa = OBJECT_ATTRIBUTES()
+    oa.Length = sizeof(oa)
+    oa.RootDirectory = None
+    oa.ObjectName = None
+    oa.Attributes = 0
+    oa.SecurityDescriptor = None
+    oa.SecurityQualityOfService = None
+    return oa
+
+
+def _open_process_fallback(pid: int, access: int) -> w.HANDLE | None:
+    """OpenProcess → NtOpenProcess 兜底，覆盖受保护进程"""
+    # 方法 1: 标准 OpenProcess
+    h = OpenProcess(access, False, pid)
+    if h:
+        return h
+
+    # 方法 2: NtOpenProcess（绕过 Win32 安全检查）
+    cid = CLIENT_ID()
+    cid.UniqueProcess = w.HANDLE(pid)
+    cid.UniqueThread = None
+    oa = _make_object_attributes()
+    h_nt = w.HANDLE()
+    status = NtOpenProcess(byref(h_nt), access, byref(oa), byref(cid))
+    if status == 0 and h_nt:
+        return h_nt
+
+    return None
+
+
+def _close_handle_safe(h):
+    if h:
+        try:
+            CloseHandle(h)
+        except Exception:
+            pass
+
+
+def _enable_privileges() -> bool:
+    """启用 SeIncreaseQuotaPrivilege + SeDebugPrivilege"""
     h_token = w.HANDLE()
     if not OpenProcessToken(GetCurrentProcess(), TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY, byref(h_token)):
         return False
 
-    luid = LUID()
-    if not LookupPrivilegeValueW(None, "SeIncreaseQuotaPrivilege", byref(luid)):
-        CloseHandle(h_token)
-        return False
+    for priv_name in ("SeIncreaseQuotaPrivilege", "SeDebugPrivilege"):
+        luid = LUID()
+        if not LookupPrivilegeValueW(None, priv_name, byref(luid)):
+            continue
+        tp = TOKEN_PRIVILEGES()
+        tp.PrivilegeCount = 1
+        tp.Privileges[0].Luid = luid
+        tp.Privileges[0].Attributes = SE_PRIVILEGE_ENABLED
+        AdjustTokenPrivileges(h_token, False, byref(tp), sizeof(tp), None, None)
 
-    tp = TOKEN_PRIVILEGES()
-    tp.PrivilegeCount = 1
-    tp.Privileges[0].Luid = luid
-    tp.Privileges[0].Attributes = SE_PRIVILEGE_ENABLED
-
-    result = AdjustTokenPrivileges(h_token, False, byref(tp), sizeof(tp), None, None)
     CloseHandle(h_token)
-    return result
+    return True
+
+
+def _purge_standby_list() -> bool:
+    """清空 standby list — 把踢出的页面真正释放为 Free 内存"""
+    cmd = c_size_t(0)
+    status = NtSetSystemInformation(0x50, byref(cmd), sizeof(cmd))
+    return status == 0
 
 
 def _get_foreground_pids() -> set:
-    """获取前台窗口及其子进程 PID"""
     pids = set()
     hwnd = GetForegroundWindow()
     if hwnd:
@@ -204,16 +311,15 @@ def _enum_processes() -> list[tuple[int, str, int]]:
             pid = pe.th32ProcessID
             name = pe.szExeFile.lower() if pe.szExeFile else ""
 
-            # 获取内存信息
             ws_bytes = 0
-            if pid > 0 and pid != 4:  # skip idle (0) and system (4) for now
-                h = OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, False, pid)
+            if pid > 0:
+                h = _open_process_fallback(pid, PROCESS_QUERY_INFORMATION | PROCESS_VM_READ)
                 if h:
                     pmc = PROCESS_MEMORY_COUNTERS_EX()
                     pmc.cb = sizeof(pmc)
                     if GetProcessMemoryInfo(h, byref(pmc), sizeof(pmc)):
                         ws_bytes = pmc.WorkingSetSize
-                    CloseHandle(h)
+                    _close_handle_safe(h)
 
             processes.append((pid, name, ws_bytes))
 
@@ -226,7 +332,6 @@ def _enum_processes() -> list[tuple[int, str, int]]:
 
 
 def _get_memory_status() -> dict:
-    """获取系统内存状态"""
     ms = MEMORYSTATUSEX()
     ms.dwLength = sizeof(ms)
     GlobalMemoryStatusEx(byref(ms))
@@ -238,8 +343,67 @@ def _get_memory_status() -> dict:
     }
 
 
+def _allocate_pressure(total_mb: float) -> list:
+    """
+    分配大块内存制造极端内存压力，强迫内核主动 trim 所有进程工作集。
+    分配后立即 touch 每一页确保物理 RAM 被实际占用。
+    返回分配块列表，用于后续释放。
+    """
+    # 目标：分配可用内存的 70%，让内核感受到强烈压力
+    ms = _get_memory_status()
+    target_mb = min(ms["avail_mb"] * 0.7, total_mb * 0.6)
+    if target_mb < 100:
+        return []
+
+    chunks = []
+    remaining = int(target_mb * 1024 * 1024)
+    # 每块 256MB，避免单次分配失败
+    chunk_size = 256 * 1024 * 1024
+
+    while remaining > 64 * 1024 * 1024:  # 至少还剩 64MB
+        alloc_size = min(chunk_size, remaining)
+        buf = VirtualAlloc(None, c_size_t(alloc_size), MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE)
+        if not buf:
+            # 尝试更小的块
+            chunk_size //= 2
+            if chunk_size < 16 * 1024 * 1024:
+                break
+            continue
+
+        # Touch 每一页（每 4KB 写一个字节），确保物理 RAM 真正被分配
+        try:
+            arr = (c_byte * alloc_size).from_address(buf)
+            for offset in range(0, alloc_size, 4096):
+                arr[offset] = 0
+        except Exception:
+            pass
+
+        chunks.append((buf, alloc_size))
+        remaining -= alloc_size
+
+    return chunks
+
+
+def _free_pressure(chunks: list):
+    """释放所有压力内存块"""
+    for buf, size in chunks:
+        VirtualFree(buf, c_size_t(0), MEM_RELEASE)
+    chunks.clear()
+    gc.collect()
+
+
+def _should_suspend(name: str) -> bool:
+    return name not in _SUSPEND_PROTECTED
+
+
 def optimize_memory(progress_callback=None) -> dict:
-    """激进压缩：纯 ctypes，零 PowerShell 开销"""
+    """
+    核弹级方案：
+    1. NtOpenProcess 兜底 → 覆盖所有进程
+    2. 暂停 → 硬限制工作集为 1 字节 → 恢复
+    3. 分配大内存块制造压力
+    4. 多次清空 standby list
+    """
 
     def notify(pct: int, msg: str):
         logger.info("[%d%%] %s", pct, msg)
@@ -250,69 +414,141 @@ def optimize_memory(progress_callback=None) -> dict:
                 pass
 
     # 1. 启用特权
-    notify(2, "启用 SeIncreaseQuotaPrivilege...")
-    _enable_quota_privilege()
+    notify(2, "启用 SeIncreaseQuotaPrivilege + SeDebugPrivilege...")
+    _enable_privileges()
 
-    # 2. 基线测量
-    notify(5, "获取基线内存状态...")
+    # 2. 基线
+    notify(4, "获取基线...")
     mem_before = _get_memory_status()
+    total_mb = mem_before["total_mb"]
 
-    # 3. 枚举所有进程
-    notify(8, "枚举所有进程...")
+    notify(6, "枚举进程 (NtOpenProcess 兜底覆盖受保护进程)...")
     all_procs = _enum_processes()
     proc_count = len(all_procs)
-
-    # 统计基线工作集
     ws_before = sum(p[2] for p in all_procs)
     ws_before_mb = ws_before / (1024 * 1024)
 
-    # 保护列表
-    protected_pids = {os.getpid()}
-    protected_pids |= _get_foreground_pids()
+    protected_pids = {os.getpid()} | _get_foreground_pids()
 
-    # 4. 激进压缩主循环
-    notify(10, "激进压缩所有后台进程...")
-    ACCESS = PROCESS_SET_QUOTA | PROCESS_QUERY_INFORMATION
+    ONE = c_size_t(1)
     NEG_ONE = c_size_t(-1)
 
-    ok = 0
+    ok_openprocess = 0
+    ok_ntopen = 0
     fail_open = 0
-    fail_empty = 0
-    skipped = 0
+    suspended = 0
+
+    # ============================================================
+    # Phase 1: 暂停所有非核心进程
+    # ============================================================
+    notify(8, "Phase 1: 暂停所有非核心进程...")
+
+    suspended_handles = []  # (pid, handle, is_suspended)
 
     for i, (pid, name, _ws) in enumerate(all_procs):
-        # 跳过保护和系统进程
-        if pid in protected_pids:
-            skipped += 1
+        if pid in protected_pids or pid <= 4:
             continue
-        if name in _PROTECTED_NAMES:
-            skipped += 1
-            continue
-        if pid <= 4:  # idle, system
-            skipped += 1
+        if name in _SUSPEND_PROTECTED:
             continue
 
-        h = OpenProcess(ACCESS, False, pid)
+        can_suspend = _should_suspend(name)
+        access = _ACCESS_ALL if can_suspend else _ACCESS_TRIM
+
+        h = _open_process_fallback(pid, access)
         if not h:
             fail_open += 1
             continue
 
-        r1 = EmptyWorkingSet(h)
-        r2 = SetProcessWorkingSetSize(h, NEG_ONE, NEG_ONE)
-        if r1 or r2:
-            ok += 1
+        is_ntopen = (OpenProcess(access, False, pid) is None)  # 检测是否走了 NtOpenProcess
+        if is_ntopen:
+            ok_ntopen += 1
         else:
-            fail_empty += 1
+            ok_openprocess += 1
 
-        CloseHandle(h)
+        if can_suspend:
+            NtSuspendProcess(h)
+            suspended += 1
+            suspended_handles.append((pid, h, True))
+        else:
+            suspended_handles.append((pid, h, False))
 
-        # 每 30 个进程报告一次进度
-        if i % 30 == 0:
-            pct = 10 + int(i / max(proc_count, 1) * 80)
-            notify(pct, f"已压缩 {ok}/{i+1} 个进程...")
+        if i % 50 == 0:
+            notify(8 + int(i / max(proc_count, 1) * 12),
+                   f"已暂停 {suspended} 进程 (OpenProcess: {ok_openprocess}, NtOpen: {ok_ntopen}, 失败: {fail_open})...")
 
-    # 5. 清空系统文件缓存
-    notify(92, "清空系统文件缓存...")
+    notify(20, f"Phase 1 完成: 暂停 {suspended} 进程, OpenProcess={ok_openprocess}, NtOpen={ok_ntopen}, 失败={fail_open}")
+
+    # ============================================================
+    # Phase 2: 硬限制工作集为 1 字节（进程已暂停，不会抖页！）
+    # ============================================================
+    notify(22, "Phase 2: 硬限制工作集为 1 字节 + EmptyWorkingSet...")
+
+    for i, (pid, h, _was_suspended) in enumerate(suspended_handles):
+        EmptyWorkingSet(h)
+        SetProcessWorkingSetSize(h, ONE, ONE)
+
+        if i % 50 == 0:
+            notify(22 + int(i / max(len(suspended_handles), 1) * 10),
+                   f"硬限制工作集 {i+1}/{len(suspended_handles)}...")
+
+    # ============================================================
+    # Phase 3: 清空 standalone list
+    # ============================================================
+    notify(33, "Phase 3: 清空 standby list...")
+    _purge_standby_list()
+
+    # ============================================================
+    # Phase 4: 分配大块内存制造极端内存压力
+    # ============================================================
+    notify(36, "Phase 4: 分配大块内存制造极端压力 (强迫内核 trim)...")
+    pressure_chunks = _allocate_pressure(total_mb)
+    allocated_mb = sum(sz for _, sz in pressure_chunks) / (1024 * 1024)
+    notify(42, f"已分配 {allocated_mb:.0f} MB 压力内存, 再次清空 standby...")
+    _purge_standby_list()
+
+    # ============================================================
+    # Phase 5: 在压力下再压缩一轮
+    # ============================================================
+    notify(45, "Phase 5: 压力下第二轮压缩...")
+    for i, (pid, h, _was_suspended) in enumerate(suspended_handles):
+        EmptyWorkingSet(h)
+        SetProcessWorkingSetSize(h, ONE, ONE)
+
+        if i % 50 == 0:
+            notify(45 + int(i / max(len(suspended_handles), 1) * 8),
+                   f"压力压缩 {i+1}/{len(suspended_handles)}...")
+
+    notify(54, "压力下清空 standby list...")
+    _purge_standby_list()
+
+    # ============================================================
+    # Phase 6: 释放压力内存
+    # ============================================================
+    notify(57, "Phase 6: 释放压力内存块...")
+    _free_pressure(pressure_chunks)
+
+    # ============================================================
+    # Phase 7: 恢复工作集限制 + 恢复进程
+    # ============================================================
+    notify(60, "Phase 7: 恢复工作集限制 + 恢复进程...")
+
+    for i, (pid, h, was_suspended) in enumerate(suspended_handles):
+        # 恢复工作集限制为标准值
+        SetProcessWorkingSetSize(h, NEG_ONE, NEG_ONE)
+
+        if was_suspended:
+            NtResumeProcess(h)
+
+        _close_handle_safe(h)
+
+        if i % 50 == 0:
+            notify(60 + int(i / max(len(suspended_handles), 1) * 10),
+                   f"恢复 {i+1}/{len(suspended_handles)}...")
+
+    # ============================================================
+    # Phase 8: 清空系统文件缓存
+    # ============================================================
+    notify(72, "Phase 8: 清空系统文件缓存...")
     NEG_ONE_SZ = c_size_t(-1)
     try:
         SetSystemFileCacheSize(NEG_ONE_SZ, NEG_ONE_SZ, 0x2)
@@ -320,29 +556,46 @@ def optimize_memory(progress_callback=None) -> dict:
     except Exception:
         pass
 
-    # 6. 压缩 System 进程 (PID 4)
-    notify(95, "压缩系统进程...")
-    h_sys = OpenProcess(ACCESS, False, 4)
+    # ============================================================
+    # Phase 9: 压缩 System 进程 (PID 4)
+    # ============================================================
+    notify(76, "Phase 9: 压缩 System 进程...")
+    h_sys = _open_process_fallback(4, _ACCESS_TRIM)
     if h_sys:
         EmptyWorkingSet(h_sys)
         SetProcessWorkingSetSize(h_sys, NEG_ONE, NEG_ONE)
-        CloseHandle(h_sys)
+        _close_handle_safe(h_sys)
 
-    # 7. 第二轮快速横扫
-    notify(97, "第二轮收尾...")
-    for pid, name, _ws in all_procs:
-        if pid in protected_pids or name in _PROTECTED_NAMES or pid <= 4:
+    # ============================================================
+    # Phase 10: 最终收尾压缩（不暂停，温和压缩）
+    # ============================================================
+    notify(80, "Phase 10: 最终收尾压缩...")
+    for i, (pid, name, _ws) in enumerate(all_procs):
+        if pid in protected_pids or pid <= 4 or name in _WS_PROTECTED:
             continue
-        h = OpenProcess(ACCESS, False, pid)
+        h = _open_process_fallback(pid, _ACCESS_TRIM)
         if h:
             EmptyWorkingSet(h)
-            CloseHandle(h)
+            SetProcessWorkingSetSize(h, NEG_ONE, NEG_ONE)
+            _close_handle_safe(h)
 
-    # 8. 结果统计
-    notify(98, "计算优化结果...")
+        if i % 50 == 0:
+            notify(80 + int(i / max(proc_count, 1) * 10),
+                   f"收尾压缩 {i+1}/{proc_count}...")
+
+    # ============================================================
+    # 最终多次清空 standby list
+    # ============================================================
+    notify(92, "最终清空 standby list (x3)...")
+    for _ in range(3):
+        _purge_standby_list()
+
+    # ============================================================
+    # 结果统计
+    # ============================================================
+    notify(97, "计算结果...")
     mem_after = _get_memory_status()
 
-    # 重新枚举获取优化后工作集
     all_procs2 = _enum_processes()
     ws_after = sum(p[2] for p in all_procs2)
     ws_after_mb = ws_after / (1024 * 1024)
@@ -350,6 +603,8 @@ def optimize_memory(progress_callback=None) -> dict:
     freed_mb = ws_before_mb - ws_after_mb
     avail_gained = mem_after["avail_mb"] - mem_before["avail_mb"]
     pct = freed_mb / max(ws_before_mb, 1) * 100 if ws_before_mb > 0 else 0
+
+    total_ok = ok_openprocess + ok_ntopen
 
     notify(100, "优化完成")
 
@@ -359,8 +614,9 @@ def optimize_memory(progress_callback=None) -> dict:
         f"优化后工作集: {ws_after_mb:.0f} MB",
         f"释放: {freed_mb:.0f} MB ({pct:.0f}%)",
         f"可用内存增加: {avail_gained:.0f} MB",
-        f"成功压缩: {ok} / {proc_count} 个进程",
-        f"OpenProcess 失败: {fail_open}，EmptyWorkingSet 失败: {fail_empty}",
+        f"打开进程: {total_ok} (OpenProcess: {ok_openprocess}, NtOpen兜底: {ok_ntopen})",
+        f"暂停进程: {suspended}, 无法打开: {fail_open}",
+        f"压力内存: {allocated_mb:.0f} MB",
     ]
 
     msg = f"释放 {freed_mb:.0f} MB ({pct:.0f}%)，可用内存 +{avail_gained:.0f} MB"
@@ -371,7 +627,7 @@ def optimize_memory(progress_callback=None) -> dict:
         "freed_mb": round(freed_mb, 1),
         "inuse_before_mb": round(ws_before_mb, 0),
         "inuse_after_mb": round(ws_after_mb, 0),
-        "processes_trimmed": ok,
+        "processes_trimmed": total_ok,
         "processes_killed": 0,
         "services_stopped": 0,
         "services_disabled": 0,

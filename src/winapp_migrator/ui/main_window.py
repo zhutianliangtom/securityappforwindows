@@ -794,13 +794,17 @@ class MainWindow(QMainWindow):
         """一键优化内存"""
         reply = QMessageBox.question(
             self,
-            "确认优化内存",
-            "激进压缩模式：将强制把几乎所有后台进程/服务的内存\n"
-            "页面换出到虚拟内存（硬盘 pagefile.sys），释放物理 RAM。\n\n"
-            "⚠ 机械硬盘用户警告：切换后台窗口时可能严重卡顿，\n"
-            "因为进程页面需要从慢速硬盘重新读入内存。\n"
-            "SSD 用户通常无感。\n\n"
-            "仅保护前台窗口和核心系统进程（csrss、lsass、dwm 等）。\n\n确定继续？",
+            "确认优化内存 - 核弹级方案",
+            "核弹级方案：\n"
+            "1. NtOpenProcess 兜底覆盖受保护进程（解决 OpenProcess 拒绝访问）\n"
+            "2. 暂停所有非核心进程 → 硬限制工作集为 1 字节\n"
+            "3. 分配大块内存制造极端内存压力 → 强迫内核主动 trim\n"
+            "4. 多次清空 standby list 彻底释放物理 RAM\n\n"
+            "⚠ 执行期间：后台窗口会短暂冻结（暂停进程中），\n"
+            "完成后自动恢复。\n\n"
+            "⚠ 机械硬盘用户：切换后台窗口时可能严重卡顿，\n"
+            "因为页面需从硬盘重新读入。SSD 用户通常无感。\n\n"
+            "保护：前台窗口、explorer、dwm、csrss、lsass 等核心进程。\n\n确定继续？",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
         )
         if reply != QMessageBox.StandardButton.Yes:

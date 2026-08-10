@@ -20,6 +20,7 @@ from winapp_migrator.core.app_scanner import AppScanner, AppInfo
 from winapp_migrator.core.data_dirs import detect_data_dirs
 from winapp_migrator.core.orchestrator import MigrationOrchestrator
 from winapp_migrator.core.uninstaller import Uninstaller
+from winapp_migrator.core.memory_optimizer import optimize_memory
 
 logger = setup_logging()
 
@@ -182,6 +183,19 @@ class UninstallWorker(QThread):
         except Exception as e:
             logger.exception("卸载异常")
             self.finished.emit({"success": False, "message": str(e)})
+
+class MemoryWorker(QThread):
+    progress = pyqtSignal(int, str)
+    finished = pyqtSignal(dict)
+
+    def run(self):
+        try:
+            result = optimize_memory(self.progress.emit)
+            self.finished.emit(result)
+        except Exception as e:
+            logger.exception("内存优化异常")
+            self.finished.emit({"success": False, "message": str(e)})
+
 
 class MainWindow(QMainWindow):
     def __init__(self):
@@ -382,6 +396,16 @@ class MainWindow(QMainWindow):
         custom_btn = SecondaryButton("迁移自定义文件夹")
         custom_btn.clicked.connect(self._migrate_custom_folder)
         layout.addWidget(custom_btn)
+
+        self.memory_btn = QPushButton("一键优化内存")
+        self.memory_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.memory_btn.setMinimumHeight(40)
+        self.memory_btn.setStyleSheet(
+            f"background-color: {PALETTE['success']}; color: white; font-weight: 700; "
+            "border: none; border-radius: 10px; padding: 10px 24px;"
+        )
+        self.memory_btn.clicked.connect(self._start_memory_optimize)
+        layout.addWidget(self.memory_btn)
 
         return card
 
@@ -750,6 +774,55 @@ class MainWindow(QMainWindow):
         )
         self.selected_app = app
         self._start_migration()
+
+    def _start_memory_optimize(self):
+        """一键优化内存"""
+        reply = QMessageBox.question(
+            self,
+            "确认优化内存",
+            "将执行以下优化操作：\n\n"
+            "1. 释放后台进程内存（Working Set）\n"
+            "2. 清理系统缓存\n"
+            "3. 终止不必要的后台进程（Edge/Chrome等浏览器后台进程）\n"
+            "4. 禁用不必要的 Windows 服务（Windows Update、Edge Update 等）\n\n"
+            "注意：前台程序不会被影响。浏览器后台进程将被终止，"
+            "如有未保存的网页内容请先保存。\n\n确定继续？",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+
+        self.memory_btn.setEnabled(False)
+        self.migrate_btn.setEnabled(False)
+        self.refresh_btn.setEnabled(False)
+        self.progress.setValue(0)
+        self.log_edit.clear()
+        self.status_label.setText("正在优化内存...")
+
+        self.memory_worker = MemoryWorker()
+        self.memory_worker.progress.connect(self._on_progress)
+        self.memory_worker.finished.connect(self._on_memory_finished)
+        self.memory_worker.start()
+
+    def _on_memory_finished(self, result: dict):
+        self.memory_btn.setEnabled(True)
+        self.migrate_btn.setEnabled(True)
+        self.refresh_btn.setEnabled(True)
+        self.status_label.setText(f"共扫描到 {len(self.apps)} 个应用" if self.apps else "就绪")
+
+        if result.get("success"):
+            self.progress.setValue(100)
+            details = result.get("details", [])
+            detail_text = "\n".join(f"  - {d}" for d in details) if details else ""
+            QMessageBox.information(
+                self,
+                "内存优化完成",
+                f"{result['message']}\n\n"
+                f"优化详情:\n{detail_text}",
+            )
+        else:
+            self.progress.setValue(0)
+            QMessageBox.critical(self, "优化失败", result.get("message", "未知错误"))
 
     def mousePressEvent(self, event):
         # 标题栏区域按下左键时，交给系统原生拖动，避免 DPI 缩放导致的坐标漂移

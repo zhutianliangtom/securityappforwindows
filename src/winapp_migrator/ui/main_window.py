@@ -348,6 +348,11 @@ class MainWindow(QMainWindow):
         self.info_label.setMaximumHeight(160)
         layout.addWidget(self.info_label)
 
+        self.open_dir_btn = SecondaryButton("打开安装目录")
+        self.open_dir_btn.setEnabled(False)
+        self.open_dir_btn.clicked.connect(self._open_app_dir)
+        layout.addWidget(self.open_dir_btn)
+
         self.progress = QProgressBar()
         self.progress.setValue(0)
         self.progress.setTextVisible(True)
@@ -481,7 +486,22 @@ class MainWindow(QMainWindow):
         """)
         self.migrate_btn.setEnabled(True)
         self.uninstall_btn.setEnabled(True)
+        self.open_dir_btn.setEnabled(True)
         self._refresh_target_path()
+
+    def _open_app_dir(self):
+        """在资源管理器中打开所选应用的安装目录"""
+        if not self.selected_app:
+            return
+        loc = self.selected_app.install_location
+        if loc and loc.is_dir():
+            try:
+                os.startfile(str(loc))
+            except Exception as e:
+                logger.warning("打开目录失败 %s: %s", loc, e)
+                QMessageBox.warning(self, "无法打开", f"无法打开目录：{loc}\n{e}")
+        else:
+            QMessageBox.warning(self, "无法打开", f"目录不存在：{loc}")
 
     def _refresh_target_path(self):
         """按选中 app 与目标盘生成默认目标路径（用户手动编辑过则不覆盖）"""

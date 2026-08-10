@@ -84,19 +84,34 @@ def get_directory_size(path: Path, max_depth: int = 3) -> int:
     return total
 
 def safe_remove(path: Path) -> bool:
-    try:
-        if path.is_symlink() or _is_junction(path):
-            path.unlink()
-            return True
-        if path.is_dir():
-            import shutil
-            shutil.rmtree(path)
-            return True
-        if path.exists():
-            path.unlink()
-            return True
-    except Exception:
-        return False
+    """安全删除文件/目录：处理只读属性与瞬时占用，失败自动重试"""
+    import shutil
+    import stat as stat_mod
+    import time
+
+    def _force(func, p, exc_info):
+        # 删除失败（常见：文件/目录只读）时清除只读属性后重试一次
+        try:
+            os.chmod(p, stat_mod.S_IWRITE | stat_mod.S_IREAD)
+            func(p)
+        except Exception:
+            pass
+
+    for _ in range(4):
+        try:
+            if path.is_symlink() or _is_junction(path):
+                path.unlink()
+                return True
+            if path.is_dir():
+                shutil.rmtree(path, onerror=_force)
+                if not path.exists():
+                    return True
+            elif path.exists():
+                path.unlink()
+                return True
+        except Exception:
+            pass
+        time.sleep(0.5)
     return False
 
 def _is_junction(path: Path) -> bool:

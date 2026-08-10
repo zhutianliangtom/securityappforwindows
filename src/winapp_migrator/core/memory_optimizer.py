@@ -1,4 +1,4 @@
-"""内存优化模块：强制后台进程/服务页面换出到虚拟内存（硬盘）"""
+"""内存优化模块：激进硬限制工作集，强制换出到虚拟内存（硬盘）"""
 
 import base64
 import os
@@ -7,16 +7,12 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-# 系统关键进程，绝不压缩（保持系统响应）
+# 仅保护系统最核心进程，其余全部强制换出
 _PROTECTED_NAMES = {
-    "system", "idle", "csrss", "wininit", "services",
-    "lsass", "winlogon", "smss",
-    "spoolsv", "audiodg", "dwm", "explorer",
-    "taskhostw", "sihost", "runtimebroker",
-    "fontdrvhost", "wlms", "logonui",
-    "applicationframehost", "winappmigrator",
-    "registry", "memcompression",
-    "searchindexer", "securityhealthservice",
+    "system", "idle", "csrss", "wininit",
+    "services", "lsass", "winlogon", "smss",
+    "dwm", "explorer", "audiodg",
+    "winappmigrator",
 }
 
 
@@ -48,7 +44,7 @@ def _run_ps(script: str, timeout: int = 120) -> tuple:
 
 
 def optimize_memory(progress_callback=None) -> dict:
-    """强制后台进程页面换出到虚拟内存（硬盘），释放物理 RAM"""
+    """激进压缩：SetProcessWorkingSetSizeEx 硬限制 + 多轮 EmptyWorkingSet"""
 
     def notify(pct: int, msg: str):
         logger.info("[%d%%] %s", pct, msg)
@@ -105,58 +101,72 @@ $availBefore = (Get-Counter "\Memory\Available MBytes" -ErrorAction SilentlyCont
 if (-not $availBefore) {{ $availBefore = $os.FreePhysicalMemory / 1024 }}
 $inUseBefore = $totalMB - $availBefore
 
-# 工作集硬限制大小：1 页 (4096 字节)，强制 Windows 把其他页面写到 pagefile
+# QUOTA_LIMITS_HARDWS_MIN_ENABLE (0x1) | QUOTA_LIMITS_HARDWS_MAX_ENABLE (0x2) = 0x3
+# 硬限制工作集，Windows 必须遵守，不可协商
+$HARD_LIMIT = 0x3
 $pageSize = [IntPtr]::new(4096)
 $negOne = [IntPtr]::new(-1)
 
-$emptySuccess = 0
-$limitSuccess = 0
+$emptyOk = 0
+$hardOk = 0
 $fail = 0
 
-# 获取所有进程，按 WorkingSet 从大到小排序（先处理内存大户）
+# 按 WorkingSet 从大到小排序
 $allProcs = Get-Process | Sort-Object WorkingSet64 -Descending
 
 # ============================================================
-# 阶段 1: EmptyWorkingSet + 硬限制工作集（强制换出到硬盘）
+# 阶段 1: EmptyWorkingSet + SetProcessWorkingSetSizeEx 硬限制
 # ============================================================
 foreach ($p in $allProcs) {{
-    # 跳过保护列表
     if ($protected -contains $p.Id) {{ continue }}
     if ($protectedNames -contains $p.ProcessName.ToLower()) {{ continue }}
 
     try {{
-        # 第一步：EmptyWorkingSet 把所有页面踢出工作集
         [WAM.MemOpt]::EmptyWorkingSet($p.Handle) | Out-Null
-        $emptySuccess++
+        $emptyOk++
     }} catch {{ }}
 
     try {{
-        # 第二步：设置硬工作集限制为 1 页，阻止 Windows 把页面拉回 RAM
-        # 进程访问已被换出的页面时，会从 pagefile 按需换入
-        [WAM.MemOpt]::SetProcessWorkingSetSize($p.Handle, $pageSize, $pageSize) | Out-Null
-        $limitSuccess++
-    }} catch {{ $fail++ }}
+        # SetProcessWorkingSetSizeEx + 硬限制 flag = 强制 Windows 遵守
+        [WAM.MemOpt]::SetProcessWorkingSetSizeEx($p.Handle, $pageSize, $pageSize, $HARD_LIMIT) | Out-Null
+        $hardOk++
+    }} catch {{
+        # 回退：部分进程没有 PROCESS_SET_QUOTA 权限，用普通 SetProcessWorkingSetSize
+        try {{
+            [WAM.MemOpt]::SetProcessWorkingSetSize($p.Handle, $pageSize, $pageSize) | Out-Null
+            $hardOk++
+        }} catch {{ $fail++ }}
+    }}
 }}
 
 # ============================================================
-# 阶段 2: 清理系统文件缓存
+# 阶段 2: 清空系统文件缓存
 # ============================================================
-# 先禁用再恢复文件缓存以清空
 try {{
     [WAM.MemOpt]::SetSystemFileCacheSize($negOne, $negOne, 0x2) | Out-Null
     [WAM.MemOpt]::SetSystemFileCacheSize($negOne, $negOne, 0) | Out-Null
 }} catch {{ }}
 
-# 压缩 System 进程 (PID 4)
 try {{
     $sysProc = Get-Process -Id 4 -ErrorAction Stop
     [WAM.MemOpt]::EmptyWorkingSet($sysProc.Handle) | Out-Null
-    [WAM.MemOpt]::SetProcessWorkingSetSize($sysProc.Handle, $negOne, $negOne) | Out-Null
 }} catch {{ }}
 
 # ============================================================
-# 阶段 3: 第二轮 EmptyWorkingSet 收尾
+# 阶段 3: 第二轮 EmptyWorkingSet（刚设硬限制的进程可能还没完全清空）
 # ============================================================
+foreach ($p in $allProcs) {{
+    if ($protected -contains $p.Id) {{ continue }}
+    if ($protectedNames -contains $p.ProcessName.ToLower()) {{ continue }}
+    try {{
+        [WAM.MemOpt]::EmptyWorkingSet($p.Handle) | Out-Null
+    }} catch {{ }}
+}}
+
+# ============================================================
+# 阶段 4: 第三轮（收尾，确保最大化释放）
+# ============================================================
+Start-Sleep -Milliseconds 200
 foreach ($p in $allProcs) {{
     if ($protected -contains $p.Id) {{ continue }}
     if ($protectedNames -contains $p.ProcessName.ToLower()) {{ continue }}
@@ -177,19 +187,19 @@ Write-Output "TOTAL=$totalMB"
 Write-Output "INUSE_BEFORE=$inUseBefore"
 Write-Output "INUSE_AFTER=$inUseAfter"
 Write-Output "FREED=$freedMB"
-Write-Output "EMPTY=$emptySuccess"
-Write-Output "LIMIT=$limitSuccess"
+Write-Output "EMPTY_OK=$emptyOk"
+Write-Output "HARD_OK=$hardOk"
 Write-Output "FAIL=$fail"
 '''
-    notify(10, "正在强制换出后台进程到虚拟内存...")
+    notify(10, "正在激进压缩所有后台进程到虚拟内存...")
     out, err, rc = _run_ps(script, timeout=90)
 
     total_mb = 0.0
     inuse_before = 0.0
     inuse_after = 0.0
     freed_mb = 0.0
-    empty_success = 0
-    limit_success = 0
+    empty_ok = 0
+    hard_ok = 0
     fail = 0
 
     for line in out.splitlines():
@@ -203,10 +213,10 @@ Write-Output "FAIL=$fail"
                 inuse_after = float(line.split("=", 1)[1])
             elif line.startswith("FREED="):
                 freed_mb = float(line.split("=", 1)[1])
-            elif line.startswith("EMPTY="):
-                empty_success = int(line.split("=", 1)[1])
-            elif line.startswith("LIMIT="):
-                limit_success = int(line.split("=", 1)[1])
+            elif line.startswith("EMPTY_OK="):
+                empty_ok = int(line.split("=", 1)[1])
+            elif line.startswith("HARD_OK="):
+                hard_ok = int(line.split("=", 1)[1])
             elif line.startswith("FAIL="):
                 fail = int(line.split("=", 1)[1])
         except Exception:
@@ -224,8 +234,8 @@ Write-Output "FAIL=$fail"
         f"优化前使用: {inuse_before:.0f} MB",
         f"优化后使用: {inuse_after:.0f} MB",
         f"释放: {freed_mb:.0f} MB ({pct:.0f}%)",
-        f"EmptyWorkingSet: {empty_success} 个进程",
-        f"硬限制工作集: {limit_success} 个进程",
+        f"EmptyWorkingSet: {empty_ok} 个进程",
+        f"硬限制工作集: {hard_ok} 个进程",
     ]
 
     msg = f"释放 {freed_mb:.0f} MB ({pct:.0f}%)，当前使用 {inuse_after:.0f} MB"
@@ -236,7 +246,7 @@ Write-Output "FAIL=$fail"
         "freed_mb": round(freed_mb, 1),
         "inuse_before_mb": round(inuse_before, 0),
         "inuse_after_mb": round(inuse_after, 0),
-        "processes_trimmed": empty_success,
+        "processes_trimmed": empty_ok,
         "processes_killed": 0,
         "services_stopped": 0,
         "services_disabled": 0,

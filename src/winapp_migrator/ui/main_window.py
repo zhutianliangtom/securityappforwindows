@@ -795,10 +795,12 @@ class MainWindow(QMainWindow):
         reply = QMessageBox.question(
             self,
             "确认优化内存",
-            "将强制把后台进程/服务的内存页面换出到虚拟内存（硬盘），\n"
-            "释放物理 RAM 供前台程序使用。\n\n"
-            "不会终止任何进程。后台进程被访问时会从硬盘换回，\n"
-            "可能有短暂延迟，不影响前台程序。\n\n确定继续？",
+            "激进压缩模式：将强制把几乎所有后台进程/服务的内存\n"
+            "页面换出到虚拟内存（硬盘 pagefile.sys），释放物理 RAM。\n\n"
+            "⚠ 机械硬盘用户警告：切换后台窗口时可能严重卡顿，\n"
+            "因为进程页面需要从慢速硬盘重新读入内存。\n"
+            "SSD 用户通常无感。\n\n"
+            "仅保护前台窗口和核心系统进程（csrss、lsass、dwm 等）。\n\n确定继续？",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
         )
         if reply != QMessageBox.StandardButton.Yes:

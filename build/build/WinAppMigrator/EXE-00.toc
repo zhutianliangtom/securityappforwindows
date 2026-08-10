@@ -81,7 +81,7 @@
  [],
  False,
  False,
- 1786388400,
+ 1786388863,
  [('runw.exe',
    'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
    'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyInstaller\\bootloader\\Windows-64bit-intel\\runw.exe',

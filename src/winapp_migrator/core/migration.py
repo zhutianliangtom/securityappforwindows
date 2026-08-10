@@ -1,7 +1,5 @@
 import os
 import shutil
-import ctypes
-import struct
 from pathlib import Path
 from typing import Callable, Optional
 
@@ -9,11 +7,6 @@ from winapp_migrator.utils.helpers import setup_logging, format_size
 from winapp_migrator.core.permissions import take_ownership
 
 logger = setup_logging()
-
-FSCTL_SET_REPARSE_POINT = 0x000900A4
-FSCTL_GET_REPARSE_POINT = 0x000900A8
-FSCTL_DELETE_REPARSE_POINT = 0x000900AC
-IO_REPARSE_TAG_MOUNT_POINT = 0xA0000003
 
 class MigrationResult:
     def __init__(self, success: bool, message: str, details: list[str] = None):
@@ -120,52 +113,15 @@ def _verify_copy(src: Path, dst: Path) -> bool:
         return False
 
 def _create_junction(link: Path, target: Path):
-    link.mkdir(parents=True, exist_ok=False)
-    target_abs = str(target.resolve())
-    target_nt = "\\??\\" + target_abs
-
-    hFile = ctypes.windll.kernel32.CreateFileW(
-        str(link),
-        0x40000000,
-        0,
-        None,
-        3,
-        0x02200000,
-        None,
-    )
-    if hFile == -1:
-        raise ctypes.WinError(ctypes.get_last_error())
-
+    """在 link 处创建指向 target 的目录联接（junction），链接目录由标准库内部创建"""
+    import _winapi
     try:
-        target_bytes = target_nt.encode("utf-16-le")
-        substitute_name_offset = 0
-        substitute_name_length = len(target_bytes)
-        print_name_offset = substitute_name_length
-        print_name_length = len(target_bytes)
-
-        reparse_data = struct.pack(
-            "<LHHHHHH",
-            IO_REPARSE_TAG_MOUNT_POINT,
-            substitute_name_length + print_name_length + 8,
-            0,
-            substitute_name_offset,
-            substitute_name_length,
-            print_name_offset,
-            print_name_length,
-        ) + target_bytes + target_bytes
-
-        bytes_returned = ctypes.c_ulong(0)
-        success = ctypes.windll.kernel32.DeviceIoControl(
-            hFile,
-            FSCTL_SET_REPARSE_POINT,
-            reparse_data,
-            len(reparse_data),
-            None,
-            0,
-            ctypes.byref(bytes_returned),
-            None,
-        )
-        if not success:
-            raise ctypes.WinError(ctypes.get_last_error())
-    finally:
-        ctypes.windll.kernel32.CloseHandle(hFile)
+        # 参数顺序: (目标路径, 链接路径)；link 必须不存在
+        _winapi.CreateJunction(str(target.resolve()), str(link))
+    except Exception:
+        # 清理标准库失败时可能残留的空链接目录，避免影响后续回滚
+        try:
+            os.rmdir(link)
+        except OSError:
+            pass
+        raise

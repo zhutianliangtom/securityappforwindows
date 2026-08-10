@@ -1,4 +1,4 @@
-"""内存优化模块：一键释放后台进程内存、清理缓存、禁用不必要的 Windows 服务"""
+"""内存优化模块：激进全量压缩工作集 + 清理系统备用缓存 + 终止进程 + 禁用服务"""
 
 import base64
 import os
@@ -7,78 +7,17 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-# 不必要的后台服务（可安全禁用/停止）
+# 不必要的后台服务
 _UNNECESSARY_SERVICES = [
-    "EdgeUpdate",
-    "MicrosoftEdgeElevationService",
-    "edgeupdate",
-    "edgeupdatem",
-    "wuauserv",             # Windows Update
-    "UsoSvc",               # Update Orchestrator
-    "WaaSMedicSvc",         # Windows Update Medic
-    "DoSvc",                # Delivery Optimization
-    "DiagTrack",            # Connected User Experiences and Telemetry
-    "dmwappushservice",     # Device Management WAP Push
-    "MapsBroker",           # Downloaded Maps Manager
-    "lfsvc",                # Geolocation Service
-    "XblAuthManager",       # Xbox Live Auth Manager
-    "XblGameSave",          # Xbox Live Game Save
-    "XboxNetApiSvc",        # Xbox Live Networking
-    "BcastDVRUserService",  # GameDVR and Broadcast
-    "WSearch",              # Windows Search
-    "SysMain",              # SysMain (Superfetch)
-    "FontCache",            # Windows Font Cache
-    "OneSyncSvc",           # Sync Host
-    "PimIndexMaintenanceSvc",
-    "MessagingService",
-    "wlidsvc",              # Microsoft Account Sign-in Assistant
-    "WpcMonSvc",            # Parental Controls
-    "WerSvc",               # Windows Error Reporting
-    "WMPNetworkSvc",
-    "LicenseManager",
-    "TabletInputService",
-    "PrintNotify",
-    "Fax",
-    "seclogon",
-    "RemoteRegistry",
-    "shpamsvc",
-    "RetailDemo",
-    "wisvc",
-    "SDRSVC",
-    "WbioSrvc",
-    "WpnService",
-]
-
-# 可安全清理内存的后台进程名模式（不杀进程，只清理 working set）
-_TRIM_PATTERNS = [
-    "msedge", "chrome", "firefox", "brave", "opera",
-    "explorer", "shellexperiencehost",
-    "onedrive", "teams", "slack", "discord", "spotify",
-    "searchhost", "startmenuexperiencehost",
-    "textinputhost", "systemsettings",
-    "phoneexperiencehost", "yourphone",
-    "widgets", "gamebar", "gamebarftbroker",
-    "snippingtool", "notepad", "calculator",
-    "taskmgr", "resmon", "perfmon",
-    "office", "winword", "excel", "powerpnt", "outlook",
-    "acrobat", "foxit", "reader",
-    "vscode", "code", "notepad++",
-    "steam", "epicgameslauncher", "battle.net",
-    "java", "javaw", "python",
-    "conhost", "cmd",
-    "svchost", "dllhost", "rundll32",
-    "ctfmon", "spoolsv", "audiodg",
-    "msmpeng", "securityhealthsystray", "securityhealthservice",
-    "smartscreen",
-]
-
-# 可安全终止的常驻后台进程（非关键，终止后用户需要时手动启动）
-_KILLABLE_PATTERNS = [
-    "msedge", "chrome", "firefox", "brave", "opera",
-    "onedrive", "teams", "slack", "discord", "spotify",
-    "yourphone", "gamebarftbroker",
-    "officeclicktorun", "groove",
-    "skype", "skypehost",
+    "EdgeUpdate", "MicrosoftEdgeElevationService", "edgeupdate", "edgeupdatem",
+    "wuauserv", "UsoSvc", "WaaSMedicSvc", "DoSvc", "DiagTrack",
+    "dmwappushservice", "MapsBroker", "lfsvc",
+    "XblAuthManager", "XblGameSave", "XboxNetApiSvc", "BcastDVRUserService",
+    "WSearch", "SysMain", "FontCache", "OneSyncSvc",
+    "PimIndexMaintenanceSvc", "MessagingService", "wlidsvc", "WpcMonSvc",
+    "WerSvc", "WMPNetworkSvc", "LicenseManager", "TabletInputService",
+    "PrintNotify", "Fax", "seclogon", "RemoteRegistry", "shpamsvc",
+    "RetailDemo", "wisvc", "SDRSVC", "WbioSrvc", "WpnService",
 ]
 
 # 系统关键进程名，绝不触碰
@@ -92,9 +31,23 @@ _PROTECTED_NAMES = {
     "registry", "memcompression",
 }
 
+# 可安全终止的常驻后台进程
+_KILLABLE_PATTERNS = [
+    "msedge", "chrome", "firefox", "brave", "opera",
+    "onedrive", "teams", "slack", "discord", "spotify",
+    "yourphone", "gamebarftbroker",
+    "officeclicktorun", "groove", "skype", "skypehost",
+]
+
 
 def _ps_quote(s: str) -> str:
     return "'" + s.replace("'", "''") + "'"
+
+
+def _encode_json(obj) -> str:
+    import json
+    raw = json.dumps(obj, ensure_ascii=False)
+    return base64.b64encode(raw.encode("utf-16-le")).decode("ascii")
 
 
 def _run_ps(script: str, timeout: int = 120) -> tuple:
@@ -114,15 +67,8 @@ def _run_ps(script: str, timeout: int = 120) -> tuple:
         return "", str(e), 1
 
 
-def _encode_json(obj) -> str:
-    """将 Python 对象编码为 base64 UTF-16LE JSON，供 PowerShell 解码"""
-    import json
-    raw = json.dumps(obj, ensure_ascii=False)
-    return base64.b64encode(raw.encode("utf-16-le")).decode("ascii")
-
-
 def optimize_memory(progress_callback=None) -> dict:
-    """一键优化内存"""
+    """一键激进优化内存"""
 
     def notify(pct: int, msg: str):
         logger.info("[%d%%] %s", pct, msg)
@@ -132,237 +78,205 @@ def optimize_memory(progress_callback=None) -> dict:
             except Exception:
                 pass
 
-    details = []
-    total_freed_mb = 0.0
-    processes_trimmed = 0
-    processes_killed = 0
-    services_stopped = 0
-    services_disabled = 0
-
-    # ---- 阶段 1：获取前台进程 PID ----
-    notify(5, "获取前台进程...")
-    script_fg = r'''
-Add-Type -Name Foreground -Namespace WAM -MemberDefinition @"
-[DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
-[DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint pid);
-"@
-$hwnd = [WAM.Foreground]::GetForegroundWindow()
-$pid = 0
-[WAM.Foreground]::GetWindowThreadProcessId($hwnd, [ref]$pid)
-Write-Output $pid
-'''
-    out, _, _ = _run_ps(script_fg, timeout=10)
-    try:
-        foreground_pid = int(out.strip())
-    except Exception:
-        foreground_pid = 0
-    notify(8, f"前台 PID: {foreground_pid}")
-
-    # 保护列表：前台进程 + 当前进程 + 系统关键进程
-    protected_pids = {foreground_pid} if foreground_pid else set()
-    protected_pids.add(os.getpid())
-
-    # ---- 阶段 2：释放后台进程 Working Set ----
-    notify(10, "释放后台进程内存...")
-    patterns_b64 = _encode_json(_TRIM_PATTERNS)
-    protected_b64 = _encode_json(list(protected_pids))
+    protected_b64 = _encode_json([os.getpid()])
     protected_names_b64 = _encode_json(list(_PROTECTED_NAMES))
+    killable_b64 = _encode_json(_KILLABLE_PATTERNS)
+    svc_b64 = _encode_json(_UNNECESSARY_SERVICES)
 
-    script_trim = rf'''
-$patterns = [Text.Encoding]::Unicode.GetString([Convert]::FromBase64String({_ps_quote(patterns_b64)})) | ConvertFrom-Json
-$protected = [Text.Encoding]::Unicode.GetString([Convert]::FromBase64String({_ps_quote(protected_b64)})) | ConvertFrom-Json
-$protectedNames = [Text.Encoding]::Unicode.GetString([Convert]::FromBase64String({_ps_quote(protected_names_b64)})) | ConvertFrom-Json
+    # ============================================================
+    # 单一大脚本：获取基线 -> 全量压缩 -> 清理系统缓存 -> 杀进程 -> 禁服务 -> 获取结果
+    # ============================================================
+    notify(5, "开始激进内存优化...")
 
-$sig = @"
+    script = rf'''
+$ErrorActionPreference = "SilentlyContinue"
+
+# --- P/Invoke 定义 ---
+$sigSetWS = @"
+[DllImport("kernel32.dll", SetLastError=true)]
+public static extern bool SetProcessWorkingSetSize(IntPtr hProcess, IntPtr dwMin, IntPtr dwMax);
 [DllImport("kernel32.dll", SetLastError=true)]
 public static extern bool EmptyWorkingSet(IntPtr hProcess);
 "@
-Add-Type -Name EmptyWS -Namespace WAM -MemberDefinition $sig
+Add-Type -Name MemOpt -Namespace WAM -MemberDefinition $sigSetWS
 
-$count = 0
-$freed = 0
+$sigFG = @"
+[DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+[DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint pid);
+"@
+Add-Type -Name FG -Namespace WAM -MemberDefinition $sigFG
 
-Get-Process | ForEach-Object {{
-    $p = $_
-    if ($protected -contains $p.Id) {{ return }}
-    $name = $p.ProcessName.ToLower()
-    if ($protectedNames -contains $name) {{ return }}
-    $match = $false
-    foreach ($pat in $patterns) {{
-        if ($name -like "*$pat*") {{ $match = $true; break }}
-    }}
-    if (-not $match) {{ return }}
-    try {{
-        $ws_before = $p.WorkingSet64
-        $result = [WAM.EmptyWS]::EmptyWorkingSet($p.Handle)
-        if ($result) {{
-            $p.Refresh()
-            $ws_after = $p.WorkingSet64
-            if ($ws_before -gt $ws_after) {{
-                $freed += ($ws_before - $ws_after)
-                $count++
-            }}
-        }}
-    }} catch {{ }}
-}}
-
-Write-Output "COUNT=$count"
-Write-Output "FREED=$freed"
-'''
-    out, _, _ = _run_ps(script_trim, timeout=60)
-    for line in out.splitlines():
-        line = line.strip()
-        if line.startswith("COUNT="):
-            try:
-                processes_trimmed = int(line.split("=", 1)[1])
-            except Exception:
-                pass
-        elif line.startswith("FREED="):
-            try:
-                total_freed_mb = int(line.split("=", 1)[1]) / (1024 * 1024)
-            except Exception:
-                pass
-
-    details.append(f"释放了 {processes_trimmed} 个后台进程的工作集 ({total_freed_mb:.0f} MB)")
-    notify(40, f"释放 {processes_trimmed} 个进程内存 ({total_freed_mb:.0f} MB)")
-
-    # ---- 阶段 3：清理 .NET GC 和系统缓存 ----
-    notify(50, "清理系统缓存...")
-    script_cache = r'''
-# 触发 .NET GC 回收（释放 CLR 堆内存）
-[System.GC]::Collect()
-[System.GC]::WaitForPendingFinalizers()
-[System.GC]::Collect()
-
-# 获取当前空闲内存
-$ram = (Get-CimInstance Win32_OperatingSystem).FreePhysicalMemory
-Write-Output "FREE=$ram"
-'''
-    out, _, _ = _run_ps(script_cache, timeout=20)
-    details.append("清理了 .NET 运行时缓存")
-    notify(60, "系统缓存清理完成")
-
-    # ---- 阶段 4：终止不必要的后台进程 ----
-    notify(65, "终止不必要的后台进程...")
-    kill_b64 = _encode_json(_KILLABLE_PATTERNS)
-
-    script_kill = rf'''
-$patterns = [Text.Encoding]::Unicode.GetString([Convert]::FromBase64String({_ps_quote(kill_b64)})) | ConvertFrom-Json
+# --- 保护列表 ---
 $protected = [Text.Encoding]::Unicode.GetString([Convert]::FromBase64String({_ps_quote(protected_b64)})) | ConvertFrom-Json
 $protectedNames = [Text.Encoding]::Unicode.GetString([Convert]::FromBase64String({_ps_quote(protected_names_b64)})) | ConvertFrom-Json
-$killed = 0
+$killable = [Text.Encoding]::Unicode.GetString([Convert]::FromBase64String({_ps_quote(killable_b64)})) | ConvertFrom-Json
+$svcNames = [Text.Encoding]::Unicode.GetString([Convert]::FromBase64String({_ps_quote(svc_b64)})) | ConvertFrom-Json
+
+# 前台进程 PID
+$hwnd = [WAM.FG]::GetForegroundWindow()
+$fgPid = 0
+[WAM.FG]::GetWindowThreadProcessId($hwnd, [ref]$fgPid)
+if ($fgPid -gt 0) {{ $protected += $fgPid }}
+
+# --- 基线内存 ---
+$ramBefore = (Get-CimInstance Win32_OperatingSystem).FreePhysicalMemory * 4KB / 1MB
+
+# ============================================================
+# 阶段 1: 全量压缩所有非保护进程工作集 (SetProcessWorkingSetSize -1 -1)
+# ============================================================
+$trimCount = 0
+$negativeOne = [IntPtr]::new(-1)
 
 Get-Process | ForEach-Object {{
     $p = $_
     if ($protected -contains $p.Id) {{ return }}
-    $name = $p.ProcessName.ToLower()
-    if ($protectedNames -contains $name) {{ return }}
-    $match = $false
-    foreach ($pat in $patterns) {{
-        if ($name -like "*$pat*") {{ $match = $true; break }}
-    }}
-    if (-not $match) {{ return }}
-    # 额外检查：只杀没有窗口的后台进程
+    if ($protectedNames -contains $p.ProcessName.ToLower()) {{ return }}
     try {{
-        if ($p.MainWindowHandle -ne [IntPtr]::Zero) {{ return }}
-    }} catch {{ }}
-    try {{
-        Stop-Process -Id $p.Id -Force -ErrorAction Stop
-        $killed++
+        [WAM.MemOpt]::SetProcessWorkingSetSize($p.Handle, $negativeOne, $negativeOne) | Out-Null
+        $trimCount++
     }} catch {{ }}
 }}
-Write-Output "KILLED=$killed"
-'''
-    out, _, _ = _run_ps(script_kill, timeout=30)
-    for line in out.splitlines():
-        line = line.strip()
-        if line.startswith("KILLED="):
-            try:
-                processes_killed = int(line.split("=", 1)[1])
-            except Exception:
-                pass
 
-    if processes_killed > 0:
-        details.append(f"终止了 {processes_killed} 个不必要的后台进程")
-    notify(75, f"终止 {processes_killed} 个后台进程")
+# ============================================================
+# 阶段 2: 清理系统备用缓存（压缩 System 进程 PID 4 的工作集）
+# ============================================================
+try {{
+    $sysProc = Get-Process -Id 4 -ErrorAction Stop
+    [WAM.MemOpt]::EmptyWorkingSet($sysProc.Handle) | Out-Null
+    [WAM.MemOpt]::SetProcessWorkingSetSize($sysProc.Handle, $negativeOne, $negativeOne) | Out-Null
+}} catch {{ }}
 
-    # ---- 阶段 5：停止并禁用不必要的 Windows 服务 ----
-    notify(80, "优化 Windows 服务...")
-    svc_b64 = _encode_json(_UNNECESSARY_SERVICES)
+# 额外：压缩 svchost / dllhost / rundll32 等系统宿主进程
+Get-Process | Where-Object {{
+    $n = $_.ProcessName.ToLower()
+    ($n -eq "svchost" -or $n -eq "dllhost" -or $n -eq "rundll32" -or $n -eq "conhost")
+}} | ForEach-Object {{
+    try {{
+        [WAM.MemOpt]::SetProcessWorkingSetSize($_.Handle, $negativeOne, $negativeOne) | Out-Null
+    }} catch {{ }}
+}}
 
-    script_svc = rf'''
-$svcNames = [Text.Encoding]::Unicode.GetString([Convert]::FromBase64String({_ps_quote(svc_b64)})) | ConvertFrom-Json
+# ============================================================
+# 阶段 3: 终止不必要的后台进程（仅无窗口的）
+# ============================================================
+$killed = 0
+Get-Process | ForEach-Object {{
+    $p = $_
+    if ($protected -contains $p.Id) {{ return }}
+    if ($protectedNames -contains $p.ProcessName.ToLower()) {{ return }}
+    $match = $false
+    foreach ($pat in $killable) {{
+        if ($p.ProcessName.ToLower() -like "*$pat*") {{ $match = $true; break }}
+    }}
+    if (-not $match) {{ return }}
+    try {{ if ($p.MainWindowHandle -ne [IntPtr]::Zero) {{ return }} }} catch {{ }}
+    try {{ Stop-Process -Id $p.Id -Force -ErrorAction Stop; $killed++ }} catch {{ }}
+}}
+
+# ============================================================
+# 阶段 4: 停止/禁用不必要的服务
+# ============================================================
 $stopped = 0
 $disabled = 0
-
 foreach ($name in $svcNames) {{
     $svc = Get-Service -Name $name -ErrorAction SilentlyContinue
     if (-not $svc) {{ continue }}
     if ($svc.Status -eq "Running") {{
-        try {{
-            Stop-Service -Name $name -Force -ErrorAction Stop
-            $stopped++
-        }} catch {{ }}
+        try {{ Stop-Service -Name $name -Force -ErrorAction Stop; $stopped++ }} catch {{ }}
     }}
     if ($svc.StartType -ne "Disabled") {{
-        try {{
-            Set-Service -Name $name -StartupType Disabled -ErrorAction Stop
-            $disabled++
-        }} catch {{ }}
+        try {{ Set-Service -Name $name -StartupType Disabled -ErrorAction Stop; $disabled++ }} catch {{ }}
     }}
 }}
+
+# 额外：停止 WSearch 和 SysMain 如果正在运行
+$extraSvcs = @("WSearch", "SysMain")
+foreach ($name in $extraSvcs) {{
+    $svc = Get-Service -Name $name -ErrorAction SilentlyContinue
+    if ($svc -and $svc.Status -eq "Running") {{
+        try {{ Stop-Service -Name $name -Force -ErrorAction Stop; $stopped++ }} catch {{ }}
+    }}
+    if ($svc -and $svc.StartType -ne "Disabled") {{
+        try {{ Set-Service -Name $name -StartupType Disabled -ErrorAction Stop; $disabled++ }} catch {{ }}
+    }}
+}}
+
+# ============================================================
+# 结果统计
+# ============================================================
+$ramAfter = (Get-CimInstance Win32_OperatingSystem).FreePhysicalMemory * 4KB / 1MB
+$freed = $ramAfter - $ramBefore
+
+Write-Output "BASELINE=$ramBefore"
+Write-Output "AFTER=$ramAfter"
+Write-Output "FREED=$freed"
+Write-Output "TRIM=$trimCount"
+Write-Output "KILLED=$killed"
 Write-Output "STOPPED=$stopped"
 Write-Output "DISABLED=$disabled"
 '''
-    out, _, _ = _run_ps(script_svc, timeout=30)
+    notify(15, "执行优化脚本...")
+    out, err, rc = _run_ps(script, timeout=90)
+
+    # 解析结果
+    baseline_mb = 0.0
+    after_mb = 0.0
+    freed_mb = 0.0
+    trim_count = 0
+    killed = 0
+    stopped = 0
+    disabled = 0
+
     for line in out.splitlines():
         line = line.strip()
-        if line.startswith("STOPPED="):
-            try:
-                services_stopped = int(line.split("=", 1)[1])
-            except Exception:
-                pass
-        elif line.startswith("DISABLED="):
-            try:
-                services_disabled = int(line.split("=", 1)[1])
-            except Exception:
-                pass
+        try:
+            if line.startswith("BASELINE="):
+                baseline_mb = float(line.split("=", 1)[1])
+            elif line.startswith("AFTER="):
+                after_mb = float(line.split("=", 1)[1])
+            elif line.startswith("FREED="):
+                freed_mb = float(line.split("=", 1)[1])
+            elif line.startswith("TRIM="):
+                trim_count = int(line.split("=", 1)[1])
+            elif line.startswith("KILLED="):
+                killed = int(line.split("=", 1)[1])
+            elif line.startswith("STOPPED="):
+                stopped = int(line.split("=", 1)[1])
+            elif line.startswith("DISABLED="):
+                disabled = int(line.split("=", 1)[1])
+        except Exception:
+            pass
 
-    if services_stopped > 0:
-        details.append(f"停止了 {services_stopped} 个不必要的服务")
-    if services_disabled > 0:
-        details.append(f"禁用了 {services_disabled} 个不必要的服务")
-    notify(90, f"服务: 停止 {services_stopped}, 禁用 {services_disabled}")
+    if err and "timeout" not in err.lower():
+        logger.warning("PowerShell stderr: %s", err[:500])
 
-    # ---- 阶段 6：获取最终可用内存 ----
-    notify(95, "计算优化效果...")
-    script_ram = r'$ram = (Get-CimInstance Win32_OperatingSystem).FreePhysicalMemory; Write-Output $ram'
-    out, _, _ = _run_ps(script_ram, timeout=10)
-    try:
-        free_ram_mb = int(out.strip()) * 4 / 1024
-    except Exception:
-        free_ram_mb = 0
+    notify(100, "优化完成")
 
-    notify(100, "内存优化完成")
+    # 汇总
+    details = []
+    details.append(f"优化前可用: {baseline_mb:.0f} MB")
+    details.append(f"优化后可用: {after_mb:.0f} MB")
+    details.append(f"释放内存: {freed_mb:.0f} MB")
+    details.append(f"压缩了 {trim_count} 个进程的工作集")
+    if killed > 0:
+        details.append(f"终止了 {killed} 个后台进程")
+    if stopped > 0:
+        details.append(f"停止了 {stopped} 个服务")
+    if disabled > 0:
+        details.append(f"禁用了 {disabled} 个服务")
 
-    # 汇总消息
-    msg_parts = ["优化完成"]
-    if total_freed_mb > 1:
-        msg_parts.append(f"释放内存约 {total_freed_mb:.0f} MB")
-    if processes_killed > 0:
-        msg_parts.append(f"终止 {processes_killed} 个后台进程")
-    if services_stopped + services_disabled > 0:
-        msg_parts.append(f"优化 {services_stopped + services_disabled} 个服务")
-    msg_parts.append(f"当前可用 {free_ram_mb:.0f} MB")
+    pct = freed_mb / max(baseline_mb, 1) * 100 if baseline_mb > 0 else 0
+    msg = f"释放 {freed_mb:.0f} MB ({pct:.0f}%)，当前可用 {after_mb:.0f} MB"
 
     return {
         "success": True,
-        "message": "；".join(msg_parts),
-        "freed_mb": round(total_freed_mb, 1),
-        "processes_trimmed": processes_trimmed,
-        "processes_killed": processes_killed,
-        "services_stopped": services_stopped,
-        "services_disabled": services_disabled,
-        "free_ram_mb": round(free_ram_mb, 0),
+        "message": msg,
+        "freed_mb": round(freed_mb, 1),
+        "baseline_mb": round(baseline_mb, 0),
+        "after_mb": round(after_mb, 0),
+        "processes_trimmed": trim_count,
+        "processes_killed": killed,
+        "services_stopped": stopped,
+        "services_disabled": disabled,
         "details": details,
     }

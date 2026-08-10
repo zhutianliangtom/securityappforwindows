@@ -115,9 +115,6 @@ class MainWindow(QMainWindow):
         title.setStyleSheet(f"font-size: 16px; font-weight: 700; color: {PALETTE['text']};")
         layout.addWidget(title)
 
-        subtitle = QLabel("Windows 应用无损迁移工具")
-        subtitle.setStyleSheet(f"font-size: 12px; color: {PALETTE['text_secondary']};")
-        layout.addWidget(subtitle)
         layout.addStretch()
 
         self.admin_label = QLabel("⚠ 未提权")

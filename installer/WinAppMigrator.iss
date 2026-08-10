@@ -26,7 +26,8 @@ UninstallDisplayIcon={app}\{#MyAppExeName}
 WizardSizePercent=120
 
 [Languages]
-Name: "chinesesimplified"; MessagesFile: "compiler:Languages\ChineseSimplified.isl"
+; Inno Setup 7 不带中文语言文件，用默认英文（反正我们已经把关键文案全改成了中文+emoji）
+Name: "english"; MessagesFile: "compiler:Default.isl"
 
 ; ============================================================
 ; 自定义消息 — 注入灵魂

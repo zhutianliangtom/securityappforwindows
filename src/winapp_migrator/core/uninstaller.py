@@ -8,7 +8,7 @@ from winapp_migrator.core.data_dirs import detect_data_dirs
 from winapp_migrator.core.registry import scan_app_entries, remove_app_entries
 from winapp_migrator.core.shortcut import scan_shortcuts, remove_shortcuts
 from winapp_migrator.core.uwp import UWPManager
-from winapp_migrator.core.migration import _terminate_processes
+from winapp_migrator.core.migration import _terminate_processes, is_360_self_protection
 
 logger = setup_logging()
 
@@ -72,6 +72,8 @@ class Uninstaller:
 
         notify(10, "强制结束占用进程...")
         blocked = _terminate_processes(plan.root)
+        result["blocked"] = blocked
+        result["blocked_360"] = is_360_self_protection(blocked, plan.root)
         if blocked:
             result["failed"].append("以下进程无法自动结束（可能受保护）: " + ", ".join(blocked))
 

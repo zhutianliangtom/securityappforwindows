@@ -34,11 +34,6 @@ def migrate_folder(
         if progress_callback:
             progress_callback(percent, msg)
 
-    report(3, "结束占用进程...")
-    blocked = _terminate_processes(source)
-    if blocked:
-        report(3, f"以下进程无法自动结束（可能受保护），请手动关闭后重试: {', '.join(blocked)}")
-
     report(5, "获取目标目录权限...")
     parent = source.parent
     if not os.access(parent, os.W_OK):
@@ -275,6 +270,16 @@ $blocked | Select-Object -Unique
         return [ln.strip() for ln in text.splitlines() if ln.strip()]
     except Exception:
         return []
+
+
+def is_360_self_protection(blocked: list, directory: Path) -> bool:
+    """判断被拦截的进程是否来自 360（自我保护会拦截终止请求），用于 UI 弹窗引导"""
+    if any("360" in (name or "").lower() for name in blocked):
+        return True
+    try:
+        return "360" in str(directory.resolve()).lower()
+    except Exception:
+        return False
 
 
 def _create_junction(link: Path, target: Path):

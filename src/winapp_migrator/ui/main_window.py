@@ -633,9 +633,25 @@ class MainWindow(QMainWindow):
         self.progress_anim.setEndValue(percent)
         self.progress_anim.start()
 
+    def _warn_360_blocked(self, blocked: list):
+        """360 自我保护拦截终止时的引导弹窗"""
+        names = "、".join(blocked) if blocked else "360安全卫士相关进程"
+        QMessageBox.warning(
+            self,
+            "360 自我保护",
+            "检测到 360 安全卫士的进程无法被强制结束。\n"
+            "360 的自我保护会在系统内核层拦截强制终止，属于其正常安全机制。\n\n"
+            "请任选其一操作后再重试：\n"
+            "1. 右键 360 托盘图标 → 退出 360\n"
+            "2. 打开 360 设置 → 防护中心 → 关闭「自我保护」\n\n"
+            f"未能结束的进程：{names}",
+        )
+
     def _on_migrate_finished(self, result: dict):
         self.migrate_btn.setEnabled(True)
         self.refresh_btn.setEnabled(True)
+        if result.get("blocked_360"):
+            self._warn_360_blocked(result.get("blocked") or [])
         if result.get("success"):
             self.progress.setValue(100)
             QMessageBox.information(
@@ -696,6 +712,8 @@ class MainWindow(QMainWindow):
         self.migrate_btn.setEnabled(True)
         self.refresh_btn.setEnabled(True)
         self.uninstall_btn.setEnabled(True)
+        if result.get("blocked_360"):
+            self._warn_360_blocked(result.get("blocked") or [])
         if result.get("success"):
             self.progress.setValue(100)
             removed = result.get("removed_dirs") or []

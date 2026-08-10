@@ -4,7 +4,7 @@ from typing import Callable, List, Optional
 
 from winapp_migrator.utils.helpers import setup_logging, safe_remove
 from winapp_migrator.core.app_scanner import AppInfo
-from winapp_migrator.core.migration import migrate_folder
+from winapp_migrator.core.migration import migrate_folder, _terminate_processes, is_360_self_protection
 from winapp_migrator.core.registry import RegistryPathUpdater
 from winapp_migrator.core.shortcut import update_shortcuts
 from winapp_migrator.core.uwp import UWPManager
@@ -29,7 +29,7 @@ class MigrationOrchestrator:
         logger.info("开始迁移 %s (%s): %s -> %s", app.name, app.app_type, source, target)
 
         if app.app_type == "UWP":
-            _terminate_processes(source)
+            blocked = _terminate_processes(source)
             success, message = UWPManager.migrate_package(
                 app.package_name or app.name,
                 Path(target.anchor),  # UWP 按盘符注册，取目标盘
@@ -41,24 +41,40 @@ class MigrationOrchestrator:
                 "source": str(source),
                 "target": str(target),
                 "registry_changed": 0,
+                "blocked": blocked,
+                "blocked_360": is_360_self_protection(blocked, source),
             }
 
         # 1. 完全移动主目录 + 各数据目录
         self._notify(progress_callback, 5, "开始迁移...")
         moved: List[tuple[Path, Path]] = []
+        all_blocked = _terminate_processes(source)
+        if all_blocked:
+            self._notify(progress_callback, 3, f"结束占用进程... 以下进程无法自动结束: {', '.join(all_blocked)}")
         result = migrate_folder(source, target, progress_callback, mode="move")
         if not result.success:
-            return {"success": False, "message": result.message}
+            return {
+                "success": False,
+                "message": result.message,
+                "blocked": all_blocked,
+                "blocked_360": is_360_self_protection(all_blocked, source),
+            }
         moved.append((source, target))
 
         for extra in extra_dirs or []:
             # 数据目录跟随主目标位置：{目标路径}_Data\{数据目录名}
             extra_target = target.parent / (target.name + "_Data") / extra.name
             self._notify(progress_callback, None, f"迁移数据目录: {extra}")
+            all_blocked += _terminate_processes(extra)
             r = migrate_folder(extra, extra_target, progress_callback, mode="move")
             if not r.success:
                 self._rollback(moved)
-                return {"success": False, "message": f"数据目录迁移失败: {extra}\n{r.message}"}
+                return {
+                    "success": False,
+                    "message": f"数据目录迁移失败: {extra}\n{r.message}",
+                    "blocked": all_blocked,
+                    "blocked_360": is_360_self_protection(all_blocked, source),
+                }
             moved.append((extra, extra_target))
 
         # 2. 更新主安装目录的注册表 + 快捷方式引用（数据目录仅迁移文件）
@@ -91,6 +107,8 @@ class MigrationOrchestrator:
             "registry_changed": registry_changed,
             "registry_errors": registry_errors,
             "shortcuts_changed": shortcuts_changed,
+            "blocked": all_blocked,
+            "blocked_360": is_360_self_protection(all_blocked, source),
         }
 
     def _rollback(self, moved: List[tuple[Path, Path]]):

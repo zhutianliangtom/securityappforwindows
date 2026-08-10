@@ -174,7 +174,6 @@ class MainWindow(QMainWindow):
         search_layout.addWidget(self.search_edit)
 
         self.refresh_btn = SecondaryButton("重新扫描")
-        self.refresh_btn.setFixedWidth(100)
         self.refresh_btn.clicked.connect(self._start_scan)
         search_layout.addWidget(self.refresh_btn)
         layout.addLayout(search_layout)

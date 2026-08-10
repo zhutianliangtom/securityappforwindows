@@ -173,7 +173,7 @@ def scan_app_entries(install_location, display_name, hints) -> List:
                     for i in range(winreg.QueryInfoKey(key)[0]):
                         sub_name = winreg.EnumKey(key, i)
                         if _uninstall_key_matches(key, sub_name, install_lower, display_name):
-                            entries.append(("KEY", root, f"{base}\\{sub_name}"))
+                            entries.append(("KEY", root, f"{base}\\{sub_name}", ""))
             except FileNotFoundError:
                 pass
             except OSError:
@@ -203,7 +203,7 @@ def scan_app_entries(install_location, display_name, hints) -> List:
                     except (FileNotFoundError, OSError):
                         continue
                     if str(default).lower().startswith(install_lower):
-                        entries.append(("KEY", root, f"{base}\\{sub_name}"))
+                        entries.append(("KEY", root, f"{base}\\{sub_name}", ""))
         except FileNotFoundError:
             pass
         except OSError:

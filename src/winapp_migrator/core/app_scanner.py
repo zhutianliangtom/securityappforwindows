@@ -28,10 +28,29 @@ _SKIP_DIR_NAMES = {
     "windows portable devices", "windows security", "internet explorer",
     "reference assemblies", "microsoft", "microsoft analysis services",
     "microsoft sql server", "microsoft silverlight", "uninstall information",
+    "microsoft.net", "microsoft shared", "microsoft visual studio",
+    "microsoft visual studio installer", "microsoft visual studio shared",
     # 容器型目录名（非系统盘递归时其子目录才可能是 app）
     "program files", "program files (x86)", "programs", "software",
     "apps", "app", "application", "工具", "软件", "应用",
+    # 知名软件厂商容器目录（多为多个应用的总目录，不应作为单个 app）
+    "tencent", "alibaba", "baidu", "netease", "sogou", "bytedance",
+    "kingsoft", "oracle", "huawei", "xiaomi", "meizu",
 }
+
+# UWP 系统运行库包名特征（Get-AppxPackage 列出但不可作为应用迁移）
+_UWP_RUNTIME_HINTS = (
+    ".net.native", "vclibs", "microsoft.ui.xaml", "microsoft.services.",
+    "microsoft.windowsappruntime", "windowsappruntime", "microsoft.desktopappinstaller",
+)
+
+# 注册表显示名特征：系统组件/运行库/补丁，不应出现在迁移列表
+_SYSTEM_COMPONENT_NAMES = (
+    "microsoft visual c++", "microsoft .net", "update for", "security update",
+    "service pack", "microsoft edge", "webview2", "windows sdk",
+    "windows software development kit", "microsoft xna", "directx",
+    "microsoft silverlight", "msxml", "microsoft office click-to-run",
+)
 
 @dataclass
 class AppInfo:
@@ -93,6 +112,9 @@ class AppScanner:
             if isinstance(data, dict):
                 data = [data]
             for item in data:
+                pkg_name = item.get("Name", "")
+                if any(h in pkg_name.lower() for h in _UWP_RUNTIME_HINTS):
+                    continue  # 系统运行库/框架，不可迁移
                 loc = item.get("InstallLocation")
                 if not loc or not Path(loc).exists():
                     continue
@@ -143,11 +165,18 @@ class AppScanner:
                                 name = self._reg_value(sub, "DisplayName")
                                 if not name:
                                     continue
+                                # 系统组件/运行库/补丁（VC++、.NET、Edge 等）不可迁移
+                                low_name = name.lower()
+                                if any(k in low_name for k in _SYSTEM_COMPONENT_NAMES):
+                                    continue
                                 loc = self._reg_value(sub, "InstallLocation")
                                 icon = self._reg_value(sub, "DisplayIcon")
                                 uninstall = self._reg_value(sub, "UninstallString")
                                 loc_path = self._resolve_install_path(loc, icon, uninstall)
                                 if not loc_path or not loc_path.exists() or not loc_path.is_dir():
+                                    continue
+                                # MSI 包缓存目录（Package Cache）不是真实安装目录
+                                if "package cache" in str(loc_path).lower():
                                     continue
                                 if self._is_system_path(loc_path):
                                     continue

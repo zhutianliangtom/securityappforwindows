@@ -13,7 +13,7 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt, QSize, QThread, pyqtSignal, QPropertyAnimation, QEasingCurve
 from PyQt6.QtGui import QIcon, QFont, QFontDatabase
 
-from winapp_migrator.utils.helpers import setup_logging, is_admin, ensure_admin, format_size, get_directory_size
+from winapp_migrator.utils.helpers import setup_logging, is_admin, ensure_admin, format_size, get_directory_size, safe_remove
 from winapp_migrator.ui.styles import GLOBAL_QSS, PALETTE, apply_palette
 from winapp_migrator.ui.widgets import Card, PrimaryButton, SecondaryButton, AppItemDelegate, DataDirDialog, UninstallConfirmDialog
 from winapp_migrator.core.app_scanner import AppScanner, AppInfo
@@ -503,6 +503,32 @@ class MainWindow(QMainWindow):
         target = self._resolve_target()
         if target is None:
             return
+        # 目标目录已存在：提供 覆盖/自动改名 处理，避免直接失败
+        if target.exists():
+            reply = QMessageBox.question(
+                self,
+                "目标目录已存在",
+                f"目标位置已存在：<b>{target}</b>\n\n"
+                "选择「覆盖」将删除该目录后迁移（原内容不可恢复）；\n"
+                "选择「改名」将自动在名称后加序号迁移到新位置。",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+                | QMessageBox.StandardButton.Cancel,
+            )
+            if reply == QMessageBox.StandardButton.Yes:
+                if not safe_remove(target):
+                    QMessageBox.warning(self, "无法覆盖", f"无法删除已存在的目标目录：{target}")
+                    return
+            elif reply == QMessageBox.StandardButton.No:
+                n = 1
+                while True:
+                    cand = Path(f"{target}_{n}")
+                    if not cand.exists():
+                        target = cand
+                        break
+                    n += 1
+                self.target_path_edit.setText(str(target))
+            else:
+                return
         reply = QMessageBox.question(
             self,
             "确认迁移",

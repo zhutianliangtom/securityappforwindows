@@ -207,10 +207,16 @@ class MainWindow(QMainWindow):
         target_label.setStyleSheet("font-weight: 600;")
         layout.addWidget(target_label)
 
+        target_row = QHBoxLayout()
         self.target_path_edit = QLineEdit()
         self.target_path_edit.setPlaceholderText("自动生成，可修改（如 D:\\Apps\\微信）")
         self.drive_combo.currentIndexChanged.connect(self._refresh_target_path)
-        layout.addWidget(self.target_path_edit)
+        target_row.addWidget(self.target_path_edit, stretch=1)
+        browse_btn = QPushButton("浏览...")
+        browse_btn.setFixedWidth(80)
+        browse_btn.clicked.connect(self._browse_target)
+        target_row.addWidget(browse_btn)
+        layout.addLayout(target_row)
 
         self.info_label = QTextEdit()
         self.info_label.setReadOnly(True)
@@ -330,6 +336,22 @@ class MainWindow(QMainWindow):
         drive = self.drive_combo.currentData() or ""
         self.target_path_edit.setText(
             f"{drive}\\WinAppMigrator\\{self.selected_app.app_type}\\{self.selected_app.name}")
+
+    def _browse_target(self):
+        """通过文件夹对话框选择/新建目标位置（支持同盘迁移，选择后在所选目录下创建 app 目录）"""
+        app = self.selected_app
+        if not app:
+            return
+        current = self.target_path_edit.text().strip()
+        start = str(Path(current).parent) if current and Path(current).parent.is_dir() \
+            else str(Path(self.drive_combo.currentData() or "C:\\"))
+        folder = QFileDialog.getExistingDirectory(
+            self, "选择目标位置（可在对话框内新建文件夹）", start,
+            QFileDialog.Option.ShowDirsOnly)
+        if not folder:
+            return
+        self.target_path_edit.setText(str(Path(folder) / app.name))
+        self.target_path_edit.setModified(True)  # 用户自定义目标，后续不再自动覆盖
 
     def _resolve_target(self):
         """解析迁移目标路径：用户自定义或自动生成，并校验合法性"""

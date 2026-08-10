@@ -23,7 +23,7 @@ SolidCompression=yes
 WizardStyle=modern
 UninstallDisplayIcon={app}\{#MyAppExeName}
 ; 让安装向导大一点，更好地展示我们的抽象文学
-WizardSizePercent=120,120
+WizardSizePercent=120
 
 [Languages]
 Name: "chinesesimplified"; MessagesFile: "compiler:Languages\ChineseSimplified.isl"
@@ -43,9 +43,6 @@ ReadyLabel2=万事俱备，只欠东风（指你点一下"安装"按钮）。%n%
 
 ; --- 完成页 ---
 FinishedLabel=恭喜！安装完成 🎉🎉🎉%n%nWinAppMigrator 已就位，随时待命。%n%n现在打开它，开始拯救你的 C 盘吧，勇士！⚔️%n%n记住：%n红色的 C 盘是病，得治。%n本工具就是你的处方药 💊
-
-; --- 管理员权限申请 ---
-PrivilegesRequired=本工具需要管理员权限才能施展魔法 🪄%n%n（翻译：搬家需要钥匙，管理员就是那把钥匙）
 
 ; --- 卸载确认 ---
 ConfirmUninstall=真的要卸载吗？🥺%n%n你的 C 盘可能会想念这个救星的...%n%n（当然，卸载后应用们不会搬回去，它们已经在新家安居乐业了）
@@ -85,30 +82,13 @@ Type: filesandordirs; Name: "{app}"
 [Code]
 procedure InitializeWizard;
 begin
-  { 欢迎页副标题加点料 }
+  { 欢迎页标题加粗 }
   WizardForm.WelcomeLabel1.Caption := '欢迎使用 WinAppMigrator';
   WizardForm.WelcomeLabel1.Font.Style := [fsBold];
 
   { 完成页标题 }
-  WizardForm.FinishedHeadingLabel.Caption := '✅ 安装完成 — 你的 C 盘救星已上线';
+  WizardForm.FinishedHeadingLabel.Caption := '安装完成 — 你的 C 盘救星已上线';
   WizardForm.FinishedHeadingLabel.Font.Style := [fsBold];
-
-  { 准备安装页加个表情 }
-  WizardForm.ReadyMemo.Font.Size := 10;
-
-  { 正在安装页标题 }
-  WizardForm.InstallingPage.Caption := '正在施展搬家魔法...';
-end;
-
-function NextButtonClick(CurPageID: Integer): Boolean;
-begin
-  Result := True;
-
-  { 安装确认页，点击"安装"前做最后的调侃 }
-  if CurPageID = wpReady then
-  begin
-    { 直接放行，信息已经在 ReadyLabel2 里了 }
-  end;
 end;
 
 procedure CurPageChanged(CurPageID: Integer);
@@ -116,14 +96,14 @@ begin
   { 安装页：显示时改标题为更抽象的表达 }
   if CurPageID = wpInstalling then
   begin
-    WizardForm.PageNameLabel.Caption := '正在把文件塞进它们的新家... 📦';
-    WizardForm.PageDescriptionLabel.Caption := '稍安勿躁，好工具值得等待 ⏳';
+    WizardForm.PageNameLabel.Caption := '正在把文件塞进它们的新家...';
+    WizardForm.PageDescriptionLabel.Caption := '稍安勿躁，好工具值得等待';
   end;
 
   { 完成页 }
   if CurPageID = wpFinished then
   begin
     WizardForm.PageNameLabel.Caption := '大功告成！';
-    WizardForm.PageDescriptionLabel.Caption := '你已经迈出了拯救 C 盘的第一步 🦶';
+    WizardForm.PageDescriptionLabel.Caption := '你已经迈出了拯救 C 盘的第一步';
   end;
 end;

@@ -329,3 +329,46 @@ UninstallDisplayNameMark=%1 (%2)
 UninstallDisplayNameMarks=%1 (%2, %3)
 UninstallDisplayNameMark32Bit=32 位
 UninstallDisplayNameMark64Bit=64 位
+UninstallDisplayNameMarkAllUsers=所有用户
+UninstallDisplayNameMarkCurrentUser=当前用户
+; *** Post-install errors
+ErrorOpeningReadme=尝试打开自述文件时出错。
+ErrorRestartingComputer=安装程序不能重新启动电脑，请手动重启。
+; *** Uninstall messages
+UninstallNotFound=文件“%1”不存在。无法卸载。
+UninstallOpenError=文件“%1”不能打开。无法卸载。
+UninstallUnsupportedVer=此版本的卸载程序无法识别卸载日志文件“%1”的格式。无法卸载
+UninstallUnknownEntry=在卸载日志中遇到一个未知的条目 (%1)
+ConfirmUninstall=您确认想要完全删除 %1 及它的所有组件吗？
+UninstallOnlyOnWin64=这个安装程序只能在64位Windows中进行卸载。
+OnlyAdminCanUninstall=这个安装的程序需要有管理员权限的用户才能卸载。
+UninstallStatusLabel=正在从您的电脑中删除 %1，请稍等。
+UninstalledAll=%1 已顺利地从您的电脑中删除。
+UninstalledMost=%1 卸载完成。%n%n有一些内容无法被删除。您可以手动删除它们。
+UninstalledAndNeedsRestart=要完成 %1 的卸载，您的电脑必须重新启动。%n%n您想立即重新启动电脑吗？
+UninstallDataCorrupted=文件“%1”已损坏，无法卸载
+; *** Uninstall status messages
+ConfirmDeleteSharedFileTitle=删除共享文件吗？
+ConfirmDeleteSharedFile2=系统中包含的下列共享文件已经不再被其它程序使用。您想要卸载程序删除这些共享文件吗？%n%n如果这些文件被删除，但还有程序正在使用这些文件，这些程序可能不能正确执行。如果您不能确定，选择“否”。把这些文件保留在系统中以免引起问题。
+SharedFileNameLabel=文件名：
+SharedFileLocationLabel=位置：
+WizardUninstalling=卸载状态
+StatusUninstalling=正在卸载 %1...
+; *** Shutdown block reasons
+ShutdownBlockReasonInstallingApp=正在安装 %1。
+ShutdownBlockReasonUninstallingApp=正在卸载 %1。
+; The custom messages below aren't used by Setup itself, but if you make
+; use of them in your scripts, you'll want to translate them.
+[CustomMessages]
+NameAndVersion=%1 版本 %2
+AdditionalIcons=附加快捷方式：
+CreateDesktopIcon=创建桌面快捷方式(&D)
+CreateQuickLaunchIcon=创建快速运行栏快捷方式(&Q)
+ProgramOnTheWeb=%1 网站
+UninstallProgram=卸载 %1
+LaunchProgram=运行 %1
+AssocFileExtension=将 %2 文件扩展名与 %1 建立关联(&A)
+AssocingFileExtension=正在将 %2 文件扩展名与 %1 建立关联...
+AutoStartProgramGroupDescription=启动组：
+AutoStartProgram=自动启动 %1
+AddonHostProgramNotFound=%1无法找到您所选择的文件夹。%n%n您想要继续吗？

@@ -18,6 +18,21 @@ _APPX_NS = {"x": "http://schemas.microsoft.com/appx/manifest/foundation/windows1
 # 无控制台程序运行子进程时不弹黑窗口
 NO_WINDOW = subprocess.CREATE_NO_WINDOW if hasattr(subprocess, "CREATE_NO_WINDOW") else 0
 
+# 系统保留目录（含常见系统目录名），根目录扫描与递归扫描统一跳过，避免误识别为 app
+_SKIP_DIR_NAMES = {
+    "$recycle.bin", "system volume information", "windows", "windows.old",
+    "system32", "syswow64", "users", "programdata", "perflogs", "recovery",
+    "sources", "drivers", "intel", "amd", "nvidia", "dell",
+    "common files", "common", "windows defender", "windows mail",
+    "windows media player", "windows nt", "windows photo viewer",
+    "windows portable devices", "windows security", "internet explorer",
+    "reference assemblies", "microsoft", "microsoft analysis services",
+    "microsoft sql server", "microsoft silverlight", "uninstall information",
+    # 容器型目录名（非系统盘递归时其子目录才可能是 app）
+    "program files", "program files (x86)", "programs", "software",
+    "apps", "app", "application", "工具", "软件", "应用",
+}
+
 @dataclass
 class AppInfo:
     name: str
@@ -35,10 +50,24 @@ class AppScanner:
 
     def scan_all(self) -> List[AppInfo]:
         self.apps = []
-        self._scan_uwp()
-        self._scan_win32_registry()
-        self._scan_common_folders()
-        return sorted(self.apps, key=lambda a: a.name.lower())
+        # 三路并行：UWP 枚举 / 注册表 / 目录扫描互不依赖
+        from concurrent.futures import ThreadPoolExecutor
+        with ThreadPoolExecutor(max_workers=3) as pool:
+            futures = [
+                pool.submit(self._scan_uwp),
+                pool.submit(self._scan_win32_registry),
+                pool.submit(self._scan_common_folders),
+            ]
+            for f in futures:
+                f.result()
+        # 并行各环节的 seen 快照可能重叠，按安装目录去重后排序
+        seen, uniq = set(), []
+        for a in sorted(self.apps, key=lambda a: a.name.lower()):
+            k = str(a.install_location).lower()
+            if k not in seen:
+                seen.add(k)
+                uniq.append(a)
+        return uniq
 
     def _scan_uwp(self):
         try:
@@ -162,14 +191,6 @@ class AppScanner:
 
     def _scan_common_folders(self):
         """扫描所有盘符上的常见安装目录与非系统盘根目录，作为 Win32 app 候选"""
-        # 系统保留目录，不可迁移
-        system_names = {
-            "common files", "common", "windows defender", "windows mail",
-            "windows media player", "windows nt", "windows photo viewer",
-            "windows portable devices", "windows security", "internet explorer",
-            "reference assemblies", "microsoft", "microsoft analysis services",
-            "microsoft sql server", "microsoft silverlight", "uninstall information",
-        }
         seen = {str(a.install_location).lower() for a in self.apps}
         system_root = str(Path(os.environ.get("SystemRoot", r"C:\Windows")).resolve()).lower()
 
@@ -178,34 +199,27 @@ class AppScanner:
             # 1. 常见安装目录的一级子目录
             for sub in ("Program Files", "Program Files (x86)", "Programs", "Software",
                         "Apps", "App", "Application", "工具", "软件", "应用"):
-                self._scan_folder(root / sub, seen, system_names)
+                self._scan_folder(root / sub, seen)
             # 2. 非系统盘根目录递归扫描（C 盘根目录含大量系统目录，跳过）
             if str(root.resolve()).lower() == system_root:
                 continue
-            self._scan_folder(root, seen, system_names, top=True, max_depth=3)
+            self._scan_folder(root, seen, max_depth=3)
 
-    def _scan_folder(self, base: Path, seen: set, system_names: set, top: bool = False, max_depth: int = 1):
+    def _scan_folder(self, base: Path, seen: set, max_depth: int = 1):
         if not base.exists():
             return
         try:
             for entry in base.iterdir():
                 if not entry.is_dir():
                     continue
-                low = entry.name.lower()
-                if top and (low in system_names or low in {
-                    "$recycle.bin", "system volume information", "windows",
-                    "users", "programdata", "perflogs", "recovery", "sources",
-                    "drivers", "intel", "amd", "nvidia", "dell",
-                }):
-                    continue
-                if not top and low in system_names:
+                if entry.name.lower() in _SKIP_DIR_NAMES:
                     continue
                 key = str(entry).lower()
                 if key in seen:
                     continue
                 # 容器目录（无 exe 且未达深度上限）：继续向下寻找真实应用目录
                 if max_depth > 1 and not self._dir_has_exe(entry):
-                    self._scan_folder(entry, seen, system_names, top=False, max_depth=max_depth - 1)
+                    self._scan_folder(entry, seen, max_depth=max_depth - 1)
                     continue
                 seen.add(key)
                 self.apps.append(AppInfo(

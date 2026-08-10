@@ -1,4 +1,5 @@
 """更新桌面/开始菜单快捷方式指向新路径（完全移动后旧路径失效）"""
+import os
 import base64
 import subprocess
 from pathlib import Path
@@ -57,80 +58,69 @@ def update_shortcuts(old_dir: Path, new_dir: Path) -> int:
         return 0
 
 
-# ---- 强力卸载：扫描/删除指向目录的快捷方式 ----
+# ---- 强力卸载：扫描/删除指向目录的快捷方式（Python 原生解析 .lnk，避免 PowerShell 冷启动开销）----
 
-_SCAN_SCRIPT = r"""
-$dir = __DIR__
-$folders = @(
-    [Environment]::GetFolderPath('Desktop'),
-    [Environment]::GetFolderPath('CommonDesktopDirectory'),
-    [Environment]::GetFolderPath('StartMenu') + '\Programs',
-    [Environment]::GetFolderPath('CommonStartMenu') + '\Programs'
-)
-$w = New-Object -ComObject WScript.Shell
-foreach ($folder in $folders) {
-    if (-not (Test-Path -LiteralPath $folder)) { continue }
-    Get-ChildItem -LiteralPath $folder -Filter *.lnk -Recurse -ErrorAction SilentlyContinue | ForEach-Object {
-        try {
-            $lnk = $w.CreateShortcut($_.FullName)
-            if ($lnk.TargetPath -and $lnk.TargetPath.StartsWith($dir, [System.StringComparison]::OrdinalIgnoreCase)) {
-                Write-Output $_.FullName
-            }
-        } catch {}
-    }
-}
-"""
-
-_REMOVE_SCRIPT = r"""
-$dir = __DIR__
-$count = 0
-$folders = @(
-    [Environment]::GetFolderPath('Desktop'),
-    [Environment]::GetFolderPath('CommonDesktopDirectory'),
-    [Environment]::GetFolderPath('StartMenu') + '\Programs',
-    [Environment]::GetFolderPath('CommonStartMenu') + '\Programs'
-)
-$w = New-Object -ComObject WScript.Shell
-foreach ($folder in $folders) {
-    if (-not (Test-Path -LiteralPath $folder)) { continue }
-    Get-ChildItem -LiteralPath $folder -Filter *.lnk -Recurse -ErrorAction SilentlyContinue | ForEach-Object {
-        try {
-            $lnk = $w.CreateShortcut($_.FullName)
-            if ($lnk.TargetPath -and $lnk.TargetPath.StartsWith($dir, [System.StringComparison]::OrdinalIgnoreCase)) {
-                Remove-Item -LiteralPath $_.FullName -Force -ErrorAction SilentlyContinue
-                $count++
-            }
-        } catch {}
-    }
-}
-$host.UI.Write($count)
-"""
+def _shortcut_folders() -> list:
+    """[(目录, 是否递归)]：桌面仅根目录（避免递归进巨大目录树），开始菜单递归分组文件夹"""
+    folders = []
+    profile = os.environ.get("USERPROFILE", "")
+    if profile:
+        folders.append((Path(profile) / "Desktop", False))
+        folders.append((Path(os.environ.get("APPDATA", "")) / "Microsoft" / "Windows" / "Start Menu" / "Programs", True))
+    folders.append((Path(os.environ.get("PUBLIC", r"C:\Users\Public")) / "Desktop", False))
+    folders.append((Path(os.environ.get("PROGRAMDATA", r"C:\ProgramData")) / "Microsoft" / "Windows" / "Start Menu" / "Programs", True))
+    return folders
 
 
-def _run_ps(script: str) -> str:
-    encoded = base64.b64encode(script.encode("utf-16-le")).decode("ascii")
-    result = subprocess.run(
-        ["powershell", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
-         "-EncodedCommand", encoded],
-        capture_output=True, creationflags=NO_WINDOW, timeout=120,
-    )
-    return (result.stdout or b"").decode("utf-8", "replace")
+def _lnk_target(path: Path) -> str | None:
+    """读取 .lnk 快捷方式的 TargetPath（WScript.Shell COM，准确且快）"""
+    global _shell
+    if _shell is None:
+        try:
+            import win32com.client
+            _shell = win32com.client.Dispatch("WScript.Shell")
+        except Exception:
+            return None
+    try:
+        return _shell.CreateShortcut(str(path)).TargetPath or None
+    except Exception:
+        return None
+
+
+_shell = None
+
+
+def _iter_shortcuts(directory: Path):
+    """遍历四个快捷方式目录，产出 TargetPath 指向该目录的 .lnk"""
+    prefix = str(directory).lower()
+    for folder, recurse in _shortcut_folders():
+        if not folder.is_dir():
+            continue
+        try:
+            pattern = folder.rglob("*.lnk") if recurse else folder.glob("*.lnk")
+            for lnk in pattern:
+                target = _lnk_target(lnk)
+                if target and target.lower().startswith(prefix):
+                    yield lnk
+        except OSError:
+            continue
 
 
 def scan_shortcuts(directory: Path) -> list:
     """返回桌面/开始菜单中 TargetPath 指向该目录的 .lnk 路径列表"""
     try:
-        script = _SCAN_SCRIPT.replace("__DIR__", _ps_quote(directory))
-        return [ln.strip() for ln in _run_ps(script).splitlines() if ln.strip()]
+        return [str(lnk) for lnk in _iter_shortcuts(directory)]
     except Exception:
         return []
 
 
 def remove_shortcuts(directory: Path) -> int:
     """删除桌面/开始菜单中指向该目录的快捷方式，返回删除数量"""
-    try:
-        script = _REMOVE_SCRIPT.replace("__DIR__", _ps_quote(directory))
-        text = _run_ps(script).strip()
-        return int(text) if text.isdigit() else 0
-    except Exception:
-        return 0
+    count = 0
+    for lnk in _iter_shortcuts(directory):
+        try:
+            lnk.unlink()
+            count += 1
+        except OSError:
+            pass
+    return count

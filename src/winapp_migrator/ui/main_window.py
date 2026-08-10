@@ -36,7 +36,7 @@ class ScanWorker(QThread):
             self.error.emit(str(e))
 
 class SizeWorker(QThread):
-    """后台逐个计算应用目录大小，避免拖慢扫描"""
+    """后台并行计算应用目录大小，避免拖慢扫描"""
     sizes_ready = pyqtSignal(dict)
 
     def __init__(self, apps: List[AppInfo], parent=None):
@@ -44,13 +44,28 @@ class SizeWorker(QThread):
         self.apps = apps
 
     def run(self):
+        from concurrent.futures import ThreadPoolExecutor, as_completed
         sizes = {}
-        for app in self.apps:
+
+        def calc(app):
             try:
-                sizes[id(app)] = get_directory_size(app.install_location)
+                return id(app), get_directory_size(app.install_location)
             except Exception:
-                sizes[id(app)] = 0
-        self.sizes_ready.emit(sizes)
+                return id(app), 0
+
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            futures = [pool.submit(calc, a) for a in self.apps]
+            batch = {}
+            for fut in as_completed(futures):
+                k, v = fut.result()
+                sizes[k] = v
+                batch[k] = v
+                # 分批推送，列表大小渐进显示而非等全部算完
+                if len(batch) >= 15:
+                    self.sizes_ready.emit(batch)
+                    batch = {}
+            if batch:
+                self.sizes_ready.emit(batch)
 
 class MigrateWorker(QThread):
     progress = pyqtSignal(int, str)
@@ -70,6 +85,23 @@ class MigrateWorker(QThread):
         except Exception as e:
             logger.exception("迁移异常")
             self.finished.emit({"success": False, "message": str(e)})
+
+class BuildPlanWorker(QThread):
+    """后台构建卸载清单（含注册表/快捷方式扫描），避免阻塞 UI"""
+    plan_ready = pyqtSignal(object)
+    error = pyqtSignal(str)
+
+    def __init__(self, app: AppInfo, uninstaller, parent=None):
+        super().__init__(parent)
+        self.app = app
+        self.uninstaller = uninstaller
+
+    def run(self):
+        try:
+            self.plan_ready.emit(self.uninstaller.build_plan(self.app))
+        except Exception as e:
+            logger.exception("构建卸载清单失败")
+            self.error.emit(str(e))
 
 class UninstallWorker(QThread):
     progress = pyqtSignal(int, str)
@@ -497,32 +529,41 @@ class MainWindow(QMainWindow):
         if not is_admin():
             QMessageBox.warning(self, "权限不足", "请以管理员身份运行本工具。")
             return
-        app = self.selected_app
-        # 构建卸载清单（含注册表/快捷方式预扫描），构建期间显示忙碌光标
-        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
-        try:
-            plan = self.uninstaller.build_plan(app)
-        except Exception as e:
-            logger.exception("构建卸载清单失败")
-            QApplication.restoreOverrideCursor()
-            QMessageBox.critical(self, "分析失败", f"无法分析该应用: {e}")
-            return
-        QApplication.restoreOverrideCursor()
-
-        dlg = UninstallConfirmDialog(plan, self)
-        if dlg.exec() != QDialog.DialogCode.Accepted:
-            return
-
+        # 后台构建卸载清单（注册表/快捷方式预扫描），期间 UI 保持响应
         self.migrate_btn.setEnabled(False)
         self.refresh_btn.setEnabled(False)
         self.uninstall_btn.setEnabled(False)
+        self.status_label.setText("正在分析应用...")
+        self.build_worker = BuildPlanWorker(self.selected_app, self.uninstaller)
+        self.build_worker.plan_ready.connect(self._on_plan_ready)
+        self.build_worker.error.connect(self._on_plan_error)
+        self.build_worker.start()
+
+    def _restore_buttons(self):
+        self.migrate_btn.setEnabled(True)
+        self.refresh_btn.setEnabled(True)
+        self.uninstall_btn.setEnabled(True)
+        if hasattr(self, "status_label"):
+            self.status_label.setText(f"共扫描到 {len(self.apps)} 个应用" if self.apps else "就绪")
+
+    def _on_plan_ready(self, plan):
+        self._restore_buttons()
+        dlg = UninstallConfirmDialog(plan, self)
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return
         self.progress.setValue(0)
         self.log_edit.clear()
-
+        self.migrate_btn.setEnabled(False)
+        self.refresh_btn.setEnabled(False)
+        self.uninstall_btn.setEnabled(False)
         self.uninstall_worker = UninstallWorker(plan)
         self.uninstall_worker.progress.connect(self._on_progress)
         self.uninstall_worker.finished.connect(self._on_uninstall_finished)
         self.uninstall_worker.start()
+
+    def _on_plan_error(self, msg: str):
+        self._restore_buttons()
+        QMessageBox.critical(self, "分析失败", f"无法分析该应用: {msg}")
 
     def _on_uninstall_finished(self, result: dict):
         self.migrate_btn.setEnabled(True)

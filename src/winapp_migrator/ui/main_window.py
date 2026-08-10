@@ -23,6 +23,47 @@ from winapp_migrator.core.uninstaller import Uninstaller
 
 logger = setup_logging()
 
+# 常见应用中英文别名，用于搜索匹配（如“微信”↔weixin/wechat）
+_SEARCH_ALIAS = {
+    "微信": {"weixin", "wechat"},
+    "qq": {"腾讯", "tim"},
+    "tim": {"腾讯", "qq"},
+    "腾讯": {"qq", "tim"},
+    "钉钉": {"dingtalk"},
+    "网易云音乐": {"netease", "cloudmusic"},
+    "google chrome": {"谷歌浏览器", "chrome"},
+    "chrome": {"谷歌浏览器"},
+    "steam": {"蒸汽"},
+    "office": {"办公"},
+}
+
+_variant_cache = {}
+
+
+def _variants(name: str) -> set:
+    """返回名称及其全部别名的变体集合（带缓存）"""
+    n = name.lower()
+    cached = _variant_cache.get(n)
+    if cached is not None:
+        return cached
+    out = {n}
+    for key, vals in _SEARCH_ALIAS.items():
+        if key.lower() == n or n in {v.lower() for v in vals}:
+            out.add(key.lower())
+            out.update(v.lower() for v in vals)
+    _variant_cache[n] = out
+    return out
+
+
+def _app_matches(app, text: str) -> bool:
+    """搜索词匹配：原名子串或中英文别名交集"""
+    if not text:
+        return True
+    t = text.lower()
+    if t in app.name.lower():
+        return True
+    return bool(_variants(app.name) & _variants(t))
+
 class ScanWorker(QThread):
     finished = pyqtSignal(list)
     error = pyqtSignal(str)
@@ -69,7 +110,7 @@ class SizeWorker(QThread):
 
 class IconLoaderWorker(QThread):
     """后台预取应用图标源文件（目录遍历 IO），主线程负责创建 QIcon"""
-    icon_ready = pyqtSignal(int, str)  # id(app), 图标源文件路径
+    icon_ready = pyqtSignal(object, str)  # AppInfo, 图标源文件路径
 
     def __init__(self, apps: List[AppInfo], delegate, parent=None):
         super().__init__(parent)
@@ -81,13 +122,13 @@ class IconLoaderWorker(QThread):
 
         def load(app):
             try:
-                return id(app), self.delegate.preload_icon_source(app) or ""
+                return app, self.delegate.preload_icon_source(app) or ""
             except Exception:
-                return id(app), ""
+                return app, ""
 
         with ThreadPoolExecutor(max_workers=8) as pool:
-            for app_id, source in pool.map(load, self.apps):
-                self.icon_ready.emit(app_id, source)
+            for app, source in pool.map(load, self.apps):
+                self.icon_ready.emit(app, source)
 
 class MigrateWorker(QThread):
     progress = pyqtSignal(int, str)
@@ -393,8 +434,7 @@ class MainWindow(QMainWindow):
         self.icon_worker.icon_ready.connect(self._on_icon_ready)
         self.icon_worker.start()
 
-    def _on_icon_ready(self, app_id: int, source: str):
-        app = next((a for a in self.apps if id(a) == app_id), None)
+    def _on_icon_ready(self, app, source: str):
         if app is None:
             return
         delegate = self.app_list.itemDelegate()
@@ -421,7 +461,7 @@ class MainWindow(QMainWindow):
         self.app_list.setUpdatesEnabled(False)
         self.app_list.clear()
         for app in self.apps:
-            if text and text not in app.name.lower():
+            if text and not _app_matches(app, text):
                 continue
             item = QListWidgetItem()
             item.setData(Qt.ItemDataRole.UserRole, app)

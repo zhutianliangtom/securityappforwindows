@@ -1,10 +1,10 @@
 @echo off
 rem ============================================================
-rem  WinAppMigrator - Inno Setup Default.isl 修复脚本
-rem  作用：用官方完整中文版覆盖被旧版中文翻译污染的 Default.isl
-rem  运行方式：右键本文件 → 以管理员身份运行
+rem  WinAppMigrator - Inno Setup Default.isl repair script
+rem  Replaces the broken Default.isl with the official full
+rem  Chinese Simplified translation shipped with this project.
+rem  Run: right-click this file -> Run as administrator
 rem ============================================================
-chcp 65001 >nul
 setlocal
 
 set "ISDIR=C:\Program Files\Inno Setup 7"
@@ -12,35 +12,39 @@ set "SRC=%~dp0ChineseSimplified.isl"
 set "DST=%ISDIR%\Default.isl"
 
 if not exist "%ISDIR%\Default.isl" (
-    echo [错误] 找不到 %ISDIR%\Default.isl，请检查 Inno Setup 安装路径
+    echo [ERROR] Default.isl not found at %ISDIR%
+    echo         Check your Inno Setup installation path.
     pause
     exit /b 1
 )
 
 if not exist "%SRC%" (
-    echo [错误] 找不到 %SRC%，请把本脚本放在 installer 目录下运行
+    echo [ERROR] ChineseSimplified.isl not found at %SRC%
+    echo         Keep this script inside the installer folder.
     pause
     exit /b 1
 )
 
-rem 备份原文件
+rem Backup the original file
 copy /y "%DST%" "%DST%.bak" >nul 2>&1
 if exist "%DST%.bak" (
-    echo [备份] 原 Default.isl 已备份为 Default.isl.bak
+    echo [OK] Original Default.isl backed up to Default.isl.bak
 ) else (
-    echo [提示] 原文件备份失败（可能无权限），继续...
+    echo [WARN] Backup failed (may lack permission), continuing...
 )
 
-rem 用官方完整中文版覆盖
+rem Overwrite with the official full Chinese file
 copy /y "%SRC%" "%DST%" >nul
 if errorlevel 1 (
-    echo [错误] 覆盖失败，请确认已右键以管理员身份运行
+    echo [ERROR] Overwrite failed. Make sure you ran this script
+    echo         as administrator.
     pause
     exit /b 1
 )
 
 echo.
-echo [完成] Default.isl 已替换为官方完整中文版（含全部 Inno Setup 7 必需键）
-echo 现在可以重新编译安装包了，祝编译顺利，告别报错！🎉
+echo [DONE] Default.isl replaced with the official Chinese Simplified file.
+echo        It contains all keys required by Inno Setup 7.
+echo        You can now recompile the installer.
 echo.
 pause

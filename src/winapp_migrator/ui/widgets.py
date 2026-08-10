@@ -288,17 +288,27 @@ class AppItemDelegate(QStyledItemDelegate):
         painter.restore()
 
     def _icon_for(self, app) -> QIcon:
+        # 仅读缓存；未命中返回空图标（paint 用首字符占位），图标由后台线程预取后填充
+        return self._icon_cache.get(id(app), QIcon())
+
+    def _icon_source(self, app) -> str | None:
+        return self._source_cache.get(id(app))
+
+    def preload_icon_source(self, app) -> str | None:
+        """后台线程调用：只做目录搜索 IO，不创建 QIcon（Qt 界面对象需在主线程创建）"""
+        key = id(app)
+        if key not in self._source_cache:
+            try:
+                self._source_cache[key] = self._find_icon_file(app)
+            except Exception:
+                self._source_cache[key] = None
+        return self._source_cache[key]
+
+    def apply_icon(self, app) -> None:
+        """主线程调用：按已缓存的图标源构建 QIcon，写入缓存"""
         key = id(app)
         if key not in self._icon_cache:
             self._icon_cache[key] = self._resolve_icon(app)
-        return self._icon_cache[key]
-
-    def _icon_source(self, app) -> str | None:
-        """带缓存的图标源文件解析"""
-        key = id(app)
-        if key not in self._source_cache:
-            self._source_cache[key] = self._find_icon_file(app)
-        return self._source_cache[key]
 
     def _resolve_icon(self, app) -> QIcon:
         source = self._icon_source(app)
@@ -341,6 +351,13 @@ class AppItemDelegate(QStyledItemDelegate):
                 if depth > 2:
                     dirnames.clear()
                     continue
+                # 跳过目录联接，防止循环跟随（低版本 Python 无 isjunction 时回退）
+                for d in list(dirnames):
+                    try:
+                        if os.path.isjunction(os.path.join(dirpath, d)):
+                            dirnames.remove(d)
+                    except (AttributeError, OSError):
+                        pass
                 for fn in filenames:
                     low = fn.lower()
                     stem = fn[:-4]

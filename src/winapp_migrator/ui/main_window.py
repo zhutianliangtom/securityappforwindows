@@ -67,6 +67,28 @@ class SizeWorker(QThread):
             if batch:
                 self.sizes_ready.emit(batch)
 
+class IconLoaderWorker(QThread):
+    """后台预取应用图标源文件（目录遍历 IO），主线程负责创建 QIcon"""
+    icon_ready = pyqtSignal(int, str)  # id(app), 图标源文件路径
+
+    def __init__(self, apps: List[AppInfo], delegate, parent=None):
+        super().__init__(parent)
+        self.apps = apps
+        self.delegate = delegate
+
+    def run(self):
+        from concurrent.futures import ThreadPoolExecutor
+
+        def load(app):
+            try:
+                return id(app), self.delegate.preload_icon_source(app) or ""
+            except Exception:
+                return id(app), ""
+
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            for app_id, source in pool.map(load, self.apps):
+                self.icon_ready.emit(app_id, source)
+
 class MigrateWorker(QThread):
     progress = pyqtSignal(int, str)
     finished = pyqtSignal(dict)
@@ -365,6 +387,20 @@ class MainWindow(QMainWindow):
         self.size_worker = SizeWorker(apps, self)
         self.size_worker.sizes_ready.connect(self._on_sizes_ready)
         self.size_worker.start()
+        # 图标由后台线程预取源文件，主线程负责创建 QIcon，避免滑动/渲染时阻塞
+        delegate = self.app_list.itemDelegate()
+        self.icon_worker = IconLoaderWorker(apps, delegate)
+        self.icon_worker.icon_ready.connect(self._on_icon_ready)
+        self.icon_worker.start()
+
+    def _on_icon_ready(self, app_id: int, source: str):
+        app = next((a for a in self.apps if id(a) == app_id), None)
+        if app is None:
+            return
+        delegate = self.app_list.itemDelegate()
+        if source:
+            delegate.apply_icon(app)
+        self.app_list.viewport().update()
 
     def _on_sizes_ready(self, sizes: dict):
         for i in range(self.app_list.count()):
@@ -381,6 +417,8 @@ class MainWindow(QMainWindow):
 
     def _filter_apps(self):
         text = self.search_edit.text().lower()
+        # 关闭更新避免逐项插入各自触发重绘
+        self.app_list.setUpdatesEnabled(False)
         self.app_list.clear()
         for app in self.apps:
             if text and text not in app.name.lower():
@@ -389,6 +427,8 @@ class MainWindow(QMainWindow):
             item.setData(Qt.ItemDataRole.UserRole, app)
             item.setSizeHint(QSize(0, AppItemDelegate.ROW_HEIGHT))
             self.app_list.addItem(item)
+        self.app_list.setUpdatesEnabled(True)
+        self.app_list.viewport().update()
 
     def _select_app(self, app: AppInfo):
         self.selected_app = app

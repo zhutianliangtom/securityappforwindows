@@ -61,7 +61,7 @@ def format_size(size_bytes: int) -> str:
     return f"{size_bytes:.2f} PB"
 
 def get_directory_size(path: Path, max_depth: int = 3) -> int:
-    """统计目录大小，限制递归深度以加快扫描速度"""
+    """统计目录大小，限制递归深度以加快扫描速度；跳过目录联接防循环"""
     total = 0
 
     def walk(p: Path, depth: int):
@@ -72,6 +72,8 @@ def get_directory_size(path: Path, max_depth: int = 3) -> int:
             for entry in os.scandir(p):
                 try:
                     if entry.is_dir(follow_symlinks=False):
+                        if _is_junction(Path(entry.path)):
+                            continue
                         walk(Path(entry.path), depth + 1)
                     else:
                         total += entry.stat(follow_symlinks=False).st_size

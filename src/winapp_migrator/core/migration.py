@@ -288,6 +288,101 @@ def is_360_self_protection(blocked: list) -> bool:
     return any(g in joined for g in _GUARD_NAMES)
 
 
+# 360 文件保护相关内核驱动（自我保护在驱动层拦截删除/终止）
+_360_DRIVERS = (
+    "360FsFlt", "360Box64", "360AntiHijack", "360netmon", "360Sensor_DM",
+    "360Sensor", "360AntiSteal", "360AntiSteal64", "360qpesv", "360Camera",
+    "360Hvm", "360AntiHacker", "360elam64", "ComputerZ_x64",
+)
+
+
+def force_delete_directory(directory: Path) -> tuple:
+    """强化删除目录（针对 360 自我保护目录等常规删除失败场景）
+
+    流程：停止 360 文件保护驱动 -> 清只读/取所有权/授权 -> 递归删除。
+    仍失败则禁用仍运行的 360 驱动（重启后不再加载即可删除），返回提示。
+    """
+    import base64
+    import subprocess
+    drivers = ", ".join('"' + d + '"' for d in _360_DRIVERS)
+    script = rf'''
+$target = __SRC__
+$drivers = @({drivers})
+$results = New-Object System.Collections.ArrayList
+
+# 1) 尽力停止 360 文件保护驱动（System 启动的驱动可能拒绝停止）
+foreach ($d in $drivers) {{
+    $svc = Get-Service -Name $d -ErrorAction SilentlyContinue
+    if ($svc -and $svc.Status -eq "Running") {{
+        & sc.exe stop $d 2>$null | Out-Null
+    }}
+}}
+Start-Sleep -Milliseconds 1000
+
+# 2) 清只读并获取完全控制
+attrib -r ($target + "\*") /s /d 2>$null | Out-Null
+takeown /f $target /r /d y 2>$null | Out-Null
+icacls $target /grant "*S-1-5-32-544:(OI)(CI)F" /T /C /Q 2>$null | Out-Null
+
+# 3) 递归删除
+try {{
+    Remove-Item $target -Recurse -Force -ErrorAction Stop
+    [void]$results.Add("REMOVED")
+}} catch {{
+    $blocked = @()
+    Get-ChildItem $target -Recurse -Force -ErrorAction SilentlyContinue | ForEach-Object {{
+        try {{ Remove-Item $_.FullName -Force -ErrorAction Stop }} catch {{ $blocked += $_.FullName }}
+    }}
+    if ($blocked.Count -eq 0) {{
+        Remove-Item $target -Force -ErrorAction SilentlyContinue | Out-Null
+        if (-not (Test-Path $target)) {{ [void]$results.Add("REMOVED") }}
+    }}
+    if ($blocked.Count -gt 0) {{
+        [void]$results.Add("BLOCKED=" + (($blocked | Select-Object -First 10) -join "|"))
+    }}
+}}
+
+# 4) 目录仍在且 360 驱动仍运行：禁用驱动，重启后即可删除
+if (Test-Path $target) {{
+    $still = @()
+    foreach ($d in $drivers) {{
+        $svc = Get-Service -Name $d -ErrorAction SilentlyContinue
+        if ($svc -and $svc.Status -eq "Running") {{ $still += $d }}
+    }}
+    if ($still.Count -gt 0) {{
+        [void]$results.Add("DRIVERS_RUNNING=" + ($still -join ","))
+        foreach ($d in $still) {{ & sc.exe config $d start= disabled 2>$null | Out-Null }}
+        [void]$results.Add("DISABLED_FOR_REBOOT")
+    }}
+}}
+
+$results | ForEach-Object {{ Write-Output $_ }}
+'''
+    src_lit = "'" + str(directory.resolve()).replace("'", "''") + "'"
+    encoded = base64.b64encode(script.replace("__SRC__", src_lit).encode("utf-16-le")).decode("ascii")
+    try:
+        result = subprocess.run(
+            ["powershell", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+             "-EncodedCommand", encoded],
+            capture_output=True, creationflags=subprocess.CREATE_NO_WINDOW, timeout=120,
+        )
+        lines = [(result.stdout or b"").decode("utf-8", "replace").strip() for ln in
+                 (result.stdout or b"").decode("utf-8", "replace").splitlines() if ln.strip()]
+        if "REMOVED" in lines:
+            return True, "已强制删除"
+        drivers_running = next((ln.split("=", 1)[1] for ln in lines if ln.startswith("DRIVERS_RUNNING=")), "")
+        blocked = next((ln.split("=", 1)[1] for ln in lines if ln.startswith("BLOCKED=")), "")
+        disabled = any("DISABLED_FOR_REBOOT" in ln for ln in lines)
+        msg = f"360 文件保护驱动（{drivers_running}）仍在内核中拦截删除"
+        if disabled:
+            msg += "，已禁用这些驱动，请重启电脑后重新删除即可成功"
+        if blocked:
+            msg += f"\n仍被占用的文件: {blocked}"
+        return False, msg
+    except Exception as e:
+        return False, f"强制删除失败: {e}"
+
+
 def _create_junction(link: Path, target: Path):
     """在 link 处创建指向 target 的目录联接（junction），链接目录由标准库内部创建"""
     import _winapi

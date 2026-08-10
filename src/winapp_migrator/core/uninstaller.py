@@ -8,7 +8,7 @@ from winapp_migrator.core.data_dirs import detect_data_dirs
 from winapp_migrator.core.registry import scan_app_entries, remove_app_entries
 from winapp_migrator.core.shortcut import scan_shortcuts, remove_shortcuts
 from winapp_migrator.core.uwp import UWPManager
-from winapp_migrator.core.migration import _terminate_processes, is_360_self_protection
+from winapp_migrator.core.migration import _terminate_processes, is_360_self_protection, force_delete_directory
 
 logger = setup_logging()
 

@@ -56,28 +56,24 @@
    'app\\build\\build\\WinAppMigrator\\localpycs\\pyimod04_pywin32.pyc',
    'PYMODULE'),
   ('pyiboot01_bootstrap',
-   'C:\\Users\\zhuzhu\\AppData\\Local\\Programs\\Python\\Python313\\Lib\\site-packages\\PyInstaller\\loader\\pyiboot01_bootstrap.py',
-   'PYSOURCE'),
-  ('pyi_rth_pythoncom',
-   'C:\\Users\\zhuzhu\\AppData\\Local\\Programs\\Python\\Python313\\Lib\\site-packages\\_pyinstaller_hooks_contrib\\rthooks\\pyi_rth_pythoncom.py',
+   'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
+   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyInstaller\\loader\\pyiboot01_bootstrap.py',
    'PYSOURCE'),
   ('pyi_rth_inspect',
-   'C:\\Users\\zhuzhu\\AppData\\Local\\Programs\\Python\\Python313\\Lib\\site-packages\\PyInstaller\\hooks\\rthooks\\pyi_rth_inspect.py',
+   'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
+   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\Lib\\site-packages\\PyInstaller\\hooks\\rthooks\\pyi_rth_inspect.py',
    'PYSOURCE'),
   ('pyi_rth_pkgutil',
-   'C:\\Users\\zhuzhu\\AppData\\Local\\Programs\\Python\\Python313\\Lib\\site-packages\\PyInstaller\\hooks\\rthooks\\pyi_rth_pkgutil.py',
+   'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
+   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\Lib\\site-packages\\PyInstaller\\hooks\\rthooks\\pyi_rth_pkgutil.py',
    'PYSOURCE'),
   ('pyi_rth_multiprocessing',
-   'C:\\Users\\zhuzhu\\AppData\\Local\\Programs\\Python\\Python313\\Lib\\site-packages\\PyInstaller\\hooks\\rthooks\\pyi_rth_multiprocessing.py',
-   'PYSOURCE'),
-  ('pyi_rth_setuptools',
-   'C:\\Users\\zhuzhu\\AppData\\Local\\Programs\\Python\\Python313\\Lib\\site-packages\\PyInstaller\\hooks\\rthooks\\pyi_rth_setuptools.py',
-   'PYSOURCE'),
-  ('pyi_rth_pywintypes',
-   'C:\\Users\\zhuzhu\\AppData\\Local\\Programs\\Python\\Python313\\Lib\\site-packages\\_pyinstaller_hooks_contrib\\rthooks\\pyi_rth_pywintypes.py',
+   'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
+   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\Lib\\site-packages\\PyInstaller\\hooks\\rthooks\\pyi_rth_multiprocessing.py',
    'PYSOURCE'),
   ('pyi_rth_pyqt6',
-   'C:\\Users\\zhuzhu\\AppData\\Local\\Programs\\Python\\Python313\\Lib\\site-packages\\PyInstaller\\hooks\\rthooks\\pyi_rth_pyqt6.py',
+   'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
+   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\Lib\\site-packages\\PyInstaller\\hooks\\rthooks\\pyi_rth_pyqt6.py',
    'PYSOURCE'),
   ('main',
    'C:\\Users\\zhuzhu\\Desktop\\my first android app\\src\\main.py',
@@ -85,8 +81,10 @@
  [],
  False,
  False,
- 1786386541,
+ 1786387998,
  [('runw.exe',
-   'C:\\Users\\zhuzhu\\AppData\\Local\\Programs\\Python\\Python313\\Lib\\site-packages\\PyInstaller\\bootloader\\Windows-64bit-intel\\runw.exe',
+   'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
+   'CN\\ModularData\\ai-agent\\vm\\tools\\python\\lib\\site-packages\\PyInstaller\\bootloader\\Windows-64bit-intel\\runw.exe',
    'EXECUTABLE')],
- 'C:\\Users\\zhuzhu\\AppData\\Local\\Programs\\Python\\Python313\\python313.dll')
+ 'C:\\Users\\zhuzhu\\AppData\\Roaming\\TRAE SOLO '
+ 'CN\\ModularData\\ai-agent\\vm\\tools\\python\\python310.dll')

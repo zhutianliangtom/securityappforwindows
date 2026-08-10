@@ -795,13 +795,9 @@ class MainWindow(QMainWindow):
         reply = QMessageBox.question(
             self,
             "确认优化内存",
-            "将执行以下激进优化操作：\n\n"
-            "1. 终止后台浏览器/应用进程（Edge、Chrome、微信等）\n"
-            "2. 压缩所有进程工作集（释放系统缓存）\n"
-            "3. 停用不必要的 Windows 服务\n\n"
-            "警告：浏览器、微信、钉钉等后台进程将被强制终止，"
-            "如有未保存的内容请先保存！\n"
-            "前台程序（当前正在使用的窗口）不受影响。\n\n确定继续？",
+            "将压缩所有进程的内存工作集，释放系统文件缓存。\n\n"
+            "不会终止任何进程，不会影响任何正在运行的程序。\n"
+            "内存释放后进程需要时自动恢复，完全安全。\n\n确定继续？",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
         )
         if reply != QMessageBox.StandardButton.Yes:

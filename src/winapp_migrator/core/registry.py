@@ -1,39 +1,44 @@
-import re
 import winreg
 from pathlib import Path
-from typing import List, Tuple
+from typing import List, Optional, Tuple
 
 from winapp_migrator.utils.helpers import setup_logging
 
 logger = setup_logging()
+
+# 注册表路径引用高价值位置（app 启动/卸载依赖的常用位置），扫描快且覆盖主要场景
+_FIXED_ROOTS = [
+    (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths"),
+    (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall"),
+    (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Microsoft\Windows\CurrentVersion\Run"),
+    (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce"),
+    (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\App Paths"),
+    (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall"),
+    (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Run"),
+    (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\RunOnce"),
+    (winreg.HKEY_CURRENT_USER, r"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths"),
+    (winreg.HKEY_CURRENT_USER, r"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall"),
+    (winreg.HKEY_CURRENT_USER, r"SOFTWARE\Microsoft\Windows\CurrentVersion\Run"),
+]
+# 系统级巨树，全量遍历极慢且 app 路径引用极少（其关键引用已由白名单覆盖），跳过
+_SKIP_TOP = {"microsoft", "windows", "classes", "policies"}
 
 class RegistryPathUpdater:
     def __init__(self):
         self.changed: List[Tuple[str, str, str, str]] = []
         self.scanned: List[Tuple[str, str, str]] = []
 
-    def update_paths(self, old_path: Path, new_path: Path) -> Tuple[int, int]:
+    def update_paths(self, old_path: Path, new_path: Path, hints: Optional[List[str]] = None) -> Tuple[int, int]:
         self.changed = []
         self.scanned = []
         changed_count = 0
         error_count = 0
 
-        roots = [
-            (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE"),
-            (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\WOW6432Node"),
-            (winreg.HKEY_CURRENT_USER, r"SOFTWARE"),
-        ]
-
         old_str = str(old_path)
         new_str = str(new_path)
+        old_lower = old_str.lower()
 
-        for root, subpath in roots:
-            try:
-                with winreg.OpenKey(root, subpath, 0, winreg.KEY_READ | winreg.KEY_WOW64_64KEY) as key:
-                    self._scan_key(key, subpath, old_str, new_str, root)
-            except Exception as e:
-                logger.warning("无法打开注册表键 %s: %s", subpath, e)
-                error_count += 1
+        self._scan_targets(old_str, old_lower, hints or [])
 
         for hkey, subpath, value_name, value_data in self.scanned:
             try:
@@ -46,18 +51,66 @@ class RegistryPathUpdater:
 
         return changed_count, error_count
 
-    def _scan_key(self, key, path: str, old_str: str, new_str: str, root):
+    def _scan_targets(self, old_str: str, old_lower: str, hints: List[str]):
+        """扫描白名单固定位置 + 与 app 相关的顶级键子树"""
+        # 1. 固定高价值位置
+        for root, subpath in _FIXED_ROOTS:
+            try:
+                with winreg.OpenKey(root, subpath, 0, winreg.KEY_READ | winreg.KEY_WOW64_64KEY) as key:
+                    self._scan_key(key, subpath, old_str, old_lower, root)
+            except FileNotFoundError:
+                pass
+            except Exception as e:
+                logger.warning("无法打开注册表键 %s: %s", subpath, e)
+
+        # 2. app 相关顶级键（publisher/可执行名匹配），跳过系统巨树
+        for root, base in [
+            (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE"),
+            (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\WOW6432Node"),
+            (winreg.HKEY_CURRENT_USER, r"SOFTWARE"),
+        ]:
+            try:
+                with winreg.OpenKey(root, base, 0, winreg.KEY_READ | winreg.KEY_WOW64_64KEY) as key:
+                    for i in range(winreg.QueryInfoKey(key)[0]):
+                        try:
+                            sub_name = winreg.EnumKey(key, i)
+                        except OSError:
+                            break
+                        if sub_name.lower() in _SKIP_TOP or not self._hint_match(sub_name, hints):
+                            continue
+                        sub_path = f"{base}\\{sub_name}"
+                        try:
+                            with winreg.OpenKey(key, sub_name, 0, winreg.KEY_READ | winreg.KEY_WOW64_64KEY) as sub:
+                                self._scan_key(sub, sub_path, old_str, old_lower, root)
+                        except OSError:
+                            continue
+            except Exception as e:
+                logger.warning("枚举顶级键失败 %s: %s", base, e)
+
+    @staticmethod
+    def _hint_match(name: str, hints: List[str]) -> bool:
+        n = name.lower()
+        for h in hints:
+            h = (h or "").strip().lower()
+            if len(h) >= 2 and (h in n or n in h):
+                return True
+        return False
+
+    def _scan_key(self, key, path: str, old_str: str, old_lower: str, root):
         try:
             for i in range(winreg.QueryInfoKey(key)[1]):
                 try:
                     name, value, _ = winreg.EnumValue(key, i)
                     text = self._value_to_string(value)
-                    if old_str.lower() in text.lower():
+                    # 预过滤：路径引用必然含盘符冒号，无冒号的值直接跳过
+                    if not text or ":" not in text:
+                        continue
+                    if old_lower in text.lower():
                         self.scanned.append((root, path, name, text))
                 except Exception:
                     continue
-        except Exception as e:
-            logger.debug("扫描键值失败 %s: %s", path, e)
+        except Exception:
+            pass
 
         try:
             for i in range(winreg.QueryInfoKey(key)[0]):
@@ -65,11 +118,11 @@ class RegistryPathUpdater:
                     sub_name = winreg.EnumKey(key, i)
                     sub_path = f"{path}\\{sub_name}"
                     with winreg.OpenKey(key, sub_name, 0, winreg.KEY_READ | winreg.KEY_WOW64_64KEY) as sub:
-                        self._scan_key(sub, sub_path, old_str, new_str, root)
+                        self._scan_key(sub, sub_path, old_str, old_lower, root)
                 except Exception:
                     continue
-        except Exception as e:
-            logger.debug("枚举子键失败 %s: %s", path, e)
+        except Exception:
+            pass
 
     def _value_to_string(self, value) -> str:
         if isinstance(value, str):
@@ -84,7 +137,8 @@ class RegistryPathUpdater:
         return str(value)
 
     def _write_value(self, hkey, subpath: str, value_name: str, new_data: str):
-        access = winreg.KEY_WRITE | winreg.KEY_WOW64_64KEY
+        # 需同时具备读写权限：先 QueryValueEx 查询类型（KEY_QUERY_VALUE），再 SetValueEx（KEY_SET_VALUE）
+        access = winreg.KEY_READ | winreg.KEY_WRITE | winreg.KEY_WOW64_64KEY
         with winreg.OpenKey(hkey, subpath, 0, access) as key:
             try:
                 _, typ = winreg.QueryValueEx(key, value_name)

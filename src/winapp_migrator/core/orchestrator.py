@@ -65,7 +65,9 @@ class MigrationOrchestrator:
         shortcuts_changed = 0
         if update_registry:
             self._notify(progress_callback, None, "更新注册表路径引用...")
-            registry_changed, registry_errors = self.registry_updater.update_paths(source, target)
+            # 用 publisher/可执行名定位 app 相关注册表键，避免全量扫描系统巨树
+            hints = [app.publisher, Path(app.executable or "").stem, app.name]
+            registry_changed, registry_errors = self.registry_updater.update_paths(source, target, hints)
         self._notify(progress_callback, None, "更新快捷方式...")
         shortcuts_changed += update_shortcuts(source, target)
 

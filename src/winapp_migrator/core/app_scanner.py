@@ -3,13 +3,17 @@ import re
 import json
 import subprocess
 import winreg
+import xml.etree.ElementTree as ET
 from pathlib import Path
 from dataclasses import dataclass
 from typing import List
 
-from winapp_migrator.utils.helpers import setup_logging, get_directory_size
+from winapp_migrator.utils.helpers import setup_logging
 
 logger = setup_logging()
+
+# UWP AppxManifest 命名空间
+_APPX_NS = {"x": "http://schemas.microsoft.com/appx/manifest/foundation/windows10"}
 
 # 无控制台程序运行子进程时不弹黑窗口
 NO_WINDOW = subprocess.CREATE_NO_WINDOW if hasattr(subprocess, "CREATE_NO_WINDOW") else 0
@@ -67,7 +71,7 @@ class AppScanner:
                 if self._is_system_path(loc_path):
                     continue
                 self.apps.append(AppInfo(
-                    name=item.get("Name", "Unknown"),
+                    name=self._uwp_display_name(loc_path, item.get("Name", "Unknown")),
                     publisher=item.get("Publisher", ""),
                     install_location=loc_path,
                     version=item.get("Version", ""),
@@ -77,6 +81,21 @@ class AppScanner:
                 ))
         except Exception as e:
             logger.exception("UWP扫描异常: %s", e)
+
+    @staticmethod
+    def _uwp_display_name(install_location: Path, fallback: str) -> str:
+        """从 AppxManifest.xml 读取显示名（多为中文），ms-resource 引用时回退包名"""
+        try:
+            manifest = install_location / "AppxManifest.xml"
+            if not manifest.is_file():
+                return fallback
+            root = ET.parse(str(manifest)).getroot()
+            display = root.findtext("x:Properties/x:DisplayName", namespaces=_APPX_NS)
+            if display and not display.lower().startswith("ms-resource"):
+                return display.strip()
+        except Exception:
+            pass
+        return fallback
 
     def _scan_win32_registry(self):
         keys = [
@@ -113,7 +132,7 @@ class AppScanner:
                                     install_location=loc_path,
                                     version=self._reg_value(sub, "DisplayVersion") or "",
                                     app_type="Win32",
-                                    size_bytes=get_directory_size(loc_path),
+                                    size_bytes=0,  # 大小由 UI 层 SizeWorker 异步统计
                                     executable=icon,
                                 ))
                         except Exception:
@@ -133,7 +152,8 @@ class AppScanner:
                 candidates.append(str(exe_path.parent))
         for c in candidates:
             try:
-                p = Path(c).expandvars().resolve()
+                # 去掉包裹路径的引号并展开环境变量，再解析为绝对路径
+                p = Path(os.path.expandvars(str(c).strip('"'))).resolve()
                 if p.is_dir():
                     return p
             except (OSError, ValueError):

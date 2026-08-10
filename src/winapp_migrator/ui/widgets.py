@@ -107,6 +107,70 @@ class DataDirDialog(QDialog):
         return [p for cb, p in zip(self._boxes, self._items) if cb.isChecked()]
 
 
+class UninstallConfirmDialog(QDialog):
+    """强力卸载前展示删除清单并要求确认"""
+
+    def __init__(self, plan, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("确认强力卸载")
+        self.setMinimumWidth(620)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(20, 20, 20, 20)
+        layout.setSpacing(10)
+
+        head = QLabel(f"将强力卸载 <b>{plan.app.name}</b>（{plan.app.app_type}）")
+        head.setStyleSheet(f"font-size: 15px; color: {PALETTE['text']};")
+        layout.addWidget(head)
+
+        if plan.is_uwp:
+            info = QLabel(
+                f"UWP 应用包：<b>{plan.package_name}</b>\n"
+                "将调用 Remove-AppxPackage 卸载该应用及其数据。"
+            )
+            info.setWordWrap(True)
+            info.setStyleSheet(f"color: {PALETTE['text_secondary']}; font-size: 13px;")
+            layout.addWidget(info)
+        else:
+            self._add_section(layout, "安装根目录（将删除）", [str(plan.root)])
+            if plan.data_dirs:
+                self._add_section(layout, "数据/存档/聊天记录目录（将删除）", [str(d) for d in plan.data_dirs])
+            else:
+                self._add_section(layout, "数据目录", ["未检测到关联数据目录"])
+            self._add_section(layout, "其他清理", [
+                f"快捷方式：{len(plan.shortcuts)} 个",
+                f"注册表关联项：{len(plan.registry_entries)} 处",
+            ])
+
+        warn = QLabel("⚠ 此操作不可恢复！以上内容将被永久删除。")
+        warn.setWordWrap(True)
+        warn.setStyleSheet(f"color: {PALETTE['danger']}; font-size: 13px; font-weight: 700;")
+        layout.addWidget(warn)
+
+        btn_layout = QHBoxLayout()
+        btn_layout.addStretch()
+        cancel_btn = QPushButton("取消")
+        cancel_btn.clicked.connect(self.reject)
+        btn_layout.addWidget(cancel_btn)
+        ok_btn = QPushButton("确认卸载")
+        ok_btn.setStyleSheet(
+            f"background-color: {PALETTE['danger']}; color: white; font-weight: 700; "
+            "border: none; border-radius: 6px; padding: 8px 22px;"
+        )
+        ok_btn.clicked.connect(self.accept)
+        btn_layout.addWidget(ok_btn)
+        layout.addLayout(btn_layout)
+
+    def _add_section(self, layout, title, lines):
+        tl = QLabel(title)
+        tl.setStyleSheet(f"color: {PALETTE['text']}; font-size: 12px; font-weight: 700; margin-top: 4px;")
+        layout.addWidget(tl)
+        for line in lines:
+            l = QLabel(line)
+            l.setWordWrap(True)
+            l.setStyleSheet(f"color: {PALETTE['text_secondary']}; font-size: 12px;")
+            layout.addWidget(l)
+
+
 class AppItemDelegate(QStyledItemDelegate):
     """自绘应用列表项：真实图标/首字符、类型标签、名称、路径、大小，选中态完整渲染"""
     ROW_HEIGHT = 68

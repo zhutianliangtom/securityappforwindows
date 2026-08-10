@@ -155,3 +155,186 @@ class RegistryPathUpdater:
         if hkey == winreg.HKEY_CURRENT_USER:
             return "HKCU"
         return "HK?"
+
+
+# ---- 强力卸载：扫描并删除 app 关联注册表项 ----
+# 策略：Uninstall/App Paths 匹配子键整键删除；Run/RunOnce 匹配值删除；
+#       publisher 顶级键只删其中引用该 app 路径的键/值，不删整个顶级键（避免误伤同发布商其他应用）
+
+def scan_app_entries(install_location, display_name, hints) -> List:
+    """扫描与 app 关联的注册表位置，返回 [(kind, hkey, path, name)]；kind 为 KEY/VALUE"""
+    entries = []
+    install_lower = str(install_location).lower().rstrip("\\")
+
+    def add_uninstall_roots(roots, base):
+        for root in roots:
+            try:
+                with winreg.OpenKey(root, base, 0, winreg.KEY_READ | winreg.KEY_WOW64_64KEY) as key:
+                    for i in range(winreg.QueryInfoKey(key)[0]):
+                        sub_name = winreg.EnumKey(key, i)
+                        if _uninstall_key_matches(key, sub_name, install_lower, display_name):
+                            entries.append(("KEY", root, f"{base}\\{sub_name}"))
+            except FileNotFoundError:
+                pass
+            except OSError:
+                pass
+
+    # 1. Uninstall 子键：InstallLocation/UninstallString/DisplayName 匹配 → 整键删除
+    add_uninstall_roots(
+        [winreg.HKEY_LOCAL_MACHINE, winreg.HKEY_CURRENT_USER],
+        r"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall")
+    add_uninstall_roots(
+        [winreg.HKEY_LOCAL_MACHINE],
+        r"SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall")
+
+    # 2. App Paths 子键：默认值指向安装目录下的 exe → 整键删除
+    for root, base in [
+        (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths"),
+        (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\App Paths"),
+        (winreg.HKEY_CURRENT_USER, r"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths"),
+    ]:
+        try:
+            with winreg.OpenKey(root, base, 0, winreg.KEY_READ | winreg.KEY_WOW64_64KEY) as key:
+                for i in range(winreg.QueryInfoKey(key)[0]):
+                    sub_name = winreg.EnumKey(key, i)
+                    try:
+                        with winreg.OpenKey(key, sub_name, 0, winreg.KEY_READ | winreg.KEY_WOW64_64KEY) as sub:
+                            default, _ = winreg.QueryValueEx(sub, "")
+                    except (FileNotFoundError, OSError):
+                        continue
+                    if str(default).lower().startswith(install_lower):
+                        entries.append(("KEY", root, f"{base}\\{sub_name}"))
+        except FileNotFoundError:
+            pass
+        except OSError:
+            pass
+
+    # 3. Run/RunOnce 值：数据引用安装目录 → 删值
+    for root, base in [
+        (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Microsoft\Windows\CurrentVersion\Run"),
+        (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce"),
+        (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Run"),
+        (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\RunOnce"),
+        (winreg.HKEY_CURRENT_USER, r"SOFTWARE\Microsoft\Windows\CurrentVersion\Run"),
+    ]:
+        try:
+            with winreg.OpenKey(root, base, 0, winreg.KEY_READ | winreg.KEY_WOW64_64KEY) as key:
+                for i in range(winreg.QueryInfoKey(key)[1]):
+                    name, value, _ = winreg.EnumValue(key, i)
+                    if install_lower in str(value).lower():
+                        entries.append(("VALUE", root, base, name))
+        except FileNotFoundError:
+            pass
+        except OSError:
+            pass
+
+    # 4. app 相关顶级键（publisher/可执行名匹配）：仅收集引用安装目录的值
+    for root, base in [
+        (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE"),
+        (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\WOW6432Node"),
+        (winreg.HKEY_CURRENT_USER, r"SOFTWARE"),
+    ]:
+        try:
+            with winreg.OpenKey(root, base, 0, winreg.KEY_READ | winreg.KEY_WOW64_64KEY) as key:
+                for i in range(winreg.QueryInfoKey(key)[0]):
+                    try:
+                        sub_name = winreg.EnumKey(key, i)
+                    except OSError:
+                        break
+                    if sub_name.lower() in _SKIP_TOP or not RegistryPathUpdater._hint_match(sub_name, hints):
+                        continue
+                    _collect_path_values(root, f"{base}\\{sub_name}", install_lower, entries)
+        except OSError:
+            pass
+
+    return entries
+
+
+def remove_app_entries(entries) -> int:
+    """删除 scan_app_entries 收集的注册表位置，返回成功删除数量"""
+    removed = 0
+    for kind, hkey, path, name in entries:
+        try:
+            if kind == "KEY":
+                if _delete_key_tree(hkey, path):
+                    removed += 1
+            else:
+                access = winreg.KEY_READ | winreg.KEY_WRITE | winreg.KEY_WOW64_64KEY
+                with winreg.OpenKey(hkey, path, 0, access) as key:
+                    winreg.DeleteValue(key, name)
+                removed += 1
+        except Exception as e:
+            logger.warning("删除注册表项失败 %s\\%s: %s", path, name, e)
+    return removed
+
+
+def _uninstall_key_matches(parent_key, sub_name: str, install_lower: str, display_name: str) -> bool:
+    try:
+        with winreg.OpenKey(parent_key, sub_name, 0, winreg.KEY_READ | winreg.KEY_WOW64_64KEY) as sub:
+            loc = _str_value(sub, "InstallLocation")
+            uninst = _str_value(sub, "UninstallString")
+            disp = _str_value(sub, "DisplayName")
+    except OSError:
+        return False
+    if loc and loc.lower().rstrip("\\") == install_lower:
+        return True
+    if uninst and install_lower in uninst.lower():
+        return True
+    return bool(disp) and disp.lower() == (display_name or "").lower()
+
+
+def _str_value(key, value_name: str) -> str:
+    try:
+        value, _ = winreg.QueryValueEx(key, value_name)
+        return str(value) if value else ""
+    except (FileNotFoundError, OSError):
+        return ""
+
+
+def _collect_path_values(root, path: str, install_lower: str, entries):
+    """递归收集键内引用安装目录的值；只删值不删键，避免误伤同发布商其他应用"""
+    subs = []
+    try:
+        with winreg.OpenKey(root, path, 0, winreg.KEY_READ | winreg.KEY_WOW64_64KEY) as key:
+            for i in range(winreg.QueryInfoKey(key)[1]):
+                try:
+                    name, value, _ = winreg.EnumValue(key, i)
+                except OSError:
+                    break
+                if install_lower in str(value).lower():
+                    entries.append(("VALUE", root, path, name))
+            i = 0
+            while True:
+                try:
+                    subs.append(winreg.EnumKey(key, i))
+                    i += 1
+                except OSError:
+                    break
+    except OSError:
+        return
+    for s in subs:
+        _collect_path_values(root, f"{path}\\{s}", install_lower, entries)
+
+
+def _delete_key_tree(hkey, path: str) -> bool:
+    """递归删除注册表键树（含全部子键），返回是否成功"""
+    try:
+        with winreg.OpenKey(hkey, path, 0, winreg.KEY_READ | winreg.KEY_WOW64_64KEY) as key:
+            subs = []
+            i = 0
+            while True:
+                try:
+                    subs.append(winreg.EnumKey(key, i))
+                    i += 1
+                except OSError:
+                    break
+        for s in subs:
+            _delete_key_tree(hkey, f"{path}\\{s}")
+        parent_path, _, key_name = path.rpartition("\\")
+        with winreg.OpenKey(hkey, parent_path, 0, winreg.KEY_READ | winreg.KEY_WRITE | winreg.KEY_WOW64_64KEY) as parent:
+            winreg.DeleteKey(parent, key_name)
+        return True
+    except FileNotFoundError:
+        return False
+    except OSError:
+        return False

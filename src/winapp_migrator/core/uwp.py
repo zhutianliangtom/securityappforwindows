@@ -46,6 +46,29 @@ class UWPManager:
             return []
 
     @staticmethod
+    def uninstall_package(package_full_name: str) -> Tuple[bool, str]:
+        """调用 Remove-AppxPackage 卸载 UWP 应用（含其数据），返回 (成功, 消息)"""
+        try:
+            result = subprocess.run(
+                ["powershell", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+                 "-Command", f"Remove-AppxPackage -Package '{package_full_name}'"],
+                capture_output=True,
+                text=True,
+                check=False,
+                encoding="utf-8",
+                errors="ignore",
+                creationflags=NO_WINDOW,
+                timeout=120,
+            )
+            if result.returncode != 0:
+                logger.warning("UWP卸载失败: %s", result.stderr)
+                return False, result.stderr.strip() or "Remove-AppxPackage 失败"
+            return True, "UWP 应用已卸载"
+        except Exception as e:
+            logger.exception("UWP卸载异常: %s", e)
+            return False, str(e)
+
+    @staticmethod
     def migrate_package(
         package_full_name: str,
         target_drive: Path,

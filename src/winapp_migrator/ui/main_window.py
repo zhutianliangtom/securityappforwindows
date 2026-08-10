@@ -15,10 +15,11 @@ from PyQt6.QtGui import QIcon, QFont, QFontDatabase
 
 from winapp_migrator.utils.helpers import setup_logging, is_admin, ensure_admin, format_size, get_directory_size
 from winapp_migrator.ui.styles import GLOBAL_QSS, PALETTE, apply_palette
-from winapp_migrator.ui.widgets import Card, PrimaryButton, SecondaryButton, AppItemDelegate, DataDirDialog
+from winapp_migrator.ui.widgets import Card, PrimaryButton, SecondaryButton, AppItemDelegate, DataDirDialog, UninstallConfirmDialog
 from winapp_migrator.core.app_scanner import AppScanner, AppInfo
 from winapp_migrator.core.data_dirs import detect_data_dirs
 from winapp_migrator.core.orchestrator import MigrationOrchestrator
+from winapp_migrator.core.uninstaller import Uninstaller
 
 logger = setup_logging()
 
@@ -70,6 +71,23 @@ class MigrateWorker(QThread):
             logger.exception("迁移异常")
             self.finished.emit({"success": False, "message": str(e)})
 
+class UninstallWorker(QThread):
+    progress = pyqtSignal(int, str)
+    finished = pyqtSignal(dict)
+
+    def __init__(self, plan, parent=None):
+        super().__init__(parent)
+        self.plan = plan
+        self.uninstaller = Uninstaller()
+
+    def run(self):
+        try:
+            result = self.uninstaller.uninstall(self.plan, self.progress.emit)
+            self.finished.emit(result)
+        except Exception as e:
+            logger.exception("卸载异常")
+            self.finished.emit({"success": False, "message": str(e)})
+
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -80,6 +98,7 @@ class MainWindow(QMainWindow):
 
         self.apps: List[AppInfo] = []
         self.selected_app: AppInfo = None
+        self.uninstaller = Uninstaller()
 
         self._setup_ui()
         # 迁移进度平滑动画
@@ -249,6 +268,17 @@ class MainWindow(QMainWindow):
         self.migrate_btn.clicked.connect(self._start_migration)
         layout.addWidget(self.migrate_btn)
 
+        self.uninstall_btn = QPushButton("强力卸载")
+        self.uninstall_btn.setEnabled(False)
+        self.uninstall_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.uninstall_btn.setMinimumHeight(40)
+        self.uninstall_btn.setStyleSheet(
+            f"background-color: {PALETTE['danger']}; color: white; font-weight: 700; "
+            "border: none; border-radius: 10px; padding: 10px 24px;"
+        )
+        self.uninstall_btn.clicked.connect(self._start_uninstall)
+        layout.addWidget(self.uninstall_btn)
+
         custom_btn = SecondaryButton("迁移自定义文件夹")
         custom_btn.clicked.connect(self._migrate_custom_folder)
         layout.addWidget(custom_btn)
@@ -338,6 +368,7 @@ class MainWindow(QMainWindow):
         <p style="margin:4px 0;"><b>路径:</b> {app.install_location}</p>
         """)
         self.migrate_btn.setEnabled(True)
+        self.uninstall_btn.setEnabled(True)
         self._refresh_target_path()
 
     def _refresh_target_path(self):
@@ -459,6 +490,61 @@ class MainWindow(QMainWindow):
         else:
             self.progress.setValue(0)
             QMessageBox.critical(self, "迁移失败", result.get("message", "未知错误"))
+
+    def _start_uninstall(self):
+        if not self.selected_app:
+            return
+        if not is_admin():
+            QMessageBox.warning(self, "权限不足", "请以管理员身份运行本工具。")
+            return
+        app = self.selected_app
+        # 构建卸载清单（含注册表/快捷方式预扫描），构建期间显示忙碌光标
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        try:
+            plan = self.uninstaller.build_plan(app)
+        except Exception as e:
+            logger.exception("构建卸载清单失败")
+            QApplication.restoreOverrideCursor()
+            QMessageBox.critical(self, "分析失败", f"无法分析该应用: {e}")
+            return
+        QApplication.restoreOverrideCursor()
+
+        dlg = UninstallConfirmDialog(plan, self)
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return
+
+        self.migrate_btn.setEnabled(False)
+        self.refresh_btn.setEnabled(False)
+        self.uninstall_btn.setEnabled(False)
+        self.progress.setValue(0)
+        self.log_edit.clear()
+
+        self.uninstall_worker = UninstallWorker(plan)
+        self.uninstall_worker.progress.connect(self._on_progress)
+        self.uninstall_worker.finished.connect(self._on_uninstall_finished)
+        self.uninstall_worker.start()
+
+    def _on_uninstall_finished(self, result: dict):
+        self.migrate_btn.setEnabled(True)
+        self.refresh_btn.setEnabled(True)
+        self.uninstall_btn.setEnabled(True)
+        if result.get("success"):
+            self.progress.setValue(100)
+            removed = result.get("removed_dirs") or []
+            failed = result.get("failed") or []
+            msg = (
+                f"{result['message']}\n\n"
+                f"已删除目录:\n" + ("\n".join(removed) if removed else "（无）") +
+                f"\n\n注册表清理: {result.get('registry_removed', 0)} 处\n"
+                f"快捷方式清理: {result.get('shortcuts_removed', 0)} 个"
+            )
+            if failed:
+                msg += "\n\n以下删除失败:\n" + "\n".join(failed)
+            QMessageBox.information(self, "卸载完成", msg)
+            self._start_scan()  # 刷新应用列表
+        else:
+            self.progress.setValue(0)
+            QMessageBox.critical(self, "卸载失败", result.get("message", "未知错误"))
 
     def _migrate_custom_folder(self):
         if not is_admin():

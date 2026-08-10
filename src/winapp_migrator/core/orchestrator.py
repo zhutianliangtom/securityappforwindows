@@ -18,13 +18,12 @@ class MigrationOrchestrator:
     def migrate(
         self,
         app: AppInfo,
-        target_drive: Path,
+        target: Path,
         progress_callback: Optional[Callable[[int, str], None]] = None,
         update_registry: bool = True,
         extra_dirs: Optional[List[Path]] = None,
     ) -> dict:
         source = app.install_location
-        target = target_drive / "WinAppMigrator" / app.app_type / source.name
         target.parent.mkdir(parents=True, exist_ok=True)
 
         logger.info("开始迁移 %s (%s): %s -> %s", app.name, app.app_type, source, target)
@@ -32,7 +31,7 @@ class MigrationOrchestrator:
         if app.app_type == "UWP":
             success, message = UWPManager.migrate_package(
                 app.package_name or app.name,
-                target_drive,
+                Path(target.anchor),  # UWP 按盘符注册，取目标盘
                 progress_callback,
             )
             return {
@@ -52,7 +51,8 @@ class MigrationOrchestrator:
         moved.append((source, target))
 
         for extra in extra_dirs or []:
-            extra_target = target_drive / "WinAppMigrator" / "Data" / extra.name
+            # 数据目录跟随主目标位置：{目标路径}_Data\{数据目录名}
+            extra_target = target.parent / (target.name + "_Data") / extra.name
             self._notify(progress_callback, None, f"迁移数据目录: {extra}")
             r = migrate_folder(extra, extra_target, progress_callback, mode="move")
             if not r.success:

@@ -161,43 +161,73 @@ class AppScanner:
         return None
 
     def _scan_common_folders(self):
-        candidates = [
-            Path(os.environ.get("ProgramFiles", r"C:\Program Files")),
-            Path(os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)")),
-            Path(os.environ.get("LOCALAPPDATA", "")) / "Programs",
-        ]
+        """扫描所有盘符上的常见安装目录与非系统盘根目录，作为 Win32 app 候选"""
         # 系统保留目录，不可迁移
         system_names = {
-            "common files", "windows defender", "windows mail",
+            "common files", "common", "windows defender", "windows mail",
             "windows media player", "windows nt", "windows photo viewer",
             "windows portable devices", "windows security", "internet explorer",
             "reference assemblies", "microsoft", "microsoft analysis services",
             "microsoft sql server", "microsoft silverlight", "uninstall information",
         }
         seen = {str(a.install_location).lower() for a in self.apps}
-        for base in candidates:
-            if not base.exists():
+        system_root = str(Path(os.environ.get("SystemRoot", r"C:\Windows")).resolve()).lower()
+
+        for drive in self._get_drives():
+            root = Path(f"{drive}\\")
+            # 1. 常见安装目录的一级子目录
+            for sub in ("Program Files", "Program Files (x86)", "Programs", "Software",
+                        "Apps", "App", "Application", "工具", "软件", "应用"):
+                self._scan_folder(root / sub, seen, system_names)
+            # 2. 非系统盘根目录的一级子目录（C 盘根目录含大量系统目录，跳过）
+            if str(root.resolve()).lower() == system_root:
                 continue
-            try:
-                for entry in base.iterdir():
-                    if not entry.is_dir():
-                        continue
-                    if entry.name.lower() in system_names:
-                        continue
-                    key = str(entry).lower()
-                    if key in seen:
-                        continue
-                    seen.add(key)
-                    self.apps.append(AppInfo(
-                        name=entry.name,
-                        publisher="",
-                        install_location=entry,
-                        version="",
-                        app_type="Win32",
-                        size_bytes=0,
-                    ))
-            except Exception as e:
-                logger.warning("扫描文件夹失败 %s: %s", base, e)
+            self._scan_folder(root, seen, system_names, top=True)
+
+    def _scan_folder(self, base: Path, seen: set, system_names: set, top: bool = False):
+        if not base.exists():
+            return
+        try:
+            for entry in base.iterdir():
+                if not entry.is_dir():
+                    continue
+                low = entry.name.lower()
+                if top and (low in system_names or low in {
+                    "$recycle.bin", "system volume information", "windows",
+                    "users", "programdata", "perflogs", "recovery", "sources",
+                    "drivers", "intel", "amd", "nvidia", "dell",
+                }):
+                    continue
+                if not top and low in system_names:
+                    continue
+                key = str(entry).lower()
+                if key in seen:
+                    continue
+                seen.add(key)
+                self.apps.append(AppInfo(
+                    name=entry.name,
+                    publisher="",
+                    install_location=entry,
+                    version="",
+                    app_type="Win32",
+                    size_bytes=0,
+                ))
+        except (PermissionError, OSError) as e:
+            # 拒绝访问等容错：记录并跳过该目录，不影响其余扫描
+            logger.warning("扫描目录失败 %s: %s", base, e)
+
+    @staticmethod
+    def _get_drives():
+        """枚举本机所有逻辑盘符（如 C: D:）"""
+        import string
+        from ctypes import windll
+        bitmask = windll.kernel32.GetLogicalDrives()
+        drives = []
+        for letter in string.ascii_uppercase:
+            if bitmask & 1:
+                drives.append(f"{letter}:")
+            bitmask >>= 1
+        return drives
 
     @staticmethod
     def _is_system_path(path: Path) -> bool:

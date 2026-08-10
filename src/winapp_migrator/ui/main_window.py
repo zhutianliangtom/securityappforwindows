@@ -55,16 +55,16 @@ class MigrateWorker(QThread):
     progress = pyqtSignal(int, str)
     finished = pyqtSignal(dict)
 
-    def __init__(self, app: AppInfo, target_drive: Path, extra_dirs=None, parent=None):
+    def __init__(self, app: AppInfo, target: Path, extra_dirs=None, parent=None):
         super().__init__(parent)
         self.app = app
-        self.target_drive = target_drive
+        self.target = target
         self.extra_dirs = extra_dirs or []
         self.orchestrator = MigrationOrchestrator()
 
     def run(self):
         try:
-            result = self.orchestrator.migrate(self.app, self.target_drive, self.progress.emit, extra_dirs=self.extra_dirs)
+            result = self.orchestrator.migrate(self.app, self.target, self.progress.emit, extra_dirs=self.extra_dirs)
             self.finished.emit(result)
         except Exception as e:
             logger.exception("迁移异常")
@@ -203,6 +203,15 @@ class MainWindow(QMainWindow):
         self._populate_drives()
         layout.addWidget(self.drive_combo)
 
+        target_label = QLabel("目标路径")
+        target_label.setStyleSheet("font-weight: 600;")
+        layout.addWidget(target_label)
+
+        self.target_path_edit = QLineEdit()
+        self.target_path_edit.setPlaceholderText("自动生成，可修改（如 D:\\Apps\\微信）")
+        self.drive_combo.currentIndexChanged.connect(self._refresh_target_path)
+        layout.addWidget(self.target_path_edit)
+
         self.info_label = QTextEdit()
         self.info_label.setReadOnly(True)
         self.info_label.setPlaceholderText("在左侧选择应用后，此处显示详细信息")
@@ -311,6 +320,35 @@ class MainWindow(QMainWindow):
         <p style="margin:4px 0;"><b>路径:</b> {app.install_location}</p>
         """)
         self.migrate_btn.setEnabled(True)
+        self._refresh_target_path()
+
+    def _refresh_target_path(self):
+        """按选中 app 与目标盘生成默认目标路径（用户手动编辑过则不覆盖）"""
+        if not self.selected_app or not hasattr(self, "target_path_edit"):
+            return
+        if self.target_path_edit.isModified():
+            return
+        drive = self.drive_combo.currentData() or ""
+        self.target_path_edit.setText(
+            f"{drive}\\WinAppMigrator\\{self.selected_app.app_type}\\{self.selected_app.name}")
+
+    def _resolve_target(self):
+        """解析迁移目标路径：用户自定义或自动生成，并校验合法性"""
+        text = self.target_path_edit.text().strip()
+        if not text:
+            self._refresh_target_path()
+            text = self.target_path_edit.text().strip()
+        path = Path(text)
+        if not path.is_absolute():
+            QMessageBox.warning(self, "路径无效", "目标路径必须是绝对路径，例如 D:\\Apps\\微信")
+            return None
+        if path.exists():
+            QMessageBox.warning(self, "路径无效", f"目标路径已存在，请更换: {path}")
+            return None
+        if path == self.selected_app.install_location:
+            QMessageBox.warning(self, "路径无效", "目标路径不能与源路径相同")
+            return None
+        return path
 
     def _on_app_selected(self, item: QListWidgetItem):
         app = item.data(Qt.ItemDataRole.UserRole)
@@ -325,10 +363,13 @@ class MainWindow(QMainWindow):
             return
 
         drive = Path(self.drive_combo.currentData())
+        target = self._resolve_target()
+        if target is None:
+            return
         reply = QMessageBox.question(
             self,
             "确认迁移",
-            f"确定将 <b>{self.selected_app.name}</b> 迁移到 {drive}:\\ 吗？\n"
+            f"确定将 <b>{self.selected_app.name}</b> 迁移到 <b>{target}</b> 吗？\n"
             f"迁移后旧安装目录将被删除，注册表与快捷方式将更新到新路径。",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
         )
@@ -342,7 +383,7 @@ class MainWindow(QMainWindow):
         self.progress.setValue(0)
         self.log_edit.clear()
 
-        self.migrate_worker = MigrateWorker(self.selected_app, drive, extra_dirs)
+        self.migrate_worker = MigrateWorker(self.selected_app, target, extra_dirs)
         self.migrate_worker.progress.connect(self._on_progress)
         self.migrate_worker.finished.connect(self._on_migrate_finished)
         self.migrate_worker.start()

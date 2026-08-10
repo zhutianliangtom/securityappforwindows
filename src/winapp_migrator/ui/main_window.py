@@ -286,6 +286,7 @@ class MainWindow(QMainWindow):
     def _start_scan(self):
         self.app_list.clear()
         self.status_label.setText("正在扫描已安装应用...")
+        self.scan_progress.show()
         self.refresh_btn.setEnabled(False)
         self.scan_worker = ScanWorker()
         self.scan_worker.finished.connect(self._on_scan_finished)
@@ -296,6 +297,7 @@ class MainWindow(QMainWindow):
         self.apps = apps
         self._filter_apps()
         self.status_label.setText(f"共扫描到 {len(apps)} 个应用")
+        self.scan_progress.hide()
         self.refresh_btn.setEnabled(True)
         # 列表先秒出，大小由后台线程补齐
         self.size_worker = SizeWorker(apps, self)
@@ -312,6 +314,7 @@ class MainWindow(QMainWindow):
 
     def _on_scan_error(self, msg: str):
         self.status_label.setText(f"扫描失败: {msg}")
+        self.scan_progress.hide()
         self.refresh_btn.setEnabled(True)
 
     def _filter_apps(self):

@@ -73,7 +73,7 @@ class Uninstaller:
         notify(10, "强制结束占用进程...")
         blocked = _terminate_processes(plan.root)
         result["blocked"] = blocked
-        result["blocked_360"] = is_360_self_protection(blocked, plan.root)
+        result["blocked_360"] = is_360_self_protection(blocked)
         if blocked:
             result["failed"].append("以下进程无法自动结束（可能受保护）: " + ", ".join(blocked))
 

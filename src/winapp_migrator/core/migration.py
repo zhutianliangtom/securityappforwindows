@@ -182,10 +182,12 @@ public static class WMKill {
 "@
 
 function Get-TargetProcs([string]$prefix) {
+    # 路径前缀带目录边界（prefix + '\'），避免父目录/同名前缀误匹配
+    $boundary = $prefix + [IO.Path]::DirectorySeparatorChar
     $procs = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object {
         $exe = $_.ExecutablePath
         $hit = $false
-        if ($exe) { $hit = $exe.StartsWith($prefix, [System.StringComparison]::OrdinalIgnoreCase) }
+        if ($exe) { $hit = $exe.StartsWith($boundary, [System.StringComparison]::OrdinalIgnoreCase) }
         if (-not $hit -and $exeNames.Count -gt 0 -and $_.Name) {
             $hit = $exeNames -contains $_.Name.ToLower()
         }
@@ -272,14 +274,18 @@ $blocked | Select-Object -Unique
         return []
 
 
-def is_360_self_protection(blocked: list, directory: Path) -> bool:
-    """判断被拦截的进程是否来自 360（自我保护会拦截终止请求），用于 UI 弹窗引导"""
-    if any("360" in (name or "").lower() for name in blocked):
-        return True
-    try:
-        return "360" in str(directory.resolve()).lower()
-    except Exception:
-        return False
+def is_360_self_protection(blocked: list) -> bool:
+    """判断被拦截的进程是否来自 360 安全卫士（自我保护会拦截终止请求）
+
+    只匹配安全卫士专属进程名（360safe/zhudongfangyu 等），避免 360zip 等
+    名称含 "360" 的第三方组件被误判，触发无关弹窗。
+    """
+    _GUARD_NAMES = (
+        "360safe", "zhudongfangyu", "zhudong", "360tray", "360leakfixer",
+        "360sd", "360safemon", "360bdoctor", "360antis", "360box", "360netmon",
+    )
+    joined = " ".join((n or "").lower() for n in blocked)
+    return any(g in joined for g in _GUARD_NAMES)
 
 
 def _create_junction(link: Path, target: Path):

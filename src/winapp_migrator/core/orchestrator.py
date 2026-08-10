@@ -108,7 +108,7 @@ class MigrationOrchestrator:
             "registry_errors": registry_errors,
             "shortcuts_changed": shortcuts_changed,
             "blocked": all_blocked,
-            "blocked_360": is_360_self_protection(all_blocked, source),
+            "blocked_360": is_360_self_protection(all_blocked),
         }
 
     def _rollback(self, moved: List[tuple[Path, Path]]):

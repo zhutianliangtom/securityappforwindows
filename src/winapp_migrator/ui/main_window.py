@@ -10,12 +10,12 @@ from PyQt6.QtWidgets import (
     QTextEdit, QMessageBox, QApplication, QSizePolicy, QSpacerItem,
     QFileDialog
 )
-from PyQt6.QtCore import Qt, QThread, pyqtSignal, QPropertyAnimation, QEasingCurve
+from PyQt6.QtCore import Qt, QSize, QThread, pyqtSignal, QPropertyAnimation, QEasingCurve
 from PyQt6.QtGui import QIcon, QFont, QFontDatabase
 
 from winapp_migrator.utils.helpers import setup_logging, is_admin, ensure_admin, format_size, get_directory_size
 from winapp_migrator.ui.styles import GLOBAL_QSS, PALETTE, apply_palette
-from winapp_migrator.ui.widgets import Card, PrimaryButton, SecondaryButton, AppListItem
+from winapp_migrator.ui.widgets import Card, PrimaryButton, SecondaryButton, AppItemDelegate
 from winapp_migrator.core.app_scanner import AppScanner, AppInfo
 from winapp_migrator.core.orchestrator import MigrationOrchestrator
 
@@ -177,7 +177,9 @@ class MainWindow(QMainWindow):
         layout.addLayout(search_layout)
 
         self.app_list = QListWidget()
-        self.app_list.setSpacing(4)
+        self.app_list.setSpacing(2)
+        self.app_list.setItemDelegate(AppItemDelegate(self.app_list))
+        self.app_list.setMouseTracking(True)
         self.app_list.itemClicked.connect(self._on_app_selected)
         layout.addWidget(self.app_list)
 
@@ -277,9 +279,10 @@ class MainWindow(QMainWindow):
     def _on_sizes_ready(self, sizes: dict):
         for i in range(self.app_list.count()):
             item = self.app_list.item(i)
-            widget = self.app_list.itemWidget(item)
-            if widget and id(widget.app_info) in sizes:
-                widget.update_size(sizes[id(widget.app_info)])
+            app = item.data(Qt.ItemDataRole.UserRole) if item else None
+            if app and id(app) in sizes:
+                app.size_bytes = sizes[id(app)]
+        self.app_list.viewport().update()
 
     def _on_scan_error(self, msg: str):
         self.status_label.setText(f"扫描失败: {msg}")
@@ -291,12 +294,10 @@ class MainWindow(QMainWindow):
         for app in self.apps:
             if text and text not in app.name.lower():
                 continue
-            item = QListWidgetItem(self.app_list)
-            widget = AppListItem(app)
-            widget.clicked.connect(lambda a=app: self._select_app(a))
-            item.setSizeHint(widget.sizeHint())
+            item = QListWidgetItem()
+            item.setData(Qt.ItemDataRole.UserRole, app)
+            item.setSizeHint(QSize(0, AppItemDelegate.ROW_HEIGHT))
             self.app_list.addItem(item)
-            self.app_list.setItemWidget(item, widget)
 
     def _select_app(self, app: AppInfo):
         self.selected_app = app
@@ -310,9 +311,9 @@ class MainWindow(QMainWindow):
         self.migrate_btn.setEnabled(True)
 
     def _on_app_selected(self, item: QListWidgetItem):
-        widget = self.app_list.itemWidget(item)
-        if widget:
-            self._select_app(widget.app_info)
+        app = item.data(Qt.ItemDataRole.UserRole)
+        if app:
+            self._select_app(app)
 
     def _start_migration(self):
         if not self.selected_app:

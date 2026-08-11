@@ -47,6 +47,31 @@ class AgentEngine:
         self.tokens = {"prompt": 0, "completion": 0}
         self.last_estimate = 0
 
+    def clear_history(self):
+        """清空全部对话上下文与 tokens（新对话从零开始）"""
+        self._messages = []
+        self.reset_tokens()
+
+    def _prune_images(self, max_keep=2):
+        """历史中的截图只保留最近 max_keep 张，其余剥离 image_url 只留文本，防止上下文膨胀"""
+        seen = 0
+        for m in reversed(self._messages):
+            c = m.get("content")
+            if not isinstance(c, list):
+                continue
+            keep, drop = [], []
+            for x in c:
+                if isinstance(x, dict) and x.get("type") == "image_url":
+                    if seen < max_keep:
+                        seen += 1
+                        keep.append(x)
+                    else:
+                        drop.append(x)
+                else:
+                    keep.append(x)
+            if drop:
+                m["content"] = keep
+
     def start(self, user_input: str, agent_name: str = ""):
         """后台线程执行一轮任务"""
         self._stop.clear()
@@ -76,7 +101,10 @@ class AgentEngine:
     # ---------- 主循环 ----------
     def run(self, user_input: str, agent_name: str = ""):
         system = agent_skills.build_system_prompt(agent_name)
-        self._messages = [{"role": "system", "content": system}]
+        if not self._messages or self._messages[0].get("role") != "system":
+            self._messages.insert(0, {"role": "system", "content": system})
+        else:
+            self._messages[0]["content"] = system  # 切换 Agent 时更新系统提示
         self._messages.append({"role": "user",
                                "content": agent_llm.build_content(user_input)})
         try:
@@ -87,6 +115,7 @@ class AgentEngine:
                     return
                 if self.on_status:
                     self.on_status("正在思考…")
+                self._prune_images(2)  # 截图只保留最近 2 张，控制上下文体积
                 # tokens 预计算
                 self.last_estimate = agent_llm.estimate_tokens(
                     "".join(m["content"] for m in self._messages if isinstance(m.get("content"), str)))

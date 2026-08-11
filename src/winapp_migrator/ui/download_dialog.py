@@ -19,8 +19,7 @@ from PyQt6.QtWidgets import (
     QFileDialog, QComboBox,
 )
 
-from winapp_migrator.core.fast_download import DownloadTask, parse_ed2k
-from winapp_migrator.core.ed2k_client import Ed2kTask, parse_ed2k_full
+from winapp_migrator.core.fast_download import DownloadTask
 from winapp_migrator.ui.styles import PALETTE
 
 _DONE_STATES = ("done", "error", "canceled")
@@ -113,24 +112,16 @@ class _TaskRow(QWidget):
         pct = int(done * 100 / total) if total > 0 else 0
         self.progress.setRange(0, 100)
         self.progress.setValue(pct)
-        is_ed2k = snap.get("mode") == "ed2k"
 
         if status == "downloading":
-            if is_ed2k:
-                self.pause_btn.setVisible(False)
-                segs = int(snap.get("segments") or 1)
-                info = f"⏳ P2P 直连下载中 · {_fmt_size(done)} / {_fmt_size(total)} · {segs} 个源"
-                if speed > 0:
-                    info += f" · {_fmt_size(int(speed))}/s"
-            else:
-                self.pause_btn.setVisible(True)
-                self.pause_btn.setEnabled(True)
-                self.pause_btn.setText("暂停")
-                segs = int(snap.get("segments") or 16)
-                mode_txt = f"{segs} 线程分段" if snap.get("mode") == "multi" else "单线程"
-                info = f"⏳ 下载中 · {_fmt_size(done)} / {_fmt_size(total)} · {mode_txt}"
-                if speed > 0:
-                    info += f" · {_fmt_size(int(speed))}/s"
+            self.pause_btn.setVisible(True)
+            self.pause_btn.setEnabled(True)
+            self.pause_btn.setText("暂停")
+            segs = int(snap.get("segments") or 16)
+            mode_txt = f"{segs} 线程并发" if snap.get("mode") == "multi" else "单线程"
+            info = f"⏳ 下载中 · {_fmt_size(done)} / {_fmt_size(total)} · {mode_txt}"
+            if speed > 0:
+                info += f" · {_fmt_size(int(speed))}/s"
             self.cancel_btn.setVisible(True)
             self.cancel_btn.setEnabled(True)
             self.cancel_btn.setText("取消")
@@ -145,10 +136,7 @@ class _TaskRow(QWidget):
         elif status == "done":
             self.pause_btn.setVisible(False)
             self.cancel_btn.setVisible(False)
-            info = f"✅ 已完成 · {_fmt_size(total)}"
-            if snap.get("md4_ok"):
-                info += " · MD4 哈希校验通过"
-            info += f" → {snap['path']}"
+            info = f"✅ 已完成 · {_fmt_size(total)} → {snap['path']}"
         elif status == "error":
             self.pause_btn.setVisible(False)
             self.cancel_btn.setVisible(False)
@@ -157,15 +145,8 @@ class _TaskRow(QWidget):
             self.pause_btn.setVisible(False)
             self.cancel_btn.setVisible(False)
             info = "⏹ 已取消"
-        elif status == "finding":
-            # ED2K 无 sources，正在通过找源代理联网查源
-            self.pause_btn.setVisible(False)
-            self.cancel_btn.setVisible(True)
-            self.cancel_btn.setEnabled(True)
-            self.cancel_btn.setText("取消")
-            info = "🔍 正在通过找源代理查找源节点…"
         else:  # pending
-            self.pause_btn.setVisible(not is_ed2k)
+            self.pause_btn.setVisible(True)
             self.pause_btn.setEnabled(True)
             self.pause_btn.setText("暂停")
             self.cancel_btn.setVisible(True)
@@ -198,6 +179,7 @@ class DownloadDialog(QDialog):
         self._tasks: List[DownloadTask] = []
         self._rows: Dict[int, _TaskRow] = {}
         self._prev_done: Dict[int, float] = {}
+        self._smooth_speed: Dict[int, float] = {}
         self._last_poll_at = time.time()
 
         self._build_ui()
@@ -254,9 +236,8 @@ class DownloadDialog(QDialog):
         )
         lay.addWidget(self.task_list, 1)
 
-        hint = QLabel("提示：支持 http/https 直链；ed2k:// 链接内嵌 sources 时直接 P2P 直连，"
-                      "无 sources 时自动联网从 eD2k 网络查找源节点，找不到可用本机迅雷/eMule。"
-                      "多线程加速需服务器支持 Range，否则自动单线程")
+        hint = QLabel("提示：支持 http/https 直链；多线程并发下载（动态分段 + 连接池），"
+                      "服务器不支持 Range 时自动单线程")
         hint.setStyleSheet(f"font-size: 12px; color: {PALETTE['text_secondary']};")
         lay.addWidget(hint)
 
@@ -273,19 +254,8 @@ class DownloadDialog(QDialog):
 
     def _add_task(self):
         url = "".join(self.url_edit.text().split())  # 清理所有空白/换行
-        md4 = ""
-        display_name = ""
-        ed2k_link = ""     # 非空表示走内置 ED2K 直连（无 sources 时自动联网找源）
-        if url.lower().startswith("ed2k://"):
-            info = parse_ed2k(url)
-            if not info:
-                QMessageBox.warning(self, "提示", "ed2k 链接格式无效，应为：\ned2k://|file|文件名|大小|MD4哈希|/")
-                return
-            md4 = info["md4"]
-            display_name = info["filename"]
-            ed2k_link = url
-        elif not url.lower().startswith(("http://", "https://")):
-            QMessageBox.warning(self, "提示", "请输入以 http://、https:// 或 ed2k:// 开头的下载地址")
+        if not url.lower().startswith(("http://", "https://")):
+            QMessageBox.warning(self, "提示", "请输入以 http:// 或 https:// 开头的下载地址")
             return
         dest = self._pick_dir()
         if not dest:
@@ -293,10 +263,7 @@ class DownloadDialog(QDialog):
 
         segments = int(self.seg_combo.currentData())
         self._settings.setValue("download_segments", segments)
-        if ed2k_link:
-            task = Ed2kTask(ed2k_link, dest)
-        else:
-            task = DownloadTask(url, dest, segments=segments, md4=md4, display_name=display_name)
+        task = DownloadTask(url, dest, segments=segments)
         task.start()
         self._tasks.append(task)
 
@@ -328,14 +295,18 @@ class DownloadDialog(QDialog):
             if not row:
                 continue
             prev = self._prev_done.get(id(task), 0.0)
-            speed = (snap["done"] - prev) / dt if snap["status"] == "downloading" else 0.0
+            inst = (snap["done"] - prev) / dt if snap["status"] == "downloading" else 0.0
+            # 指数平滑速度显示，避免读数忽高忽低
+            last = self._smooth_speed.get(id(task), inst)
+            speed = inst * 0.35 + last * 0.65 if snap["status"] == "downloading" else 0.0
+            self._smooth_speed[id(task)] = speed
             self._prev_done[id(task)] = float(snap["done"])
             row.update_view(snap, speed)
         self._last_poll_at = now
 
     def closeEvent(self, event):
         active = [t for t in self._tasks
-                  if t.snapshot()["status"] in ("downloading", "paused", "finding")]
+                  if t.snapshot()["status"] in ("downloading", "paused")]
         if active:
             ret = QMessageBox.question(
                 self, "下载未完成",

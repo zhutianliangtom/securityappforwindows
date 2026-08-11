@@ -149,13 +149,14 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "virtual_desktop",
-            "description": "管理 Windows 虚拟桌面（多桌面）：new 新建一个桌面并切换过去，作为独立工作环境，"
-                           "不影响主桌面及其它桌面的窗口；next/prev 切换到下一个/上一个桌面。"
-                           "需要独立工作环境或要避免打扰用户时使用。",
+            "description": "管理 Windows 虚拟桌面（多桌面），把任务放到独立桌面执行、不干扰用户桌面。"
+                           "典型流程：先 new 新建桌面并切过去（作为独立工作环境），在桌面完成任务，"
+                           "最后 back 返回用户桌面并汇报结果。next/prev 可相邻切换。"
+                           "需要静默执行任务或避免打扰用户时使用。",
             "parameters": {"type": "object",
                            "properties": {"action": {"type": "string",
-                                                     "enum": ["new", "next", "prev"],
-                                                     "description": "new 新建并切换 / next 下一个 / prev 上一个"}},
+                                                     "enum": ["new", "back", "next", "prev"],
+                                                     "description": "new 新建并切换 / back 返回上一桌面 / next 下一个 / prev 上一个"}},
                            "required": ["action"]},
         },
     },
@@ -320,6 +321,7 @@ def execute_tool(name: str, args: dict, allow_dangerous: bool = False,
             action = str(args.get("action", "new"))
             agent_screen.virtual_desktop(action)
             tip = {"new": "新建独立桌面并已切换过去（主桌面不受影响）",
+                   "back": "已返回上一个桌面（回到用户桌面）",
                    "next": "已切换到下一个桌面",
                    "prev": "已切换到上一个桌面"}.get(action, "已完成")
             return {"text": f"[虚拟桌面] {tip}", "images": []}

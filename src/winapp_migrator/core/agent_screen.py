@@ -54,9 +54,11 @@ def screen_size() -> tuple:
 # ---- 虚拟桌面（多桌面） ----
 def virtual_desktop(action: str = "new"):
     """Windows 虚拟桌面：模拟 Win+Ctrl 组合键，创建/切换独立工作桌面。
-    new: 新建桌面并切换过去（不影响其他桌面内容）；next/prev: 切换到下一个/上一个桌面。
+    new: 新建桌面并切换过去（不影响其他桌面内容）；back: 返回上一个桌面（任务完成后回用户桌面）；
+    next/prev: 切换到下一个/上一个桌面。
     """
     seq = {"new": (0x5B, 0x11, 0x44),     # Win + Ctrl + D
+           "back": (0x5B, 0x11, 0x25),    # Win + Ctrl + Left（回到上一个桌面）
            "next": (0x5B, 0x11, 0x27),    # Win + Ctrl + Right
            "prev": (0x5B, 0x11, 0x25)}    # Win + Ctrl + Left
     keys = seq.get(action, seq["new"])

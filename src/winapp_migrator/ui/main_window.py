@@ -590,12 +590,15 @@ class MainWindow(QMainWindow):
         killed = summary.get("killed") or []
         removed = summary.get("removed") or []
         failed = summary.get("failed") or []
+        signed = summary.get("signed") or []
         if killed:
             lines.append(f"🔴 已拦截恶意进程 {len(killed)} 个：{', '.join(killed[:3])}")
         if removed:
             lines.append(f"🧹 已删除恶意启动项 {len(removed)} 个\n🗂 原值已备份隔离区：{quarantine_dir()}")
         if failed:
             lines.append(f"⚠ 检测到威胁但清理失败 {len(failed)} 项")
+        if signed:
+            lines.append(f"ℹ️ 跳过无法确认/签名有效的同名进程 {len(signed)} 个：{', '.join(signed[:2])}")
         net = summary.get("network")
         if net:
             if net.get("firewall_off"):
@@ -606,8 +609,8 @@ class MainWindow(QMainWindow):
         spoof = attacks.get("arp_spoof")
         if spoof:
             line = (f"🚨 ARP 欺骗: 网关 {spoof['gateway']} MAC 突变\n"
-                    f"   {spoof['old_mac']} → {spoof['new_mac']}")
-            line += "（已发送 ARP 修复包）" if spoof["repaired"] else f"（修复失败: {spoof['reason']}）"
+                    f"   {spoof['old_mac']} → {spoof['new_mac']}\n"
+                    f"   ⚠ {spoof['reason']}")
             lines.append(line)
         flood = attacks.get("flood")
         if flood:

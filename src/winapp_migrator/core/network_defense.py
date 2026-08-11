@@ -1,9 +1,10 @@
 """网络攻击检测与防御模块（纯 Win32 API，无第三方依赖）
 
 - ARP 欺骗检测：GetIpNetTable 周期采样，网关 IP 的 MAC 突变即告警
-  · 修复：Npcap 发送 ARP 应答包恢复网关真实 MAC（未安装 Npcap 时仅告警）
-- SYN 洪泛检测：GetExtendedTcpTable 统计半开连接，单源超阈值判定
-  · 封禁：HNetCfg.FwPolicy2 防火墙规则封禁攻击来源 IP
+  · 基线需连续稳定样本 + 单播地址校验；仅告警并建议核对，不主动发包
+    （主动发送伪造 ARP 应答包可能触发网络侧误判、且在攻击中会巩固错误映射）
+- SYN 洪泛检测：GetExtendedTcpTable 统计半开连接，连续多轮超阈值才判定
+  · 封禁：HNetCfg.FwPolicy2 防火墙规则封禁攻击来源 IP，规则带时间戳并设上限自动清理
 - TCP 洪泛检测：GetTcpStatistics 入段速率差分，检测整体洪泛告警
 
 阈值保守，避免对正常流量误报。
@@ -23,6 +24,10 @@ from typing import Dict, List, Optional, Tuple
 SYN_FLOOD_THRESHOLD = 100     # 单源半开连接数
 SEG_RATE_THRESHOLD = 5000     # 每秒 TCP 入段数（整体洪泛）
 ARP_WARN_COOLDOWN = 60        # 同一网关 ARP 告警冷却秒数
+ARP_BASELINE_SAMPLES = 2      # 基线所需的连续稳定样本数
+SYN_BLOCK_ROUNDS = 2          # 连续 N 轮超阈值才封禁（防临时突发误封）
+MAX_BLOCK_RULES = 50          # 防火墙封禁规则数量上限，超限清理最旧规则
+BLOCK_RULE_PREFIX = "WinAppMigrator_Block_"
 
 # ------------------------------------------------------------
 # Win32 常量
@@ -187,12 +192,21 @@ def _tcp_stats() -> Tuple[int, int]:
 # 防御动作（真实 API）
 # ------------------------------------------------------------
 def block_ip(ip: str) -> bool:
-    """Windows 防火墙（HNetCfg.FwPolicy2）封禁指定来源 IP"""
+    """Windows 防火墙（HNetCfg.FwPolicy2）封禁指定来源 IP。
+
+    规则名带时间戳便于按序清理；超过 MAX_BLOCK_RULES 时删除最旧的封禁规则，
+    避免攻击源 IP 多为伪造而封禁无效时规则无限累积污染用户防火墙。
+    """
     try:
         import win32com.client
         fw = win32com.client.Dispatch("HNetCfg.FwPolicy2")
+        # 规则数量上限控制：删除最旧的封禁规则（名字前缀为时间戳，按名排序即按时间）
+        own = [r for r in fw.Rules if getattr(r, "Name", "").startswith(BLOCK_RULE_PREFIX)]
+        if len(own) >= MAX_BLOCK_RULES:
+            oldest = sorted(own, key=lambda r: getattr(r, "Name", ""))[0]
+            fw.Rules.Remove(oldest.Name)
         rule = win32com.client.Dispatch("HNetCfg.FwRule")
-        rule.Name = f"WinAppMigrator_Block_{ip}"
+        rule.Name = f"{BLOCK_RULE_PREFIX}{int(time.time())}_{ip}"
         rule.Direction = 1      # NET_FW_RULE_DIR_IN 入站
         rule.Action = 0         # NET_FW_ACTION_BLOCK
         rule.RemoteAddresses = ip
@@ -204,55 +218,6 @@ def block_ip(ip: str) -> bool:
         return False
 
 
-def arp_repair(gateway_ip: str, real_mac: str) -> Tuple[bool, str]:
-    """Npcap 发送 ARP 应答包，广播网关真实 MAC（恢复被欺骗的 ARP 映射）"""
-    try:
-        wpcap = ctypes.WinDLL("wpcap.dll")
-
-        class pcap_if(ctypes.Structure):
-            pass
-
-        pcap_if._fields_ = [
-            ("next", ctypes.POINTER(pcap_if)),
-            ("name", ctypes.c_char_p),
-            ("description", ctypes.c_char_p),
-            ("addresses", ctypes.c_void_p),
-            ("flags", wintypes.ULONG),
-        ]
-        devs = ctypes.POINTER(pcap_if)()
-        errbuf = ctypes.create_string_buffer(256)
-        if wpcap.pcap_findalldevs(ctypes.byref(devs), errbuf) != 0:
-            return False, errbuf.value.decode("gbk", "replace")
-        name = None
-        dev = devs
-        while dev:
-            n = dev.contents.name
-            if n and b"loopback" not in n.lower():
-                name = n.decode()
-                break
-            dev = dev.contents.next
-        wpcap.pcap_freealldevs(devs)
-        if not name:
-            return False, "未找到网络接口"
-
-        p = wpcap.pcap_open_live(name.encode(), 65536, 1, 1000, errbuf)
-        if not p:
-            return False, errbuf.value.decode("gbk", "replace")
-
-        dst = bytes.fromhex("ff" * 6)
-        src = bytes.fromhex(real_mac.replace(":", ""))
-        gw = socket.inet_aton(gateway_ip)
-        eth = dst + src + struct.pack("!H", 0x0806)
-        arp = struct.pack("!HHBBH", 1, 0x0800, 6, 4, 2) + src + gw + dst + gw
-        ok = wpcap.pcap_sendpacket(p, eth + arp, 42) == 0
-        wpcap.pcap_close(p)
-        return ok, ("修复 ARP 应答包已广播" if ok else "ARP 包发送失败")
-    except OSError:
-        return False, "未安装 Npcap，无法发送 ARP 修复包（仅告警）"
-    except Exception as e:
-        return False, str(e)
-
-
 # ------------------------------------------------------------
 # 检测器
 # ------------------------------------------------------------
@@ -260,11 +225,12 @@ class NetworkDefender:
     """网络攻击检测与防御：ARP 欺骗 / SYN 洪泛 / TCP 洪泛"""
 
     def __init__(self):
-        self._arp_baseline: Dict[str, str] = {}   # 网关 IP -> 基线 MAC
+        self._arp_candidates: Dict[str, List[str]] = {}  # 网关 IP -> 观察到的 MAC 候选
         self._last_arp_warn: float = 0.0
         self._last_segs: Optional[int] = None
         self._last_seg_time: float = 0.0
         self._blocked: set = set()
+        self._syn_strikes: Dict[str, int] = {}    # 来源 IP -> 连续超阈值轮数
         self._gateway: Optional[str] = None
 
     def check(self) -> dict:
@@ -287,27 +253,36 @@ class NetworkDefender:
         mac = arp.get(gateway)
         if not mac:
             return None
-        prev = self._arp_baseline.get(gateway)
-        if prev is None:
-            self._arp_baseline[gateway] = mac
+        # MAC 合理性校验：拒绝组播/广播（首字节最低位=1）与全零地址
+        try:
+            first = int(mac.split(":")[0], 16)
+            if first == 0 or (first & 1):
+                return None
+        except (ValueError, IndexError):
             return None
-        if prev == mac:
+        # 基线需连续稳定样本：避免攻击已发生时首个样本即被污染，或被临时抖动误报
+        cands = self._arp_candidates.setdefault(gateway, [])
+        if not cands or cands[-1] != mac:
+            cands.append(mac)
+            if len(cands) > ARP_BASELINE_SAMPLES:
+                cands.pop(0)
+        if len(cands) < ARP_BASELINE_SAMPLES or len(set(cands)) > 1:
+            return None  # 样本未稳定，继续观察
+        baseline = cands[0]
+        if mac == baseline:
             return None
-        # 网关 MAC 突变 → 疑似 ARP 欺骗
+        # 网关 MAC 突变 → 疑似 ARP 欺骗（仅告警，不主动发包修复：
+        # 伪造 ARP 应答包可能触发网络侧误判，且攻击中会把错误映射固化）
         if time.time() - self._last_arp_warn < ARP_WARN_COOLDOWN:
             return None
         self._last_arp_warn = time.time()
-        repaired = False
-        reason = ""
-        if mac != prev:
-            repaired, reason = arp_repair(gateway, prev)  # 用基线（真实）MAC 修复
         return {
             "detected": True,
             "gateway": gateway,
-            "old_mac": prev,
+            "old_mac": baseline,
             "new_mac": mac,
-            "repaired": repaired,
-            "reason": reason,
+            "repaired": False,
+            "reason": "建议核对网关设备 MAC 或重启路由器恢复",
         }
 
     # ---------- 洪泛检测 ----------
@@ -318,9 +293,17 @@ class NetworkDefender:
             if c["state"] in (MIB_TCP_STATE_SYN_RCVD, MIB_TCP_STATE_SYN_SENT) \
                     and c["remote_ip"] != "0.0.0.0":
                 syn_by_ip[c["remote_ip"]] += 1
-        syn_src = sorted(ip for ip, n in syn_by_ip.items() if n >= SYN_FLOOD_THRESHOLD)
+        # 连续多轮超阈值才封禁（防单次突发误封）
+        for ip, n in syn_by_ip.items():
+            if n >= SYN_FLOOD_THRESHOLD:
+                self._syn_strikes[ip] = self._syn_strikes.get(ip, 0) + 1
+            else:
+                self._syn_strikes.pop(ip, None)
+        syn_src = sorted(ip for ip, n in syn_by_ip.items()
+                         if n >= SYN_FLOOD_THRESHOLD
+                         and self._syn_strikes.get(ip, 0) >= SYN_BLOCK_ROUNDS)
 
-        # 自动封禁攻击来源
+        # 自动封禁攻击来源（规则带上限，防伪造源 IP 累积规则）
         blocked = []
         for ip in syn_src:
             if ip not in self._blocked and block_ip(ip):

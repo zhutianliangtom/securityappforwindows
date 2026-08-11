@@ -20,6 +20,7 @@ from winapp_migrator.ui.widgets import (
     Card, PrimaryButton, SecondaryButton, AppItemDelegate, DataDirDialog,
     UninstallConfirmDialog, ToastNotification, SwitchButton
 )
+from winapp_migrator.ui.download_dialog import DownloadDialog
 from winapp_migrator.core.app_scanner import AppScanner, AppInfo
 from winapp_migrator.core.data_dirs import detect_data_dirs
 from winapp_migrator.core.orchestrator import MigrationOrchestrator
@@ -509,6 +510,16 @@ class MainWindow(QMainWindow):
         )
         self.memory_btn.clicked.connect(self._start_memory_optimize)
         layout.addWidget(self.memory_btn)
+
+        self.download_btn = QPushButton("🚀 高速下载")
+        self.download_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.download_btn.setMinimumHeight(40)
+        self.download_btn.setStyleSheet(
+            f"background-color: {PALETTE['primary']}; color: white; font-weight: 700; "
+            "border: none; border-radius: 10px; padding: 10px 24px;"
+        )
+        self.download_btn.clicked.connect(self._open_download_dialog)
+        layout.addWidget(self.download_btn)
 
         self.security_btn = QPushButton("🛡 开启静默防护")
         self.security_btn.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -1048,6 +1059,14 @@ class MainWindow(QMainWindow):
         )
         self.selected_app = app
         self._start_migration()
+
+    def _open_download_dialog(self):
+        """打开高速下载窗口（独立窗口，可同时管理多个任务）"""
+        if not hasattr(self, "_download_dialog") or self._download_dialog is None:
+            self._download_dialog = DownloadDialog(self)
+        self._download_dialog.show()
+        self._download_dialog.raise_()
+        self._download_dialog.activateWindow()
 
     def _start_memory_optimize(self):
         """一键优化内存"""

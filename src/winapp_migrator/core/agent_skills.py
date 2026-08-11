@@ -162,6 +162,7 @@ def build_system_prompt(agent_name: str = "") -> str:
             prompt += "\n\n" + inst
     prompt += ("\n\n可用内置工具：screenshot(截屏观察)、get_screen_size(分辨率)、"
                "ask_user(需求不明确时向用户提问)、"
+               "find_app(秒查已安装应用路径)、search_files(用户目录快速查找文件)、"
                "move_mouse/click/drag/scroll(鼠标)、press_key/type_text(键盘)、"
                "run_command(白名单命令)、read_file/write_file/edit_file(读写编辑文件)、"
                "list_directory(列目录)、save_memory/load_memory(本地长期记忆)。"

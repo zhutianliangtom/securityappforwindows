@@ -13,6 +13,7 @@ from pathlib import Path
 
 from winapp_migrator.core import agent_sandbox
 from winapp_migrator.core import agent_screen
+from winapp_migrator.core import agent_find
 
 # 本地记忆文件（AI 长期记忆，markdown 格式）
 MEMORY_FILE = Path.home() / ".winapp_migrator" / "agent" / "memory.md"
@@ -34,6 +35,34 @@ TOOLS = [
             "name": "get_screen_size",
             "description": "获取屏幕分辨率（宽、高像素），用于计算点击/移动坐标。",
             "parameters": {"type": "object", "properties": {}, "required": []},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "find_app",
+            "description": "快速查找已安装应用（扫描开始菜单/桌面快捷方式/注册表，秒查带缓存），"
+                           "返回可启动的完整路径候选。当用户要打开某个应用而你不确定其确切名称/"
+                           "路径时使用，无需逐层截图找图标。",
+            "parameters": {"type": "object",
+                           "properties": {
+                               "query": {"type": "string", "description": "应用名称，如 微信/记事本/chrome"},
+                               "limit": {"type": "integer", "description": "最多返回候选数，默认 10"}},
+                           "required": ["query"]},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "search_files",
+            "description": "在用户目录快速模糊查找文件（并行遍历，找到即返回），"
+                           "返回匹配的文件完整路径列表。当需要定位某个文件而不知道确切路径时使用。",
+            "parameters": {"type": "object",
+                           "properties": {
+                               "query": {"type": "string", "description": "文件名关键字，如 报告/photo/setup"},
+                               "folder": {"type": "string", "description": "限定搜索目录（可选，默认用户常用目录）"},
+                               "limit": {"type": "integer", "description": "最多返回条数，默认 30"}},
+                           "required": ["query"]},
         },
     },
     {
@@ -236,6 +265,15 @@ def execute_tool(name: str, args: dict, allow_dangerous: bool = False,
         if name == "get_screen_size":
             w, h = agent_screen.screen_size()
             return {"text": f"屏幕分辨率 {w}x{h}", "images": []}
+        if name == "find_app":
+            return {"text": agent_find.find_app(
+                str(args.get("query", "")),
+                agent_sandbox.to_int(args.get("limit", 10))), "images": []}
+        if name == "search_files":
+            return {"text": agent_find.search_files(
+                str(args.get("query", "")),
+                str(args.get("folder", "")),
+                agent_sandbox.to_int(args.get("limit", 30))), "images": []}
         if name == "move_mouse":
             agent_screen.move_mouse(agent_sandbox.to_int(args.get("x")),
                                     agent_sandbox.to_int(args.get("y")))

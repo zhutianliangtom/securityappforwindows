@@ -14,6 +14,7 @@ from pathlib import Path
 from winapp_migrator.core import agent_sandbox
 from winapp_migrator.core import agent_screen
 from winapp_migrator.core import agent_find
+from winapp_migrator.core import agent_locator
 
 # 本地记忆文件（AI 长期记忆，markdown 格式）
 MEMORY_FILE = Path.home() / ".winapp_migrator" / "agent" / "memory.md"
@@ -79,6 +80,22 @@ TOOLS = [
                                "multi_select": {"type": "boolean",
                                                 "description": "是否允许多选，默认 false"}},
                            "required": ["question"]},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "click_text",
+            "description": "按文字精确定位点击：输入目标文字（如按钮文字、菜单项、输入框标签），"
+                           "系统通过 Windows 原生控件(UIA)与屏幕OCR找到该文字的确切像素位置并点击，"
+                           "像素级精确，无需自己估算坐标。文字类目标（按钮/菜单/对话框按钮）优先用它，"
+                           "找不到时才用 click 视觉定位。",
+            "parameters": {"type": "object",
+                           "properties": {"text": {"type": "string",
+                                                   "description": "要点击的文字内容，如 确定/取消/开始/新建 等"},
+                                          "button": {"type": "string", "enum": ["left", "right", "middle"],
+                                                     "description": "鼠标键，默认 left"}},
+                           "required": ["text"]},
         },
     },
     {
@@ -280,11 +297,40 @@ def execute_tool(name: str, args: dict, allow_dangerous: bool = False,
 
     try:
         if name == "screenshot":
-            return {"text": "已截取屏幕", "images": [agent_screen.capture_screen_data_url()]}
+            url = agent_screen.capture_screen_data_url()
+            # 同时用 OCR 提取文字元素坐标，随截图返回给模型（像素级点击依据）
+            png = agent_screen.capture_screen_png()
+            w, h = agent_screen.screen_size()
+            elems = agent_locator.locate_elements(png, w, h)
+            return {"text": "已截取屏幕。" + agent_locator.summarize(elems),
+                    "images": [url]}
         if name == "get_screen_size":
             w, h = agent_screen.screen_size()
             return {"text": f"屏幕分辨率 {w}x{h}",
                     "images": [agent_screen.capture_screen_data_url()]}
+        if name == "click_text":
+            # 按文字精确定位：UIA + OCR 找到文字中心坐标，直接点击（像素级，无需视觉读数）
+            target = str(args.get("text", "")).strip()
+            button = str(args.get("button", "left"))
+            if not target:
+                return {"text": "[click_text] 缺少要点击的文字参数 text", "images": []}
+            w, h = agent_screen.screen_size()
+            png = agent_screen.capture_screen_png()
+            elems = agent_locator.locate_elements(png, w, h)
+            hit = agent_locator.find_element(target, elems)
+            if hit is None:
+                # 兜底：重新截图 OCR 一次（UIA 有时缓存延迟），仍未命中则报错让模型换方案
+                elems = agent_locator.locate_elements(
+                    agent_screen.capture_screen_png(), w, h)
+                hit = agent_locator.find_element(target, elems)
+            if hit is None:
+                return {"text": f"[click_text] 未找到文字「{target}」。屏幕上的文字元素："
+                                f"{agent_locator.summarize(elems)}。请改用 click 视觉定位或确认目标存在。",
+                        "images": []}
+            x, y = hit
+            agent_screen.click_physical(x, y, button, 1)   # 物理像素直点，UIA/OCR 坐标无需换算
+            return {"text": f"已按文字「{target}」精确定位并点击屏幕坐标 ({x},{y})",
+                    "images": []}
         if name == "find_app":
             return {"text": agent_find.find_app(
                 str(args.get("query", "")),

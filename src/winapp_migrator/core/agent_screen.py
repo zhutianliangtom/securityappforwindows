@@ -213,9 +213,28 @@ def move_mouse(x: int, y: int):
     user32.SetCursorPos(int(x), int(y))
 
 
+def move_mouse_physical(x: int, y: int):
+    """物理像素直接移动（不经过模型坐标换算），供 UIA/OCR 等非视觉定位结果使用"""
+    user32.SetCursorPos(int(x), int(y))
+
+
 def click(x: int, y: int, button: str = "left", clicks: int = 1, interval: float = 0.1):
     x, y = map_to_screen(x, y)
     move_mouse(x, y)
+    down = {"left": _MOUSE_LEFTDOWN, "right": _MOUSE_RIGHTDOWN,
+            "middle": _MOUSE_MIDDLEDOWN}[button]
+    up = {"left": _MOUSE_LEFTUP, "right": _MOUSE_RIGHTUP,
+          "middle": _MOUSE_MIDDLEUP}[button]
+    for _ in range(clicks):
+        user32.mouse_event(down, 0, 0, 0, 0)
+        time.sleep(interval)
+        user32.mouse_event(up, 0, 0, 0, 0)
+        time.sleep(interval)
+
+
+def click_physical(x: int, y: int, button: str = "left", clicks: int = 1, interval: float = 0.06):
+    """物理像素直接点击（不经过模型坐标换算），供 UIA/OCR 定位结果使用（像素级精确）"""
+    move_mouse_physical(x, y)
     down = {"left": _MOUSE_LEFTDOWN, "right": _MOUSE_RIGHTDOWN,
             "middle": _MOUSE_MIDDLEDOWN}[button]
     up = {"left": _MOUSE_LEFTUP, "right": _MOUSE_RIGHTUP,

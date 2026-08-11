@@ -103,4 +103,6 @@ def assess_tool(name: str, args: dict) -> tuple:
                 return "risky", "缺少坐标参数"
             if not (0 <= to_int(x) < w and 0 <= to_int(y) < h):
                 return "risky", f"坐标越界 ({x},{y})，屏幕 {w}x{h}"
+    if name == "click_text" and not str(args.get("text", "")).strip():
+        return "risky", "缺少要点击的文字参数"
     return "safe", ""

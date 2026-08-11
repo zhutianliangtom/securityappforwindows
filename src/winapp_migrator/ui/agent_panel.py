@@ -1071,7 +1071,7 @@ class AgentPanel(QDialog):
             self._add_bubble(u, "user")
         if segs:
             self._ensure_ai_bubble()
-            self._refresh_ai_html()   # 截图 image 段随气泡富文本渲染（已截屏字样下方缩略图）
+            self._refresh_ai_html()   # 截图 image 段随气泡富文本渲染（缩略图独立成块）
         self._end_badge_shown = False
         self._refresh_session_combo()
         self._update_welcome()
@@ -1317,17 +1317,16 @@ class AgentPanel(QDialog):
                              f'{seg["html"]}</div>')
             elif t == "op":
                 parts.append(f'<div style="color:{ACCENT};font-size:{f_op}px;'
-                             f'font-family:Consolas;">{seg["html"]}</div>')
+                             f'font-family:Consolas;margin-top:16px;">{seg["html"]}</div>')
             elif t == "result":
                 parts.append(f'<div style="color:{TEXT_DIM};font-size:{f_op}px;font-family:Consolas;'
-                             f'border-left:3px solid {BORDER};padding:2px 10px;margin:2px 0 4px 14px;">'
+                             f'border-left:3px solid {BORDER};padding:2px 10px;'
+                             'margin:16px 0 4px 14px;">'
                              f'{seg["html"]}</div>')
             elif t == "image":
-                # 截图融入主对话气泡："已截屏"字样下方缩略图（display:block 独立成块，不重叠不窜位）
+                # 截图融入主对话气泡：下方缩略图，不显示“已截屏”等提示小字
                 url = seg.get("url", "")
-                cap = seg.get("caption", "已截屏")
                 parts.append(
-                    f'<div style="color:{TEXT_DIM};font-size:{f_sm}px;margin-top:6px;">{_esc(cap)}</div>'
                     f'<div style="padding-left:30px;">'
                     f'<img src="{url}" width="{img_w}" style="border-radius:8px;display:block;'
                     'margin:12px 0 12px 0;"></div>')
@@ -1610,7 +1609,7 @@ class AgentPanel(QDialog):
             b.setProperty("rich_src", src)   # 存未缩放原文，窗口全屏时按缩放系数重渲染
         else:
             self._add_bubble(text, "user")
-        # 手动截屏：截图段进 AI 气泡（"已截屏"字样下方缩略图，融入主对话气泡）
+        # 手动截屏：截图段进 AI 气泡（缩略图融入主对话气泡，不额外显示提示小字）
         send_images = list(images)
         if shot:
             # 喂给模型时带坐标网格（精确点击定位），展示用干净原图
@@ -1923,7 +1922,7 @@ class AgentPanel(QDialog):
         self._scroll_bottom()
 
     def _on_result(self, name: str, text: str, images: list = None):
-        """工具执行完成：输出文本与截图一并渲染进 AI 气泡（截图在'已截屏'字样下方，缩略图不挤压）"""
+        """工具执行完成：输出文本与截图一并渲染进 AI 气泡（截图以缩略图独立成块，不挤压）"""
         self._stop_send_spin()
         self._last_activity = time.time()
         self._ensure_ai_bubble()
@@ -1960,12 +1959,14 @@ class AgentPanel(QDialog):
             self._scroll_bottom()
         elif s == "完成":
             self._hide_spinner()   # 任务结束，停掉转圈
-        elif s in ("已停止", "已达到最大工具轮数，自动结束") or s.startswith("错误"):
+        elif s == "已达到最大工具轮数，自动结束" or s.startswith("错误"):
             self._hide_spinner()
             self._ensure_ai_bubble()
             self._segments.append({"type": "mark", "html": _esc(s)})
             self._refresh_ai_html()
             self._scroll_bottom()
+        elif s == "已停止":
+            self._hide_spinner()   # 用户手动停止仅隐藏转圈，不额外输出“已停止”小字
 
     # ---------- 每步确认（engine 线程调用 → 信号 → 主线程弹窗） ----------
     def _confirm_tool(self, name: str, args: dict) -> bool:

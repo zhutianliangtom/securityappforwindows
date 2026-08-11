@@ -1,19 +1,6 @@
-"""ED2K 找源代理服务（部署到公网 Linux VPS，python3 零依赖运行）
+"""ED2K 联网找源（内置，无需服务器）：直连公共 eD2k 服务器查询某文件（fileid）的源节点
 
-作用：替客户端连 eD2k 网络（公共服务器）查询某文件（fileid）的源节点列表，
-对外提供 HTTP API，客户端拿到源后在本机直连下载。
-
-API：
-    GET /sources?fileid=<32位hex>&size=<字节数>
-    请求头（可选）：X-Token: <PROXY_TOKEN>
-    响应：{"sources": [["ip", port], ...], "query": "ip:port"}
-
-找源流程：对每个内置服务器依次尝试 [明文协议] → [eMule obfuscation 加密协议]，
-聚合去重所有源后返回。
-
-部署（Linux VPS）：
-    python3 ed2k_proxy_server.py [port]
-    建议配 systemd 常驻 + 防火墙仅放行该端口。
+对每个内置服务器依次尝试 [明文协议] → [eMule obfuscation 加密协议]，聚合去重返回源。
 
 协议参考：eMule EncryptedStreamSocket.cpp / opcodes.h（GPL）
 - 明文：0xE3 + uint32BE(len) + opcode + payload
@@ -23,23 +10,29 @@ API：
 """
 
 import hashlib
-import json
 import os
 import secrets
 import socket
 import struct
-import sys
-import threading
 import time
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import parse_qs, urlparse
+from typing import List, Optional, Tuple
 
-# ---------------- 配置 ----------------
-PROXY_TOKEN = ""               # 客户端请求头 X-Token 校验值；置空则不校验
-LISTEN_HOST = "0.0.0.0"
-LISTEN_PORT = 8080
-QUERY_TIMEOUT = 12             # 单台服务器找源超时（秒）
-MAX_SERVERS = 5                # 每次最多尝试的服务器数
+OP_LOGINREQUEST = 0x01
+OP_GETSOURCES = 0x19
+OP_FOUND_SOURCES = 0x42
+MAGIC_SYNC = 0x835E6FC4
+MAGIC_REQUESTER = 34
+MAGIC_SERVER = 203
+QUERY_TIMEOUT = 12            # 单台服务器找源超时（秒）
+MAX_SERVERS = 5               # 每次最多尝试的服务器数
+USERHASH = os.urandom(16)     # 会话用户哈希
+
+DH_PRIME = bytes.fromhex(
+    "F2BF52C55F587ADD5371A936E886EB3C6217A33EC34CB40DC73A41A643AFFCE7"
+    "21FC286366535BDB"
+    "CE259F2286DA4A91B207CBAA5255D4F61CCEAED45AD5E0747DF7781828105F34"
+    "0F762387F88B289142FB42688F05150F548B5F436AF70DF3"
+)
 
 # 2026-08 活跃 eD2k 服务器（来源：emule-security.org / 社区列表），可按需增删
 ED2K_SERVERS = [
@@ -52,25 +45,9 @@ ED2K_SERVERS = [
     ("45.82.80.155", 5687),    # eMule Security
 ]
 
-# ---------------- eMule 常量 ----------------
-PROTO_EDONKEY = 0xE3
-OP_LOGINREQUEST = 0x01
-OP_GETSOURCES = 0x19
-OP_FOUND_SOURCES = 0x42
-MAGIC_SYNC = 0x835E6FC4
-MAGIC_REQUESTER = 34
-MAGIC_SERVER = 203
-DH_PRIME = bytes.fromhex(
-    "F2BF52C55F587ADD5371A936E886EB3C6217A33EC34CB40DC73A41A643AFFCE7"
-    "21FC286366535BDB"  # 48
-    "CE259F2286DA4A91B207CBAA5255D4F61CCEAED45AD5E0747DF7781828105F34"
-    "0F762387F88B289142FB42688F05150F548B5F436AF70DF3"
-)
-USERHASH = os.urandom(16)      # 会话用户哈希（随机即可，非持久身份）
 
-
-# ---------------- RC4（纯 Python，零依赖） ----------------
 class _RC4:
+    """纯 Python RC4（KSA + PRGA），加解密同一函数"""
     def __init__(self, key: bytes):
         self._s = list(range(256))
         j = 0
@@ -96,7 +73,6 @@ class _RC4:
         return bytes(a ^ b for a, b in zip(data, ks))
 
 
-# ---------------- 底层 IO ----------------
 def _read_exact(sock: socket.socket, n: int) -> bytes:
     buf = bytearray()
     while len(buf) < n:
@@ -118,7 +94,7 @@ def _recv_packet(sock: socket.socket, crypt=None) -> tuple:
     raw = _read_exact(sock, 5)
     if crypt:
         raw = crypt.crypt(raw)
-    if raw[0] != PROTO_EDONKEY:
+    if raw[0] != 0xE3:
         raise IOError("协议头错误")
     length = struct.unpack(">I", raw[1:5])[0]
     if length > 1_000_000:
@@ -130,7 +106,7 @@ def _recv_packet(sock: socket.socket, crypt=None) -> tuple:
 
 
 def _make_login() -> bytes:
-    """eMule 风格 LoginRequest：userhash + clientid + tcp/udp 端口 + 3 个 tag"""
+    """eMule 风格 LoginRequest：userhash + clientid + tcp/udp 端口 + 4 个 tag"""
     def tag_u32(name: int, val: int) -> bytes:
         return bytes([0x03]) + struct.pack("<H", name) + struct.pack("<I", val)
 
@@ -146,7 +122,7 @@ def _make_login() -> bytes:
             + struct.pack("<I", 0)         # clientid（未入网）
             + struct.pack("<H", 4662)      # tcpport
             + struct.pack("<H", 4662)      # udpport
-            + struct.pack("<I", len(tags) and 4)  # tag 数量
+            + struct.pack("<I", 4)         # tag 数量
             + tags)
     return bytes([OP_LOGINREQUEST]) + body
 
@@ -167,12 +143,10 @@ def _parse_found_sources(payload: bytes, fileid: bytes) -> list:
     return srcs
 
 
-# ---------------- 明文找源 ----------------
 def _query_plain(host: str, port: int, fileid: bytes, timeout: float) -> list:
     sock = socket.create_connection((host, port), timeout=timeout)
     sock.settimeout(timeout)
     try:
-        # 握手：客户端 tag（0xE3 + tag）
         tag = (os.urandom(16)
                + struct.pack("<I", 0) + struct.pack("<H", 4662)
                + struct.pack("<H", 4662) + struct.pack("<I", 0x0C39)
@@ -180,7 +154,6 @@ def _query_plain(host: str, port: int, fileid: bytes, timeout: float) -> list:
         sock.sendall(b"\xe3" + struct.pack(">I", len(tag)) + tag)
         _recv_packet(sock)  # 服务器 tag
         _send_packet(sock, OP_LOGINREQUEST, _make_login()[1:])
-        # 等待登录结果（最多读 10 个包或 ID_CHANGE）
         for _ in range(10):
             op, _ = _recv_packet(sock)
             if op == 0x40:      # OP_IDCHANGE = 登录成功
@@ -190,19 +163,17 @@ def _query_plain(host: str, port: int, fileid: bytes, timeout: float) -> list:
             op, payload = _recv_packet(sock)
             if op == OP_FOUND_SOURCES:
                 return _parse_found_sources(payload, fileid)
-            if op in (0x48, 0x18):  # 断开/错误
+            if op in (0x48, 0x18):
                 break
         return []
     finally:
         sock.close()
 
 
-# ---------------- obfuscation 找源 ----------------
 def _query_obfuscated(host: str, port: int, fileid: bytes, timeout: float) -> list:
     sock = socket.create_connection((host, port), timeout=timeout)
     sock.settimeout(timeout)
     try:
-        # 1. DH：生成 a，发送 marker + G^A
         p = int.from_bytes(DH_PRIME, "big")
         a = secrets.randbits(128)
         ga = pow(2, a, p).to_bytes(96, "big")
@@ -210,7 +181,6 @@ def _query_obfuscated(host: str, port: int, fileid: bytes, timeout: float) -> li
         while marker[0] in (0xE3, 0xC5, 0xD4, 0xE4, 0xE5):
             marker = secrets.token_bytes(1)
         sock.sendall(marker + ga)
-        # 2. 收 G^B，算 S
         gb = int.from_bytes(_read_exact(sock, 96), "big")
         s = pow(gb, a, p).to_bytes(96, "big")
         send_key = hashlib.md5(s + bytes([MAGIC_REQUESTER])).digest()
@@ -218,7 +188,6 @@ def _query_obfuscated(host: str, port: int, fileid: bytes, timeout: float) -> li
         rc4s, rc4r = _RC4(send_key), _RC4(recv_key)
         rc4s.discard(1024)
         rc4r.discard(1024)
-        # 3. 读服务器加密应答（4 magic + 1 methods + 1 preferred + 1 padlen + pad）
         enc = _read_exact(sock, 7)
         dec = rc4r.crypt(enc)
         if struct.unpack("<I", dec[:4])[0] != MAGIC_SYNC:
@@ -226,11 +195,9 @@ def _query_obfuscated(host: str, port: int, fileid: bytes, timeout: float) -> li
         padlen = dec[6]
         if padlen:
             rc4r.crypt(_read_exact(sock, padlen))
-        # 4. 发送客户端加密应答（可延迟到首个 payload：与 login 一并发送）
         final = struct.pack("<I", MAGIC_SYNC) + bytes([0x00]) + bytes([0x00]) + b""
         login_pkt = b"\xe3" + struct.pack(">I", len(_make_login())) + _make_login()
         sock.sendall(rc4s.crypt(final + login_pkt))
-        # 5. 等待登录结果 + GET_SOURCES
         for _ in range(10):
             op, _ = _recv_packet(sock, rc4r)
             if op == 0x40:
@@ -247,73 +214,29 @@ def _query_obfuscated(host: str, port: int, fileid: bytes, timeout: float) -> li
         sock.close()
 
 
-# ---------------- 对外查询 ----------------
-def find_sources(fileid_hex: str, size: int) -> tuple:
-    """依次尝试各服务器（明文→加密），聚合去重。返回 (sources, 命中的服务器)"""
+def find_sources(fileid_hex: str, size: int,
+                 servers: Optional[List[Tuple[str, int]]] = None,
+                 timeout: float = QUERY_TIMEOUT) -> List[Tuple[str, int]]:
+    """依次尝试各服务器（明文→加密），聚合去重。返回 [(ip, port), ...]"""
     try:
         fileid = bytes.fromhex(fileid_hex)
     except ValueError:
-        return [], ""
+        return []
     if len(fileid) != 16:
-        return [], ""
+        return []
     seen, found = set(), []
-    for host, port in ED2K_SERVERS[:MAX_SERVERS]:
-        srcs = []
+    for host, port in (servers or ED2K_SERVERS)[:MAX_SERVERS]:
         try:
-            srcs = _query_plain(host, port, fileid, QUERY_TIMEOUT)
+            srcs = _query_plain(host, port, fileid, timeout)
         except Exception:
             try:
-                srcs = _query_obfuscated(host, port, fileid, QUERY_TIMEOUT)
+                srcs = _query_obfuscated(host, port, fileid, timeout)
             except Exception:
                 continue
         for item in srcs:
             if item not in seen:
                 seen.add(item)
-                found.append(list(item))
+                found.append(item)
         if found:
-            return found, f"{host}:{port}"
-    return [], ""
-
-
-# ---------------- HTTP 服务 ----------------
-class _Handler(BaseHTTPRequestHandler):
-    def log_message(self, *a):
-        pass
-
-    def _ok(self, obj: dict):
-        body = json.dumps(obj).encode()
-        self.send_response(200)
-        self.send_header("Content-Type", "application/json")
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
-
-    def do_GET(self):
-        if PROXY_TOKEN:
-            if self.headers.get("X-Token") != PROXY_TOKEN:
-                self.send_error(403, "Forbidden")
-                return
-        parsed = urlparse(self.path)
-        if parsed.path != "/sources":
-            self.send_error(404)
-            return
-        q = parse_qs(parsed.query)
-        fileid = (q.get("fileid") or [""])[0].lower()
-        size = int((q.get("size") or ["0"])[0])
-        if not fileid:
-            self.send_error(400, "missing fileid")
-            return
-        sources, hit = find_sources(fileid, size)
-        self._ok({"sources": sources, "query": hit})
-
-
-def main():
-    port = int(sys.argv[1]) if len(sys.argv) > 1 else LISTEN_PORT
-    srv = ThreadingHTTPServer((LISTEN_HOST, port), _Handler)
-    print(f"[ed2k-proxy] 监听 {LISTEN_HOST}:{port}，服务器列表 {len(ED2K_SERVERS)} 个",
-          flush=True)
-    srv.serve_forever()
-
-
-if __name__ == "__main__":
-    main()
+            return found
+    return []

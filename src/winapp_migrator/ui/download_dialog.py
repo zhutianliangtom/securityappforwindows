@@ -16,7 +16,7 @@ from PyQt6.QtGui import QIcon
 from PyQt6.QtWidgets import (
     QDialog, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit,
     QPushButton, QProgressBar, QListWidget, QListWidgetItem, QMessageBox,
-    QFileDialog, QComboBox, QInputDialog,
+    QFileDialog, QComboBox,
 )
 
 from winapp_migrator.core.fast_download import DownloadTask, parse_ed2k
@@ -244,16 +244,7 @@ class DownloadDialog(QDialog):
         idx = self.seg_combo.findData(saved)
         self.seg_combo.setCurrentIndex(idx if idx >= 0 else 0)
         opt_row.addWidget(self.seg_combo)
-
-        proxy_label = QLabel("找源代理")
-        proxy_label.setStyleSheet(f"font-size: 13px; color: {PALETTE['text_secondary']};")
-        opt_row.addWidget(proxy_label)
-        self.proxy_edit = QLineEdit()
-        self.proxy_edit.setPlaceholderText("http://你的VPS:8080（ed2k 无源地址时自动联网找源）")
-        self.proxy_edit.setMinimumHeight(30)
-        self.proxy_edit.setText(str(self._settings.value("ed2k_proxy", "")))
-        opt_row.addWidget(self.proxy_edit, 1)
-        opt_row.addStretch(0)
+        opt_row.addStretch(1)
         lay.addLayout(opt_row)
 
         self.task_list = QListWidget()
@@ -264,7 +255,7 @@ class DownloadDialog(QDialog):
         lay.addWidget(self.task_list, 1)
 
         hint = QLabel("提示：支持 http/https 直链；ed2k:// 链接内嵌 sources 时直接 P2P 直连，"
-                      "无 sources 时配置了找源代理会自动联网查源直连，否则可填 HTTP(S) 镜像直链并校验 MD4。"
+                      "无 sources 时自动联网从 eD2k 网络查找源节点，找不到可用本机迅雷/eMule。"
                       "多线程加速需服务器支持 Range，否则自动单线程")
         hint.setStyleSheet(f"font-size: 12px; color: {PALETTE['text_secondary']};")
         lay.addWidget(hint)
@@ -284,52 +275,15 @@ class DownloadDialog(QDialog):
         url = "".join(self.url_edit.text().split())  # 清理所有空白/换行
         md4 = ""
         display_name = ""
-        ed2k_link = ""     # 非空表示走内置 ED2K 直连
-        ed2k_proxy = ""    # 无 sources 时用的找源代理
+        ed2k_link = ""     # 非空表示走内置 ED2K 直连（无 sources 时自动联网找源）
         if url.lower().startswith("ed2k://"):
             info = parse_ed2k(url)
             if not info:
                 QMessageBox.warning(self, "提示", "ed2k 链接格式无效，应为：\ned2k://|file|文件名|大小|MD4哈希|/")
                 return
-            full = parse_ed2k_full(url)
-            if full and full["sources"]:
-                # 链接内嵌源地址（sources）→ 内置 ED2K 直连下载（P2P）
-                md4 = info["md4"]
-                display_name = info["filename"]
-                ed2k_link = url
-            elif self.proxy_edit.text().strip():
-                # 无 sources 但配置了找源代理 → 代理联网查源后直连
-                self._settings.setValue("ed2k_proxy", self.proxy_edit.text().strip())
-                md4 = info["md4"]
-                display_name = info["filename"]
-                ed2k_link = url
-                ed2k_proxy = self.proxy_edit.text().strip()
-            else:
-                # 无 sources 且无代理 → 走 HTTP 镜像直链
-                mirror, ok = QInputDialog.getText(
-                    self, "ed2k 镜像直链",
-                    f"文件：{info['filename']}\n"
-                    f"大小：{_fmt_size(info['size'])}\n"
-                    f"MD4：{info['md4']}\n\n"
-                    "该 ed2k 链接未内嵌源地址（sources）。\n"
-                    "已填写上方\"找源代理\"时程序会自动联网查找源节点直连下载；\n"
-                    "也可粘贴该文件的 HTTP/HTTPS 下载直链（下载完成后自动校验 MD4 哈希）：\n"
-                    "提示：可从资源站/镜像站获取直链，或使用本机迅雷/eMule 下载。")
-                if not ok or not mirror.strip():
-                    QMessageBox.information(
-                        self, "提示",
-                        "未提供镜像直链，已取消。\n\n"
-                        "ed2k 是 P2P 协议，直连需要源地址：\n"
-                        "1) 链接内嵌 sources，或\n"
-                        "2) 在\"找源代理\"填入自建代理服务器地址自动联网找源，或\n"
-                        "3) 提供 HTTP 镜像直链，或使用本机迅雷/eMule 下载。")
-                    return
-                url = "".join(mirror.split())  # 去空白/换行，避免粘贴带入 \n 导致 URL 非法
-                if not url.lower().startswith(("http://", "https://")):
-                    QMessageBox.warning(self, "提示", "镜像直链必须以 http:// 或 https:// 开头")
-                    return
-                md4 = info["md4"]
-                display_name = info["filename"]
+            md4 = info["md4"]
+            display_name = info["filename"]
+            ed2k_link = url
         elif not url.lower().startswith(("http://", "https://")):
             QMessageBox.warning(self, "提示", "请输入以 http://、https:// 或 ed2k:// 开头的下载地址")
             return
@@ -340,7 +294,7 @@ class DownloadDialog(QDialog):
         segments = int(self.seg_combo.currentData())
         self._settings.setValue("download_segments", segments)
         if ed2k_link:
-            task = Ed2kTask(ed2k_link, dest, proxy_url=ed2k_proxy)
+            task = Ed2kTask(ed2k_link, dest)
         else:
             task = DownloadTask(url, dest, segments=segments, md4=md4, display_name=display_name)
         task.start()

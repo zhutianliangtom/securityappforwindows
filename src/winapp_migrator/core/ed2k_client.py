@@ -13,7 +13,6 @@
 迅雷/eMule 客户端。
 """
 
-import json
 import os
 import re
 import select
@@ -21,10 +20,9 @@ import socket
 import struct
 import threading
 import time
-import urllib.parse
-import urllib.request
 from typing import Dict, List, Optional, Tuple
 
+from winapp_migrator.core.ed2k_source import find_sources as _net_find_sources
 from winapp_migrator.core.fast_download import ED2K_PART_SIZE, _ed2k_file_hash
 
 OP_FILEREQUEST = 0x46
@@ -32,23 +30,6 @@ OP_REQPARTS = 0x47
 CHUNK_SIZE = 10240
 _CONNECT_TIMEOUT = 8
 _MAX_PACKET = 10_000_000
-
-
-def find_sources_via_proxy(fileid_hex: str, size: int, proxy_url: str,
-                           timeout: float = 25.0) -> List[Tuple[str, int]]:
-    """调用找源代理 API 获取源列表。返回 [(ip, port), ...]，失败返回空。
-    代理地址支持 http://host:port 或 http://host:port?token=xxx（token 作为 X-Token 请求头）"""
-    try:
-        u = urllib.parse.urlparse(proxy_url.strip())
-        base = f"{u.scheme}://{u.netloc}"
-        token = (urllib.parse.parse_qs(u.query).get("token") or [""])[0]
-        url = f"{base}/sources?fileid={fileid_hex}&size={int(size)}"
-        req = urllib.request.Request(url, headers={"X-Token": token} if token else {})
-        with urllib.request.urlopen(req, timeout=timeout) as r:
-            data = json.loads(r.read().decode("utf-8", "replace"))
-        return [tuple(s) for s in data.get("sources", []) if len(s) == 2]
-    except Exception:
-        return []
 
 
 def _sanitize_name(name: str) -> str:
@@ -104,12 +85,10 @@ def _read_exact(sock: socket.socket, n: int) -> bytes:
 class Ed2kTask:
     """ED2K 直连下载任务。状态字段线程安全，UI 侧轮询 snapshot() 刷新"""
 
-    def __init__(self, link: str, dest_dir: str, proxy_url: str = ""):
+    def __init__(self, link: str, dest_dir: str):
         info = parse_ed2k_full(link)
         if not info:
             raise ValueError("ed2k 链接格式无效")
-        if not info["sources"] and not proxy_url:
-            raise ValueError("ed2k 链接无内嵌源地址（sources），且未配置找源代理")
         self.link = link
         self.dest_dir = dest_dir
         self.filename = info["filename"]
@@ -118,7 +97,6 @@ class Ed2kTask:
         self.md4 = info["md4"]
         self._fileid = info["fileid"]
         self._sources = list(info["sources"])
-        self._proxy = proxy_url.strip()
         self.done = 0
         self.status = "pending"
         self.error = ""
@@ -165,16 +143,15 @@ class Ed2kTask:
 
     # ---------- 下载 ----------
     def _run(self):
-        if not self._sources and self._proxy:
-            # 无内嵌源地址 → 通过找源代理联网查源
+        if not self._sources:
+            # 无内嵌源地址 → 联网从公共 eD2k 服务器查找源节点
             self._set_status("finding")
-            self._sources = find_sources_via_proxy(
-                self._fileid.hex(), self.total, self._proxy)
+            self._sources = _net_find_sources(self._fileid.hex(), self.total)
             if self._cancelled:
                 self._set_status("canceled")
                 return
             if not self._sources:
-                self._set_status("error", "找源代理未发现该文件的源节点（文件可能已无人在线分享），"
+                self._set_status("error", "未能从 eD2k 网络找到该文件的源节点（文件可能已无人在线分享），"
                                           "可尝试 HTTP 镜像或本机迅雷/eMule")
                 return
         self._set_status("downloading")

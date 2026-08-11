@@ -1565,6 +1565,12 @@ class AgentPanel(QDialog):
         return "(无参数)"
 
     def _update_cmd_suggestions(self, text: str):
+        # 空 "/" 时禁用内联补全（禁止预测 /compact），输入字符后恢复
+        if text == "/":
+            if self.input.completer() is not None:
+                self.input.setCompleter(None)
+        elif self.input.completer() is None:
+            self.input.setCompleter(self._completer)
         # 空 "/" 只显示全部技能（不含 /compact 等系统命令）；否则按前缀过滤所有命令（"/c" → /compact 置顶）
         if text.startswith("/"):
             if text == "/":

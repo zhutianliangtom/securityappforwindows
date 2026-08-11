@@ -33,6 +33,7 @@ VK = {"enter": 0x0D, "return": 0x0D, "tab": 0x09, "escape": 0x1B, "esc": 0x1B,
 _shot_size = None    # 原始截图尺寸 (w, h)，物理屏幕采样基准
 _model_size = None   # 发给视觉模型的截图尺寸（统一缩放到 _MODEL_W 宽），模型刻度读数基准
 _MODEL_W = 1280      # 视觉模型统一输入宽度：截图先缩放再叠刻度，刻度与所见图像同基准，杜绝 API 二次缩放导致的读数偏差
+_view = None         # 当前视觉基准：None=全屏；否则 {"cx","cy","region","img_w","img_h","x0","y0"}（zoom 放大态）
 
 
 def capture_screen_png() -> bytes:
@@ -61,19 +62,25 @@ def screen_scale() -> tuple:
 
 
 def map_to_screen(x: int, y: int) -> tuple:
-    """模型读数（基于发给模型的缩放截图 _model_size 系）→ 屏幕物理像素。
+    """模型读数（基于当前视觉基准 _view）→ 屏幕物理像素。
 
-    两段换算：
-      缩放系（模型刻度读数）→ 原始截图系 → 屏幕物理像素（DPI）
+    全屏基准：缩放系（模型刻度读数）→ 原始截图系 → 屏幕物理像素（DPI）。
+    zoom 基准：放大图内坐标 → 对应原始截图区域 → 屏幕物理像素。
     模型看到的刻度数字与所见图像同基准，读数直接可信；此处换算到真实
     屏幕坐标，杜绝模型自行心算导致的双重误差。
     """
+    sx, sy = screen_scale()
+    if _view is not None and _view.get("img_w", 0) > 0:
+        # zoom 放大态：图内坐标 → 原始截图系 → 物理像素
+        ox = _view["x0"] + x * _view["region"] / _view["img_w"]
+        oy = _view["y0"] + y * _view["region"] / _view["img_h"]
+        return int(ox * sx), int(oy * sy)
+    # 全屏态：缩放系 → 原始截图系 → 物理像素
     w_orig, h_orig = _shot_size or screen_size()
     mw, mh = _model_size or (w_orig, h_orig)
     if mw > 0 and mh > 0:
         x = x * w_orig / mw
         y = y * h_orig / mh
-    sx, sy = screen_scale()
     return int(x * sx), int(y * sy)
 
 
@@ -83,9 +90,11 @@ def capture_screen_data_url(grid: bool = True) -> str:
     grid=True 时先等比缩放到统一宽度 _MODEL_W，再叠加坐标网格与像素刻度：
     模型看到的图像与刻度数字同基准（缩放系），按刻度读数即可精确到像素，
     系统端由 map_to_screen 换算回屏幕物理坐标，彻底消除视觉坐标系统性偏差。
+    全屏截图会重置视觉基准回全屏态。
     """
     import base64
-    global _model_size
+    global _model_size, _view
+    _view = None   # 回到全屏视觉基准
     png = capture_screen_png()
     img = QImage.fromData(png)
     if grid:
@@ -99,6 +108,40 @@ def capture_screen_data_url(grid: bool = True) -> str:
     buf = QBuffer(ba)
     buf.open(QIODevice.OpenModeFlag.WriteOnly)
     img.save(buf, "PNG")
+    return "data:image/png;base64," + base64.b64encode(bytes(ba)).decode()
+
+
+def capture_zoom_data_url(cx: int, cy: int, region: int = 400, zoom: int = 3) -> str:
+    """以屏幕物理坐标 (cx,cy) 为中心截取 region×region 区域 → 放大 zoom 倍 →
+    叠细网格刻度后返回，并切换视觉基准为 zoom 态。
+
+    用于两步精确定位：模型先看全屏图给粗坐标 → zoom_in 放大目标区域 →
+    基于放大图细刻度内插给精确坐标（放大 3 倍后内插误差缩小 3 倍，
+    可达 ±4px 屏幕像素）。
+    """
+    import base64
+    global _view
+    png = capture_screen_png()   # 记录原始尺寸
+    img = QImage.fromData(png)
+    sx, sy = screen_scale()
+    # 屏幕物理坐标 → 原始截图系中心，取 region 区域（带边界裁剪）
+    cx0 = max(0, min(img.width() - 1, int(cx / sx if sx else cx)))
+    cy0 = max(0, min(img.height() - 1, int(cy / sy if sy else cy)))
+    x0 = max(0, cx0 - region // 2)
+    y0 = max(0, cy0 - region // 2)
+    x0 = min(x0, max(0, img.width() - region))
+    y0 = min(y0, max(0, img.height() - region))
+    crop = img.copy(x0, y0, region, region)
+    crop = crop.scaled(region * zoom, region * zoom,
+                       Qt.AspectRatioMode.KeepAspectRatio,
+                       Qt.TransformationMode.SmoothTransformation)
+    _draw_coord_grid(crop, cells=16)
+    _view = {"cx": cx, "cy": cy, "region": region,
+             "img_w": crop.width(), "img_h": crop.height(), "x0": x0, "y0": y0}
+    ba = QByteArray()
+    buf = QBuffer(ba)
+    buf.open(QIODevice.OpenModeFlag.WriteOnly)
+    crop.save(buf, "PNG")
     return "data:image/png;base64," + base64.b64encode(bytes(ba)).decode()
 
 

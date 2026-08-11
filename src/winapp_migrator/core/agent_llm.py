@@ -38,13 +38,17 @@ def estimate_image_tokens() -> int:
 
 
 def build_content(text: str = "", images: Optional[List[str]] = None) -> list:
-    """构造 OpenAI 兼容 content 列表：文本 + image_url（data URL 或 http(s) URL）"""
+    """构造 OpenAI 兼容 content 列表：文本 + image_url（data URL 或 http(s) URL）。
+
+    detail="high"：要求 API 以高细节处理截图，防止自动降采样把叠加的坐标
+    网格刻度压成无法辨认的小字，是精确点击的基础保障。
+    """
     parts = []
     if text:
         parts.append({"type": "text", "text": text})
     for img in images or []:
         parts.append({"type": "image_url",
-                      "image_url": {"url": img}})
+                      "image_url": {"url": img, "detail": "high"}})
     return parts or [{"type": "text", "text": ""}]
 
 

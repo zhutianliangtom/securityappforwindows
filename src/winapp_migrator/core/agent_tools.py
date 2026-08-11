@@ -95,11 +95,30 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "click",
-            "description": "在指定坐标点击鼠标（可指定左右中键与次数）。",
+            "description": "在指定坐标点击鼠标（可指定左右中键与次数）。"
+                           "坐标从最近截图（全屏或 zoom_in 放大图）的网格刻度内插读取，"
+                           "系统会自动换算为真实屏幕坐标。目标较小或坐标不确定时，"
+                           "先调用 zoom_in 放大目标区域再精确读数。",
             "parameters": {"type": "object",
                            "properties": {"x": {"type": "integer"}, "y": {"type": "integer"},
                                           "button": {"type": "string", "enum": ["left", "right", "middle"]},
                                           "clicks": {"type": "integer"}},
+                           "required": ["x", "y"]},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "zoom_in",
+            "description": "以指定屏幕坐标为中心放大 400×400 区域（放大 3 倍并叠加细网格刻度），"
+                           "返回放大后的局部截图。用于两步精确定位：先在全屏图上估出目标附近坐标，"
+                           "再 zoom_in 放大后按细刻度精确读数，接着用该坐标调用 click。"
+                           "注意：放大图内的刻度读数同样可直接作为 click 的 x/y，系统自动换算。",
+            "parameters": {"type": "object",
+                           "properties": {"x": {"type": "integer",
+                                                "description": "目标附近的屏幕坐标 X（全屏刻度读数）"},
+                                          "y": {"type": "integer",
+                                                "description": "目标附近的屏幕坐标 Y（全屏刻度读数）"}},
                            "required": ["x", "y"]},
         },
     },
@@ -287,6 +306,14 @@ def execute_tool(name: str, args: dict, allow_dangerous: bool = False,
                                agent_sandbox.to_int(args.get("clicks", 1)))
             return {"text": f"已点击 ({x}, {y}) {args.get('button', 'left')} 键 x{args.get('clicks', 1)}"
                             f"（换算屏幕坐标 {px},{py}）", "images": []}
+        if name == "zoom_in":
+            # 模型给的全屏读数 → 物理坐标 → 放大局部截图（切换视觉基准为 zoom 态）
+            x, y = agent_sandbox.to_int(args.get("x")), agent_sandbox.to_int(args.get("y"))
+            px, py = agent_screen.map_to_screen(x, y)
+            url = agent_screen.capture_zoom_data_url(px, py)
+            return {"text": f"已放大屏幕坐标 ({px},{py}) 附近 400×400 区域（3 倍）。"
+                            "请基于放大图内的细网格刻度精确读取目标坐标，再调用 click。",
+                    "images": [url]}
         if name == "drag":
             agent_screen.drag(agent_sandbox.to_int(args.get("x1")),
                               agent_sandbox.to_int(args.get("y1")),

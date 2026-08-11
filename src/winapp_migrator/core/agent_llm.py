@@ -50,7 +50,7 @@ def build_content(text: str = "", images: Optional[List[str]] = None) -> list:
 
 class LLMClient:
     def __init__(self, base_url: str = DEFAULT_BASE_URL,
-                 api_key: str = DEFAULT_API_KEY, model: str = DEFAULT_MODEL, timeout: float = 180.0):
+                 api_key: str = DEFAULT_API_KEY, model: str = DEFAULT_MODEL, timeout: float = 60.0):
         self.base_url = (base_url or DEFAULT_BASE_URL).rstrip("/")
         self.api_key = api_key or DEFAULT_API_KEY
         self.model = model or DEFAULT_MODEL

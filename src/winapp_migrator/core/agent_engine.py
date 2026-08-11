@@ -9,6 +9,7 @@
 
 import json
 import threading
+import time
 
 from winapp_migrator.core import agent_llm, agent_tools, agent_skills
 from winapp_migrator.core.agent_screen import capture_screen_data_url
@@ -16,6 +17,35 @@ from winapp_migrator.core.agent_screen import capture_screen_data_url
 # 会改变屏幕、需要执行后自动截图验证的工具
 _SCREEN_CHANGING = {"click", "drag", "scroll", "press_key", "type_text",
                     "move_mouse", "run_command"}
+
+
+def _call_with_stop(fn, stop_event, timeout: float = 30.0):
+    """在独立 daemon 线程中执行 fn；超时或 stop 触发时放弃（线程后台自动回收）。
+
+    解决 MCP 等无超时阻塞调用导致引擎线程无法中断、AI 无法停止的问题。
+    """
+    box = {}
+
+    def run():
+        try:
+            box["v"] = fn()
+        except Exception as e:
+            box["e"] = e
+
+    t = threading.Thread(target=run, daemon=True)
+    t.start()
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if not t.is_alive():
+            break
+        if stop_event.is_set():
+            break
+        time.sleep(0.1)
+    if t.is_alive():
+        raise TimeoutError("工具执行超时")
+    if "e" in box:
+        raise box["e"]
+    return box.get("v")
 
 
 class AgentEngine:
@@ -136,7 +166,15 @@ class AgentEngine:
         if name in self._builtin_names:
             return agent_tools.execute_tool(name, args, allow_dangerous=allow_dangerous)
         if self.mcp:
-            return {"text": self.mcp.call_tool(name, args), "images": []}
+            # MCP 调用无超时可能卡死 → 用带超时/可中断封装
+            try:
+                text = _call_with_stop(lambda: self.mcp.call_tool(name, args),
+                                       self._stop, timeout=30.0)
+                return {"text": text, "images": []}
+            except TimeoutError:
+                return {"text": f"[MCP 超时] 工具 {name} 无响应，已放弃（30 秒）", "images": []}
+            except Exception as e:
+                return {"text": f"[MCP 错误] {e}", "images": []}
         return {"text": f"[未知工具] {name}", "images": []}
 
     # ---------- 主循环 ----------

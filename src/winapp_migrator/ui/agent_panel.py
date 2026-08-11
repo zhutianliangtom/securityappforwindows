@@ -1158,6 +1158,32 @@ class AgentPanel(QDialog):
         self.stop_btn.setText("停止中…")
         self.stop_btn.setEnabled(False)
         self._start_stop_anim()   # 停止按钮转圈动画
+        # 兜底：5 秒后线程仍未退出（卡死）→ 强制隔离
+        QTimer.singleShot(5000, self._force_stop_if_stuck)
+
+    def _force_stop_if_stuck(self):
+        """强制停止兜底：普通 stop 后线程仍卡死（LLM/MCP 阻塞）时隔离引擎"""
+        if not (self._engine and self._engine._thread and self._engine._thread.is_alive()):
+            return   # 线程已正常退出，无需兜底
+        eng = self._engine
+        # 断开 UI 回调，防止后台线程后续输出污染界面
+        eng.on_delta = None
+        eng.on_status = None
+        eng.on_result = None
+        eng.on_reasoning = None
+        eng._stop.set()
+        self._engine = None   # 下次发送时重建全新引擎
+        self._add_status("AI 线程无法中断，已强制隔离（后台线程已断开，新任务将自动重建）", ERR)
+        self.send_btn.setText("发送")
+        self.send_btn.setEnabled(True)
+        self.stop_btn.setText("停止")
+        self.stop_btn.setEnabled(False)
+        self._hide_spinner()
+        self._stop_button_anim()
+        if not self._end_badge_shown:
+            self._end_badge_shown = True
+            self._show_end_badge()
+        self._scroll_bottom()
 
     def _do_compact(self):
         """/compact：压缩上下文，把旧消息合并为摘要"""

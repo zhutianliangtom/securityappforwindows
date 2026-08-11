@@ -797,6 +797,7 @@ class AgentPanel(QDialog):
 
         clear_btn = QPushButton(_std_icon(QStyle.StandardPixmap.SP_TrashIcon), "清空")
         clear_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        clear_btn.setToolTip("清空上下文并永久删除该对话（二次弹窗确认，不可恢复）")
         clear_btn.setAutoDefault(False)
         clear_btn.setStyleSheet(
             f"QPushButton {{ background: {PANEL}; color: {TEXT}; border: 1px solid {BORDER};"
@@ -1655,8 +1656,39 @@ class AgentPanel(QDialog):
         else:
             self._add_status("上下文较短，无需压缩", TEXT_DIM)
 
+    def _delete_session(self, sid: str):
+        """永久删除会话：移除元数据记录并删除磁盘上的全部会话文件"""
+        d = self._sessions_dir()
+        for fn in (f"{sid}.json", f"{sid}.ui.json"):
+            try:
+                (d / fn).unlink(missing_ok=True)
+            except Exception:
+                pass
+        lst = [x for x in self._load_session_list() if x.get("id") != sid]
+        self._save_session_list(lst)
+
     def _clear_chat(self):
-        """清空上下文：停止引擎、清空历史与气泡、tokens 归零"""
+        """清空上下文并永久删除当前对话（二次弹窗确认，删除不可恢复）"""
+        if not self._session_id:
+            return
+        # 第一次确认：清空上下文与聊天记录
+        ret1 = QMessageBox.question(
+            self, "清空对话",
+            "确定要清空当前对话吗？\n将清空全部上下文与聊天记录。",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No)
+        if ret1 != QMessageBox.StandardButton.Yes:
+            return
+        # 第二次确认：永久删除该对话（不可恢复）
+        ret2 = QMessageBox.question(
+            self, "永久删除对话",
+            "该对话将连同所有记录被永久删除，无法恢复！\n确定继续吗？",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No)
+        if ret2 != QMessageBox.StandardButton.Yes:
+            return
+        # ---- 执行：停止引擎 + 清空上下文与气泡 + tokens 归零 ----
+        old_id = self._session_id
         if self._engine:
             self._engine.clear_history()
             self._engine.clear_context()   # 同时删除磁盘上的持久化上下文
@@ -1664,6 +1696,7 @@ class AgentPanel(QDialog):
                 self._engine.stop()
         self._ai_bubble = None
         self._segments = []
+        self._user_msgs = []
         self._hide_spinner()
         self.cmd_list.hide()
         self._stop_button_anim()
@@ -1686,8 +1719,14 @@ class AgentPanel(QDialog):
             self._free_layout_item(item)
         self._bubble_widgets = []   # 清空气泡引用，避免 resizeEvent 处理已删除对象
         self.token_label.setText("tokens: 0")
-        self._add_status("已清空上下文，开启新对话", TEXT_DIM)
-        self._persist_current()   # 清空后同步持久化（会话内容为空）
+        # ---- 永久删除该对话，并新开空会话（界面回到欢迎页） ----
+        self._delete_session(old_id)
+        s = self._create_session()
+        self._session_id = s["id"]
+        self._session_name = "新对话"
+        self._refresh_session_combo()
+        self._update_welcome()
+        self._add_status("已清空上下文并永久删除该对话", TEXT_DIM)
 
     # ---------- 拖拽附件（图片/文件） ----------
     _IMG_EXTS = (".png", ".jpg", ".jpeg", ".bmp", ".gif", ".webp")

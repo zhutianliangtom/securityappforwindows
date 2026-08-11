@@ -236,11 +236,10 @@ class SecurityMonitorWorker(QThread):
             tick += 1
             try:
                 summary = self.scanner.sweep(
-                    include_network=(tick % 5 == 0),    # 每 ~2.5 分钟检查网络
-                    include_defender=(tick % 15 == 0),  # 每 ~7.5 分钟 Defender 快速扫描
+                    include_network=(tick % 5 == 0),  # 每 ~2.5 分钟检查网络
                 )
                 if summary["killed"] or summary["removed"] or summary["failed"] \
-                        or summary["network"] or summary["defender"]:
+                        or summary["network"]:
                     self.result.emit(summary)
             except Exception:
                 logger.exception("安全监控异常")
@@ -585,9 +584,6 @@ class MainWindow(QMainWindow):
                 lines.append(f"⚠ 防火墙已关闭：{', '.join(net['firewall_off'])}")
             if net.get("high_risk_listening"):
                 lines.append(f"⚠ 高危端口暴露：{', '.join(str(p) for p in net['high_risk_listening'])}")
-        defender = summary.get("defender")
-        if defender and defender.get("threats"):
-            lines.append(f"🦠 Windows Defender：{defender['message']}")
         if not lines:
             return
         self.tray.showMessage(

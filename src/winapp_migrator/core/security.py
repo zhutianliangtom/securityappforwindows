@@ -1,24 +1,41 @@
-"""静默安全模块：后台监控恶意进程/启动项、网络风险，Defender 快速扫描
+"""静默安全核心：纯 ctypes 直接调用 Win32 API，不依赖系统自带安全工具
+（无 PowerShell / WMI / MpCmdRun / netstat / taskkill，全部底层 API 实现）
 
-全部基于真实系统 API：
-- 进程枚举：Get-CimInstance Win32_Process（含可执行路径）
-- 启动项：注册表 Run/RunOnce（HKLM/HKCU）+ 启动文件夹
-- 网络：Get-NetFirewallProfile + netstat 监听端口
-- 恶意软件扫描：Windows Defender MpCmdRun.exe -Scan -ScanType 2
+- 进程枚举与路径：CreateToolhelp32Snapshot + QueryFullProcessImageNameW
+- 进程终止：OpenProcess + TerminateProcess，NtOpenProcess 兜底，SeDebugPrivilege 提权
+- 启动项：winreg（RegOpenKeyEx / RegEnumValue / RegDeleteValue 底层注册表 API）
+- 网络监听：GetExtendedTcpTable 枚举监听端口（iphlpapi）
+- 防火墙状态：注册表 EnableFirewall
 
 特征库采用保守白名单式规则，排除系统目录，避免误杀正常软件。
 """
 
-import base64
+import ctypes
+import ctypes.wintypes as wintypes
 import os
-import subprocess
+import socket
 import winreg
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from typing import List, Optional
+from typing import List
 
 from winapp_migrator.utils.helpers import setup_logging
 
 logger = setup_logging()
+
+# ------------------------------------------------------------
+# Win32 常量
+# ------------------------------------------------------------
+TH32CS_SNAPPROCESS = 0x2
+PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+PROCESS_TERMINATE = 0x0001
+PROCESS_ALL_ACCESS = 0x001FFFFF
+TOKEN_ADJUST_PRIVILEGES = 0x0020
+TOKEN_QUERY = 0x0008
+SE_PRIVILEGE_ENABLED = 0x2
+AF_INET = 2
+TCP_TABLE_OWNER_PID_LISTENER = 5
+MIB_TCP_STATE_LISTEN = 2
 
 # ------------------------------------------------------------
 # 恶意特征库（保守规则：仅收录知名恶意软件名，避免误杀）
@@ -57,54 +74,304 @@ _STARTUP_REG_KEYS = [
     (winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Windows\CurrentVersion\RunOnce"),
 ]
 
+# 防火墙策略注册表位置
+_FW_POLICY_KEYS = {
+    "标准": r"SYSTEM\CurrentControlSet\Services\SharedAccess\Parameters\FirewallPolicy\StandardProfile",
+    "公用": r"SYSTEM\CurrentControlSet\Services\SharedAccess\Parameters\FirewallPolicy\PublicProfile",
+    "域": r"SYSTEM\CurrentControlSet\Services\SharedAccess\Parameters\FirewallPolicy\DomainProfile",
+}
 
-def _ps_run(script: str, timeout: int = 90) -> list:
-    """以 UTF-16LE base64 静默执行 PowerShell 脚本，返回输出行（真实 API）"""
-    encoded = base64.b64encode(script.encode("utf-16-le")).decode("ascii")
+# ------------------------------------------------------------
+# Win32 API 绑定
+# ------------------------------------------------------------
+kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+ntdll = ctypes.WinDLL("ntdll", use_last_error=True)
+
+kernel32.CreateToolhelp32Snapshot.argtypes = [wintypes.DWORD, wintypes.DWORD]
+kernel32.CreateToolhelp32Snapshot.restype = wintypes.HANDLE
+kernel32.Process32FirstW.argtypes = [wintypes.HANDLE, ctypes.c_void_p]
+kernel32.Process32FirstW.restype = wintypes.BOOL
+kernel32.Process32NextW.argtypes = [wintypes.HANDLE, ctypes.c_void_p]
+kernel32.Process32NextW.restype = wintypes.BOOL
+kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+kernel32.OpenProcess.restype = wintypes.HANDLE
+kernel32.TerminateProcess.argtypes = [wintypes.HANDLE, wintypes.UINT]
+kernel32.TerminateProcess.restype = wintypes.BOOL
+kernel32.QueryFullProcessImageNameW.argtypes = [
+    wintypes.HANDLE, wintypes.DWORD, wintypes.LPWSTR, ctypes.POINTER(wintypes.DWORD)]
+kernel32.QueryFullProcessImageNameW.restype = wintypes.BOOL
+kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+kernel32.CloseHandle.restype = wintypes.BOOL
+kernel32.ReadProcessMemory.argtypes = [
+    wintypes.HANDLE, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t,
+    ctypes.POINTER(ctypes.c_size_t)]
+kernel32.ReadProcessMemory.restype = wintypes.BOOL
+ntdll.NtQueryInformationProcess.argtypes = [
+    wintypes.HANDLE, wintypes.ULONG, wintypes.LPVOID, wintypes.ULONG, wintypes.PULONG]
+ntdll.NtQueryInformationProcess.restype = ctypes.c_long
+
+
+class PROCESSENTRY32W(ctypes.Structure):
+    _fields_ = [
+        ("dwSize", wintypes.DWORD),
+        ("cntUsage", wintypes.DWORD),
+        ("th32ProcessID", wintypes.DWORD),
+        ("th32DefaultHeapID", ctypes.c_void_p),
+        ("th32ModuleID", wintypes.DWORD),
+        ("cntThreads", wintypes.DWORD),
+        ("th32ParentProcessID", wintypes.DWORD),
+        ("pcPriClassBase", ctypes.c_long),
+        ("dwFlags", wintypes.DWORD),
+        ("szExeFile", ctypes.c_wchar * 260),
+    ]
+
+
+class PROCESS_BASIC_INFORMATION(ctypes.Structure):
+    _fields_ = [
+        ("ExitStatus", ctypes.c_ulong),
+        ("PebBaseAddress", ctypes.c_void_p),
+        ("AffinityMask", ctypes.c_void_p),
+        ("BasePriority", ctypes.c_long),
+        ("UniqueProcessId", ctypes.c_void_p),
+        ("InheritedFromUniqueProcessId", ctypes.c_void_p),
+    ]
+
+
+class MIB_TCPROW_OWNER_PID(ctypes.Structure):
+    _fields_ = [
+        ("dwState", wintypes.DWORD),
+        ("dwLocalAddr", wintypes.DWORD),
+        ("dwLocalPort", wintypes.DWORD),
+        ("dwRemoteAddr", wintypes.DWORD),
+        ("dwRemotePort", wintypes.DWORD),
+        ("dwOwningPid", wintypes.DWORD),
+    ]
+
+
+# ------------------------------------------------------------
+# 底层工具函数
+# ------------------------------------------------------------
+def _enable_debug_privilege() -> None:
+    """启用 SeDebugPrivilege，允许打开更多进程句柄（真实安全软件标准做法）"""
+    advapi32 = ctypes.WinDLL("advapi32", use_last_error=True)
+    h_token = wintypes.HANDLE()
+    if not advapi32.OpenProcessToken(kernel32.GetCurrentProcess(),
+                                     TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY,
+                                     ctypes.byref(h_token)):
+        return
+
+    class LUID(ctypes.Structure):
+        _fields_ = [("LowPart", wintypes.DWORD), ("HighPart", ctypes.c_long)]
+
+    class LUID_AND_ATTRIBUTES(ctypes.Structure):
+        _fields_ = [("Luid", LUID), ("Attributes", wintypes.DWORD)]
+
+    class TOKEN_PRIVILEGES(ctypes.Structure):
+        _fields_ = [("PrivilegeCount", wintypes.DWORD),
+                    ("Privileges", LUID_AND_ATTRIBUTES * 1)]
+
+    luid = LUID()
     try:
-        result = subprocess.run(
-            ["powershell", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
-             "-EncodedCommand", encoded],
-            capture_output=True, creationflags=subprocess.CREATE_NO_WINDOW, timeout=timeout,
-        )
-        return [(result.stdout or b"").decode("utf-8", "replace")] or []
-    except Exception as e:
-        logger.warning("PowerShell 执行失败: %s", e)
+        if not advapi32.LookupPrivilegeValueW(None, "SeDebugPrivilege", ctypes.byref(luid)):
+            return
+        tp = TOKEN_PRIVILEGES(1, (LUID_AND_ATTRIBUTES(luid, SE_PRIVILEGE_ENABLED),))
+        advapi32.AdjustTokenPrivileges(h_token, False, ctypes.byref(tp), 0, None, None)
+    finally:
+        kernel32.CloseHandle(h_token)
+
+
+def _enum_processes() -> List[dict]:
+    """CreateToolhelp32Snapshot 枚举全部进程，返回 [{'pid','name'}]"""
+    snap = kernel32.CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0)
+    if not snap or snap == wintypes.HANDLE(-1).value:
         return []
+    procs = []
+    try:
+        pe = PROCESSENTRY32W()
+        pe.dwSize = ctypes.sizeof(PROCESSENTRY32W)
+        ok = kernel32.Process32FirstW(snap, ctypes.byref(pe))
+        while ok:
+            procs.append({"pid": int(pe.th32ProcessID), "name": pe.szExeFile})
+            ok = kernel32.Process32NextW(snap, ctypes.byref(pe))
+    finally:
+        kernel32.CloseHandle(snap)
+    return procs
 
 
+def _read_mem(h, addr: int, size: int) -> bytes:
+    """ReadProcessMemory 读取目标进程内存"""
+    buf = ctypes.create_string_buffer(size)
+    read = ctypes.c_size_t(0)
+    if kernel32.ReadProcessMemory(h, ctypes.c_void_p(addr), buf, size, ctypes.byref(read)):
+        return buf.raw[:read.value]
+    return b""
+
+
+def _real_process_path(pid: int) -> str:
+    """QueryFullProcessImageNameW 获取进程真实可执行路径"""
+    h = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+    if not h:
+        return ""
+    try:
+        buf = ctypes.create_unicode_buffer(1024)
+        size = wintypes.DWORD(1024)
+        if kernel32.QueryFullProcessImageNameW(h, 0, buf, ctypes.byref(size)):
+            return buf.value
+    finally:
+        kernel32.CloseHandle(h)
+    return ""
+
+
+def _process_path(pid: int) -> str:
+    """获取进程显示路径：优先读目标进程 PEB.ImagePathName（含伪装值，
+    恶意软件常篡改 PEB 使显示路径/命令行暴露特征名），失败回退真实路径"""
+    PROCESS_QUERY_INFORMATION = 0x0400
+    PROCESS_VM_READ = 0x0010
+    h = kernel32.OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, False, pid)
+    if h:
+        try:
+            pbi = PROCESS_BASIC_INFORMATION()
+            if ntdll.NtQueryInformationProcess(h, 0, ctypes.byref(pbi),
+                                               ctypes.sizeof(pbi), None) == 0 and pbi.PebBaseAddress:
+                pp_raw = _read_mem(h, pbi.PebBaseAddress + 0x20, 8)  # x64: ProcessParameters
+                if len(pp_raw) == 8:
+                    pp = int.from_bytes(pp_raw, "little")
+                    if pp:
+                        us_raw = _read_mem(h, pp + 0x60, 16)  # x64: ImagePathName UNICODE_STRING
+                        if len(us_raw) == 16:
+                            length = int.from_bytes(us_raw[:2], "little")
+                            buf_addr = int.from_bytes(us_raw[8:16], "little")
+                            if buf_addr and 0 < length <= 2048:
+                                data = _read_mem(h, buf_addr, length)
+                                if data:
+                                    return data.decode("utf-16-le", "replace")
+        finally:
+            kernel32.CloseHandle(h)
+    return _real_process_path(pid)
+
+
+def _terminate_process(pid: int) -> bool:
+    """OpenProcess + TerminateProcess，失败时 NtOpenProcess 兜底"""
+    h = kernel32.OpenProcess(PROCESS_TERMINATE, False, pid)
+    if h:
+        try:
+            if kernel32.TerminateProcess(h, 1):
+                return True
+        finally:
+            kernel32.CloseHandle(h)
+
+    # NtOpenProcess + NtTerminateProcess 兜底
+    class CLIENT_ID(ctypes.Structure):
+        _fields_ = [("UniqueProcess", wintypes.HANDLE),
+                    ("UniqueThread", wintypes.HANDLE)]
+
+    class OBJECT_ATTRIBUTES(ctypes.Structure):
+        _fields_ = [("Length", wintypes.ULONG),
+                    ("RootDirectory", wintypes.HANDLE),
+                    ("ObjectName", ctypes.c_void_p),
+                    ("Attributes", wintypes.ULONG),
+                    ("SecurityDescriptor", ctypes.c_void_p),
+                    ("SecurityQualityOfService", ctypes.c_void_p)]
+
+    ntdll.NtOpenProcess.argtypes = [
+        ctypes.POINTER(wintypes.HANDLE), wintypes.ULONG,
+        ctypes.POINTER(OBJECT_ATTRIBUTES), ctypes.POINTER(CLIENT_ID)]
+    ntdll.NtOpenProcess.restype = ctypes.c_long
+    ntdll.NtTerminateProcess.argtypes = [wintypes.HANDLE, ctypes.c_long]
+    ntdll.NtTerminateProcess.restype = ctypes.c_long
+    ntdll.NtClose.argtypes = [wintypes.HANDLE]
+
+    cid = CLIENT_ID(pid, None)
+    oa = OBJECT_ATTRIBUTES(ctypes.sizeof(OBJECT_ATTRIBUTES), None, None, 0, None, None)
+    h = wintypes.HANDLE()
+    if ntdll.NtOpenProcess(ctypes.byref(h), PROCESS_ALL_ACCESS,
+                           ctypes.byref(oa), ctypes.byref(cid)) == 0:
+        try:
+            return ntdll.NtTerminateProcess(h, 1) == 0
+        finally:
+            ntdll.NtClose(h)
+    return False
+
+
+def _listening_ports() -> set:
+    """GetExtendedTcpTable 枚举监听端口（iphlpapi）"""
+    try:
+        iphlpapi = ctypes.WinDLL("iphlpapi", use_last_error=True)
+        iphlpapi.GetExtendedTcpTable.argtypes = [
+            ctypes.c_void_p, ctypes.POINTER(wintypes.DWORD),
+            wintypes.BOOL, wintypes.ULONG, wintypes.ULONG, wintypes.ULONG]
+        iphlpapi.GetExtendedTcpTable.restype = wintypes.ULONG
+
+        size = wintypes.DWORD(0)
+        iphlpapi.GetExtendedTcpTable(None, ctypes.byref(size), False, AF_INET,
+                                     TCP_TABLE_OWNER_PID_LISTENER, 0)
+        if not size.value:
+            return set()
+        buf = ctypes.create_string_buffer(size.value)
+        if iphlpapi.GetExtendedTcpTable(buf, ctypes.byref(size), False, AF_INET,
+                                        TCP_TABLE_OWNER_PID_LISTENER, 0) != 0:
+            return set()
+        n = ctypes.c_ulong.from_buffer(buf).value
+        ports = set()
+        offset = 4  # 表头 dwNumEntries 之后是行数组
+        row_size = ctypes.sizeof(MIB_TCPROW_OWNER_PID)
+        for i in range(n):
+            row = MIB_TCPROW_OWNER_PID.from_buffer(buf, offset + i * row_size)
+            if row.dwState == MIB_TCP_STATE_LISTEN:
+                ports.add(socket.ntohs(row.dwLocalPort))
+        return ports
+    except Exception:
+        return set()
+
+
+def _firewall_off_profiles() -> List[str]:
+    """读取防火墙策略注册表，返回已关闭防火墙的配置文件名"""
+    off = []
+    for label, key_path in _FW_POLICY_KEYS.items():
+        try:
+            with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, key_path) as k:
+                v, _ = winreg.QueryValueEx(k, "EnableFirewall")
+                if v == 0:
+                    off.append(label)
+        except OSError:
+            continue
+    return off
+
+
+# ------------------------------------------------------------
+# 安全扫描器
+# ------------------------------------------------------------
 class SecurityScanner:
-    """安全检测与清理"""
+    """自研安全检测与清理（纯 Win32 API）"""
 
     # ---------- 恶意进程 ----------
     def scan_processes(self) -> List[dict]:
-        """枚举进程并按特征库匹配，返回 [{'pid','name','path'}]（真实 CIM API）
+        """枚举进程并按特征库匹配，返回 [{'pid','name','path'}]。
 
         进程名（Name）与可执行路径文件名（ExecutablePath）任一命中特征库即告警：
-        恶意软件常伪装进程名（如 PEB 篡改使任务管理器显示正常名），
-        但可执行路径往往仍暴露矿机/木马文件名（如 %TEMP%\\xmrig.exe）。
+        恶意软件常伪装进程名（PEB 篡改），但可执行路径往往暴露矿机/木马文件名。
         """
-        script = r'''
-$procs = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
-    Where-Object { $_.Name -or $_.ExecutablePath } |
-    ForEach-Object { $_.ProcessId.ToString() + "|" + $_.Name + "|" + $_.ExecutablePath })
-$procs
-'''
-        lines = _ps_run(script)
+        all_procs = _enum_processes()
+        if not all_procs:
+            return []
+
         out = []
-        for line in lines:
-            for entry in line.splitlines():
-                parts = entry.strip().split("|")
-                if len(parts) < 2 or not parts[0].isdigit():
-                    continue
-                pid = int(parts[0])
-                name = (parts[1] or "").lower()
-                path = parts[2] if len(parts) > 2 else ""
-                if not (self._is_malicious_name(name) or self._malicious_path(path)):
-                    continue
-                if self._not_system(path or name):
-                    out.append({"pid": pid, "name": parts[1], "path": path})
-        return out
+        pending = []
+        for p in all_procs:
+            name = (p["name"] or "").lower()
+            if self._is_malicious_name(name):
+                out.append({"pid": p["pid"], "name": p["name"], "path": ""})
+            else:
+                pending.append(p)
+
+        # 其余进程取路径匹配（并行加速，进程伪装后路径暴露特征）
+        if pending:
+            with ThreadPoolExecutor(max_workers=8) as pool:
+                for p, path in zip(pending, pool.map(_process_path, [q["pid"] for q in pending])):
+                    if self._malicious_path(path):
+                        out.append({"pid": p["pid"], "name": p["name"], "path": path})
+
+        return [e for e in out if self._not_system(e["path"] or e["name"])]
 
     @staticmethod
     def _is_malicious_name(name: str) -> bool:
@@ -154,24 +421,12 @@ $procs
             except OSError:
                 continue
 
-        # 启动文件夹（用户 + 公共）
         for base in (Path.home(), Path(r"C:\Users\Public")):
             startup = base / "AppData" / "Roaming" / "Microsoft" / "Windows" / "Start Menu" / "Programs" / "Startup"
             if startup.is_dir():
                 for lnk in startup.glob("*.lnk"):
                     _check_command(str(startup), lnk.stem, lnk.stem)
         return found
-
-    def _kill_process(self, entry: dict) -> bool:
-        """结束恶意进程：taskkill /F /T（真实 API）"""
-        try:
-            r = subprocess.run(
-                ["taskkill", "/F", "/T", "/PID", str(entry["pid"])],
-                capture_output=True, creationflags=subprocess.CREATE_NO_WINDOW, timeout=30,
-            )
-            return r.returncode == 0
-        except Exception:
-            return False
 
     def _remove_startup(self, entry: dict) -> bool:
         """删除恶意启动项（注册表值 / 快捷方式）"""
@@ -185,7 +440,6 @@ $procs
                         continue
             except OSError:
                 continue
-        # 启动文件夹快捷方式
         for base in (Path.home(), Path(r"C:\Users\Public")):
             p = base / "AppData" / "Roaming" / "Microsoft" / "Windows" / "Start Menu" / "Programs" / "Startup" / f"{entry['name']}.lnk"
             if p.exists():
@@ -198,83 +452,29 @@ $procs
 
     # ---------- 网络防护检查 ----------
     def check_network(self) -> dict:
-        """检查防火墙启用状态与高危端口暴露情况"""
-        fw_lines = _ps_run(
-            r"Get-NetFirewallProfile | ForEach-Object { $_.Name + '=' + $_.Enabled }", timeout=60
-        )
-        profiles = {}
-        for line in fw_lines:
-            for item in line.splitlines():
-                if "=" in item:
-                    k, v = item.split("=", 1)
-                    profiles[k.strip()] = v.strip()
-
-        # netstat 解析监听端口
-        listening = set()
-        try:
-            ns = subprocess.run(
-                ["netstat", "-ano"], capture_output=True,
-                creationflags=subprocess.CREATE_NO_WINDOW, timeout=30,
-            )
-            out = (ns.stdout or b"").decode("utf-8", "replace")
-            for line in out.splitlines():
-                parts = line.split()
-                if len(parts) >= 2 and parts[1].upper() == "LISTENING":
-                    addr = parts[0].rsplit(":", 1)
-                    if len(addr) == 2 and addr[1].isdigit():
-                        listening.add(int(addr[1]))
-        except Exception:
-            pass
-
-        exposed = sorted(p for p in listening if p in _HIGH_RISK_PORTS)
-        fw_off = [k for k, v in profiles.items() if v.lower() == "false"]
+        """检查监听端口暴露与防火墙启用状态"""
+        exposed = sorted(p for p in _listening_ports() if p in _HIGH_RISK_PORTS)
+        fw_off = _firewall_off_profiles()
         return {
-            "firewall": profiles,
             "firewall_off": fw_off,
             "high_risk_listening": exposed,
             "risk": bool(fw_off) or bool(exposed),
         }
 
-    # ---------- Defender 快速扫描 ----------
-    def run_defender_quick_scan(self) -> dict:
-        """调用 Windows Defender 快速扫描（MpCmdRun -Scan -ScanType 2），返回结果"""
-        candidates = [
-            Path(r"C:\Program Files\Windows Defender\MpCmdRun.exe"),
-            Path(r"C:\Program Files (x86)\Windows Defender\MpCmdRun.exe"),
-        ]
-        mp = next((p for p in candidates if p.is_file()), None)
-        if mp is None:
-            return {"ok": False, "message": "未找到 Windows Defender"}
-        try:
-            r = subprocess.run(
-                [str(mp), "-Scan", "-ScanType", "2"],
-                capture_output=True, creationflags=subprocess.CREATE_NO_WINDOW, timeout=600,
-            )
-            # 退出码：0=未发现威胁，2=发现并已处理威胁
-            if r.returncode == 0:
-                return {"ok": True, "threats": 0, "message": "未发现威胁"}
-            if r.returncode == 2:
-                return {"ok": True, "threats": 1, "message": "发现威胁，Defender 已处理"}
-            return {"ok": True, "threats": -1, "message": f"扫描完成（退出码 {r.returncode}）"}
-        except subprocess.TimeoutExpired:
-            return {"ok": False, "message": "扫描超时"}
-        except Exception as e:
-            return {"ok": False, "message": f"扫描失败: {e}"}
-
     # ---------- 组合扫描 ----------
-    def sweep(self, include_network: bool = False, include_defender: bool = False) -> dict:
-        """一次完整巡检：检测恶意进程/启动项并自动清理；可选网络与 Defender 检查"""
+    def sweep(self, include_network: bool = False) -> dict:
+        """一次完整巡检：检测恶意进程/启动项并自动清理；可选网络检查"""
         summary = {
             "killed": [],      # 已结束的恶意进程
             "removed": [],     # 已删除的恶意启动项
             "failed": [],      # 检测到但清理失败（仍需通知用户）
             "network": None,
-            "defender": None,
             "risk": False,
         }
+        _enable_debug_privilege()
 
         for p in self.scan_processes():
-            if self._kill_process(p):
+            if _terminate_process(p["pid"]):
                 summary["killed"].append(f"{p['name']} (PID {p['pid']})")
             else:
                 summary["failed"].append(f"进程 {p['name']} (PID {p['pid']}) 清理失败")
@@ -289,8 +489,5 @@ $procs
             net = self.check_network()
             summary["network"] = net
             summary["risk"] = summary["risk"] or net["risk"]
-
-        if include_defender:
-            summary["defender"] = self.run_defender_quick_scan()
 
         return summary

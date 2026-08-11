@@ -12,6 +12,7 @@
 import html as _html
 import json
 import os
+import re
 import sys
 import threading
 from pathlib import Path
@@ -21,7 +22,7 @@ from PyQt6.QtGui import QIcon, QFont
 from PyQt6.QtWidgets import (
     QDialog, QLabel, QLineEdit, QPushButton, QComboBox, QScrollArea,
     QVBoxLayout, QHBoxLayout, QMessageBox, QFormLayout, QWidget,
-    QApplication, QStyle,
+    QApplication, QStyle, QListWidget,
 )
 
 from winapp_migrator.core import agent_llm, agent_engine, agent_skills, agent_sandbox
@@ -55,6 +56,82 @@ def _std_icon(sp) -> QIcon:
 
 def _esc(s: str) -> str:
     return _html.escape(str(s), quote=False)
+
+
+# ---------- 轻量 Markdown → HTML 渲染 ----------
+def _inline_md(s: str) -> str:
+    """行内样式：`code`、**bold**、[text](url)"""
+    s = _esc(s)
+    s = re.sub(r"`([^`]+)`",
+               r"<code style='background:#0B1220;color:#22D3EE;padding:1px 5px;"
+               r"border-radius:4px;font-family:Consolas;'>\1</code>", s)
+    s = re.sub(r"\*\*([^*]+)\*\*", r"<b>\1</b>", s)
+    s = re.sub(r"\[([^\]]+)\]\((https?://[^)\s]+)\)",
+               r'<a href="\2" style="color:#22D3EE;">\1</a>', s)
+    return s
+
+
+def _md_to_html(raw: str) -> str:
+    """块级 Markdown → HTML：代码块、标题、列表、段落"""
+    lines = raw.split("\n")
+    out = []
+    in_code = False
+    in_list = False
+    code_buf = []
+    for line in lines:
+        s = line.strip()
+        if s.startswith("```"):
+            if in_code:
+                out.append("<pre style='background:#0B1220;color:#E6EDF7;padding:8px;"
+                           "border-radius:6px;font-family:Consolas;font-size:12px;"
+                           f"border:1px solid #1E2A44;'>" + _esc("\n".join(code_buf)) + "</pre>")
+                code_buf = []
+                in_code = False
+            else:
+                in_code = True
+            continue
+        if in_code:
+            code_buf.append(line)
+            continue
+        if not s:
+            if in_list:
+                out.append("</ul>")
+                in_list = False
+            continue
+        m = re.match(r"^(#{1,6})\s+(.*)", s)
+        if m:
+            if in_list:
+                out.append("</ul>")
+                in_list = False
+            lvl = len(m.group(1))
+            out.append(f"<h{lvl} style='margin:8px 0 4px;color:#E6EDF7;"
+                       f"font-size:{max(13, 20 - lvl)}px;'>{_inline_md(m.group(2))}</h{lvl}>")
+            continue
+        if re.match(r"^[-*+]\s+", s) or re.match(r"^\d+[.)]\s+", s):
+            if not in_list:
+                out.append("<ul style='margin:4px 0;padding-left:18px;'>")
+                in_list = True
+            item = re.sub(r"^[-*+]\s+|^\d+[.)]\s+", "", s)
+            out.append("<li>" + _inline_md(item) + "</li>")
+            continue
+        if in_list:
+            out.append("</ul>")
+            in_list = False
+        out.append("<p style='margin:4px 0;'>" + _inline_md(s) + "</p>")
+    if in_code:
+        out.append("<pre style='background:#0B1220;color:#E6EDF7;padding:8px;"
+                   "border-radius:6px;font-family:Consolas;font-size:12px;"
+                   f"border:1px solid #1E2A44;'>" + _esc("\n".join(code_buf)) + "</pre>")
+    if in_list:
+        out.append("</ul>")
+    return "".join(out)
+
+
+def _render_text(raw: str) -> str:
+    """AI 正文渲染：Markdown 解析；流式中代码块未闭合时回退为纯文本"""
+    if raw.count("```") % 2 == 1:
+        return _esc(raw).replace("\n", "<br/>")
+    return _md_to_html(raw)
 
 
 class _ConfirmDialog(QDialog):
@@ -391,11 +468,9 @@ class AgentPanel(QDialog):
         self._mcp = McpManager()
         self._agents = agent_skills.load_agents()
 
-        # 当前 AI 气泡内容状态（思考区 / 操作区 / 正文区）
+        # 当前 AI 气泡段落序列（交织渲染：思考 → 操作 → 正文 → 操作 → 正文…）
         self._ai_bubble = None
-        self._think_html = ""
-        self._op_list = []        # 操作行（HTML 片段）
-        self._body_html = ""
+        self._segments = []   # [{"type": "think|op|text|mark", "html"/"raw": ...}]
         self._think_idx = 0
 
         self._build_ui()
@@ -624,14 +699,19 @@ class AgentPanel(QDialog):
         if self._ai_bubble is None:
             return
         parts = []
-        if self._think_html:
-            parts.append(f'<div style="color:{TEXT_DIM};font-size:12px;font-style:italic;">'
-                         f'{self._think_html}</div>')
-        for op in self._op_list:
-            parts.append(f'<div style="color:{ACCENT};font-size:12px;'
-                         f'font-family:Consolas;">{op}</div>')
-        if self._body_html:
-            parts.append(f'<div style="color:{TEXT};font-size:13px;">{self._body_html}</div>')
+        for seg in self._segments:
+            t = seg["type"]
+            if t == "think":
+                parts.append(f'<div style="color:{TEXT_DIM};font-size:12px;font-style:italic;">'
+                             f'{seg["html"]}</div>')
+            elif t == "op":
+                parts.append(f'<div style="color:{ACCENT};font-size:12px;'
+                             f'font-family:Consolas;">{seg["html"]}</div>')
+            elif t == "text":
+                parts.append(f'<div style="color:{TEXT};font-size:13px;">'
+                             f'{_render_text(seg["raw"])}</div>')
+            elif t == "mark":
+                parts.append(f'<div style="color:{TEXT_DIM};font-size:12px;">{seg["html"]}</div>')
         try:
             self._ai_bubble.setText("".join(parts))
         except RuntimeError:
@@ -640,20 +720,25 @@ class AgentPanel(QDialog):
     # ---------- "思考中"动画 ----------
     def _start_think(self):
         self._think_idx = 0
-        self._think_html = "思考中"
+        self._ensure_ai_bubble()
+        if not self._segments or self._segments[-1]["type"] != "think":
+            self._segments.append({"type": "think", "html": "思考中"})
+        else:
+            self._segments[-1]["html"] = "思考中"
         self._refresh_ai_html()
         self._think_timer.start(350)
 
     def _tick_think(self):
         self._think_idx += 1
-        self._think_html = "思考中" + "." * (self._think_idx % 4)
-        self._refresh_ai_html()
+        if self._segments and self._segments[-1]["type"] == "think":
+            self._segments[-1]["html"] = "思考中" + "." * (self._think_idx % 4)
+            self._refresh_ai_html()
 
     def _stop_think(self):
         self._think_timer.stop()
         # 保留思考行（固定文字），思考区始终位于气泡顶部，下方跟操作与正文
-        if self._think_html:
-            self._think_html = "思考中"
+        if self._segments and self._segments[-1]["type"] == "think":
+            self._segments[-1]["html"] = "思考中"
             self._refresh_ai_html()
 
     # ---------- MCP 初始化 ----------
@@ -720,9 +805,7 @@ class AgentPanel(QDialog):
 
         self._add_bubble(text, "user")
         self._ai_bubble = None
-        self._think_html = ""
-        self._op_list = []
-        self._body_html = ""
+        self._segments = []
         self.input.clear()
         self.input.setFocus()
 
@@ -761,16 +844,13 @@ class AgentPanel(QDialog):
             self._engine.clear_history()
             if self._engine._thread and self._engine._thread.is_alive():
                 self._engine.stop()
+        self._ai_bubble = None
+        self._segments = []
         self._stop_think()
         while self.msg_lay.count() > 1:  # 保留末尾 stretch
             item = self.msg_lay.takeAt(0)
             self._free_layout_item(item)
         self.token_label.setText("tokens: 0")
-        self._ai_bubble = None
-        self._think_lbl = None   # 兼容旧引用（无则忽略）
-        self._think_html = ""
-        self._op_list = []
-        self._body_html = ""
         self._add_status("已清空上下文，开启新对话", TEXT_DIM)
 
     def _free_layout_item(self, item):
@@ -797,10 +877,16 @@ class AgentPanel(QDialog):
             self._stop_think()
 
     # ---------- 引擎回调（信号槽，主线程） ----------
+    def _ensure_text_segment(self):
+        """正文段：末尾不是 text 段则新建，否则复用（操作与正文交织）"""
+        if not self._segments or self._segments[-1]["type"] != "text":
+            self._segments.append({"type": "text", "raw": ""})
+
     def _on_delta(self, s: str):
         self._stop_think()
         self._ensure_ai_bubble()
-        self._body_html += _esc(s)
+        self._ensure_text_segment()
+        self._segments[-1]["raw"] += s
         self._refresh_ai_html()
         self._scroll_bottom()
 
@@ -809,32 +895,27 @@ class AgentPanel(QDialog):
             self._start_think()
         elif s.startswith("待执行工具:"):
             name = s.split(":", 1)[1].strip()
-            self._op_list.append(f"▎{_esc(name)}")
+            self._ensure_ai_bubble()
+            self._segments.append({"type": "op", "html": f"▎{_esc(name)}"})
             self._refresh_ai_html()
+            self._scroll_bottom()
         elif s.startswith("正在执行:"):
             name = s.split(":", 1)[1].strip()
-            if self._op_list:
-                self._op_list[-1] = f"▎{_esc(name)} …"
+            self._ensure_ai_bubble()
+            if self._segments and self._segments[-1]["type"] == "op":
+                self._segments[-1]["html"] = f"▎{_esc(name)} …"
             else:
-                self._op_list.append(f"▎{_esc(name)} …")
+                self._segments.append({"type": "op", "html": f"▎{_esc(name)} …"})
             self._refresh_ai_html()
+            self._scroll_bottom()
         elif s == "完成":
             pass   # 正文即最终输出，无需额外标记
-        elif s == "已停止":
+        elif s in ("已停止", "已达到最大工具轮数，自动结束") or s.startswith("错误"):
             self._stop_think()
             self._ensure_ai_bubble()
-            self._body_html += f'<br/><span style="color:{TEXT_DIM};">已停止</span>'
+            self._segments.append({"type": "mark", "html": _esc(s)})
             self._refresh_ai_html()
-        elif s.startswith("错误"):
-            self._stop_think()
-            self._ensure_ai_bubble()
-            self._body_html += f'<br/><span style="color:{ERR};">{_esc(s)}</span>'
-            self._refresh_ai_html()
-        elif s == "已达到最大工具轮数，自动结束":
-            self._stop_think()
-            self._ensure_ai_bubble()
-            self._body_html += f'<br/><span style="color:{TEXT_DIM};">{_esc(s)}</span>'
-            self._refresh_ai_html()
+            self._scroll_bottom()
 
     # ---------- 每步确认（engine 线程调用 → 信号 → 主线程弹窗） ----------
     def _confirm_tool(self, name: str, args: dict) -> bool:

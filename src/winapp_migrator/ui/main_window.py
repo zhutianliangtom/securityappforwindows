@@ -236,15 +236,15 @@ class SecurityMonitorWorker(QThread):
             tick += 1
             try:
                 summary = self.scanner.sweep(
-                    include_network=(tick % 5 == 0),  # 每 ~2.5 分钟检查网络
+                    include_network=(tick % 5 == 0),  # 每 ~50 秒检查网络
                 )
                 if summary["killed"] or summary["removed"] or summary["failed"] \
                         or summary["network"]:
                     self.result.emit(summary)
             except Exception:
                 logger.exception("安全监控异常")
-            # 首次立即扫描，之后每 30 秒巡检
-            if self._stop.wait(30):
+            # 首次立即扫描，之后每 10 秒巡检
+            if self._stop.wait(10):
                 break
 
 
@@ -567,13 +567,13 @@ class MainWindow(QMainWindow):
         self.status_label.setText("静默防护已关闭")
 
     def _on_security_result(self, summary: dict):
-        """安全清理/检查完成后右下角弹窗提示结果"""
+        """安全清理/检查完成后提示结果：托盘通知 + 主窗口兜底弹窗"""
         lines = []
         killed = summary.get("killed") or []
         removed = summary.get("removed") or []
         failed = summary.get("failed") or []
         if killed:
-            lines.append(f"🔴 已结束恶意进程 {len(killed)} 个：{', '.join(killed[:3])}")
+            lines.append(f"🔴 已拦截恶意进程 {len(killed)} 个：{', '.join(killed[:3])}")
         if removed:
             lines.append(f"🧹 已删除恶意启动项 {len(removed)} 个")
         if failed:
@@ -586,11 +586,20 @@ class MainWindow(QMainWindow):
                 lines.append(f"⚠ 高危端口暴露：{', '.join(str(p) for p in net['high_risk_listening'])}")
         if not lines:
             return
+        msg = "\n".join(lines)
+        warn = bool(killed or removed or failed)
         self.tray.showMessage(
-            "安全防护报告", "\n".join(lines),
-            QSystemTrayIcon.MessageIcon.Warning if (killed or removed) else QSystemTrayIcon.MessageIcon.Information,
+            "安全防护报告", msg,
+            QSystemTrayIcon.MessageIcon.Warning if warn else QSystemTrayIcon.MessageIcon.Information,
             6000,
         )
+        # 兜底：主窗口可见时直接弹窗，确保用户一定看到拦截结果
+        # （Windows 管理员进程的托盘气泡可能被系统通知设置静默）
+        if self.isVisible():
+            if warn:
+                QMessageBox.warning(self, "安全防护报告", msg)
+            else:
+                QMessageBox.information(self, "安全防护报告", msg)
 
     def _on_tray_activated(self, reason):
         if reason == QSystemTrayIcon.ActivationReason.Trigger:
@@ -602,6 +611,15 @@ class MainWindow(QMainWindow):
         self.activateWindow()
 
     def closeEvent(self, event):
+        if self._security_on:
+            # 防护运行中：关闭仅最小化到托盘，后台防护保持
+            self.hide()
+            self.tray.showMessage(
+                "WinAppMigrator", "🛡 静默防护仍在后台运行\n点击托盘图标可还原主窗口。",
+                QSystemTrayIcon.MessageIcon.Information, 3000,
+            )
+            event.ignore()
+            return
         if self.security_worker and self.security_worker.isRunning():
             self.security_worker.stop()
             if not self.security_worker.wait(3000):

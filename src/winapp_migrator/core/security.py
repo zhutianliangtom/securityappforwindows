@@ -45,11 +45,17 @@ _MALICIOUS_PROCESS_NAMES = frozenset({
     # 挖矿木马
     "xmrig", "minerd", "minerd64", "cryptominer", "cpuminer",
     "lolminer", "nbminer", "phoenixminer", "claymore", "wildrig",
+    "t-rex", "trex", "teamredminer", "ethminer", "gminer", "kawpow",
     # 远控木马 / 蠕虫
     "njrat", "njw0rm", "darkcomet", "poisonivy", "gh0st", "ghostrat",
     "shellex", "winrar_setup", "srvany", "tcpviewer",
-    # 键盘记录 / 盗号
+    "asyncrat", "quasar", "quasarrat", "remcos", "comrat",
+    # 键盘记录 / 盗号 / 窃密
     "keylogger", "qakbot", "emotet", "trickbot", "botnet",
+    "infostealer", "azorult", "redline", "vidar", "formbook",
+    # 勒索软件
+    "wannacry", "locky", "cerber", "teslacrypt", "gandcrab",
+    "ryuk", "conti", "blackcat", "revil", "phobos",
 })
 
 # 恶意进程名 + 必须出现在非系统目录（防止误杀同名正常组件）
@@ -60,7 +66,8 @@ _SYSTEM_DIRS = frozenset({
 # 启动项命令中的恶意特征（下载器/临时目录随机名 exe 等）
 _MALICIOUS_STARTUP_MARKERS = (
     "xmrig", "minerd", "njrat", "darkcomet", "poisonivy",
-    "\\temp\\", "\\tmp\\",
+    "wannacry", "locky", "asyncrat", "quasar",
+    "\\temp\\", "\\tmp\\", "\\appdata\\local\\temp",
 )
 
 # 高危端口：暴露且防火墙关闭时提示风险

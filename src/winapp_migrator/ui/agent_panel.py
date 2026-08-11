@@ -701,10 +701,7 @@ class AgentPanel(QDialog):
         self._user_msgs: list = []     # 当前会话的用户消息文本（用于切换时重绘）
         self._scroll_pending = False   # 滚动调度去重标志
         self._bubble_widgets: list = []  # 所有气泡 QLabel（窗口缩放时同步宽度）
-        self._img_widgets: list = []   # 截图/图片容器（窗口缩放时同步缩小，禁止溢出）
         self._maximized_once = False   # 首次显示即最大化（默认最大化展示）
-        # 静默虚拟桌面：任务自动在独立桌面执行，结束自动返回主桌面（QSettings 记住选择）
-        self._auto_vd = str(self._settings.value("agent_auto_vd", "1")) != "0"
 
         # 发送/停止按钮转圈动画
         self._send_anim_angle = 0
@@ -777,16 +774,6 @@ class AgentPanel(QDialog):
         self.mode_combo.currentIndexChanged.connect(self._on_mode_changed)
         self._apply_mode_style()
         top.addWidget(self.mode_combo)
-
-        # 静默桌面：任务自动在独立虚拟桌面执行，AI 操作不打扰主桌面，结束自动返回
-        self.vd_check = QCheckBox("静默桌面")
-        self.vd_check.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.vd_check.setToolTip("开启后任务自动切到独立虚拟桌面执行，结束后自动返回主桌面；"
-                                 "AI 操作对主桌面完全无感，可继续正常使用电脑")
-        self.vd_check.setChecked(self._auto_vd)
-        self.vd_check.setStyleSheet(f"QCheckBox {{ color: {TEXT}; font-size: 12px; spacing: 5px; }}")
-        self.vd_check.toggled.connect(self._on_vd_toggled)
-        top.addWidget(self.vd_check)
 
         self.mcp_label = QLabel("MCP: 连接中…")
         self.mcp_label.setStyleSheet(f"color: {TEXT_DIM}; font-size: 12px;")
@@ -1078,10 +1065,7 @@ class AgentPanel(QDialog):
             self._add_bubble(u, "user")
         if segs:
             self._ensure_ai_bubble()
-            self._refresh_ai_html()
-            for seg in segs:                # 截图段独立渲染为图片框
-                if seg.get("type") == "image":
-                    self._add_image_widget(seg.get("url", ""))
+            self._refresh_ai_html()   # 截图 image 段随气泡富文本渲染（已截屏字样下方缩略图）
         self._end_badge_shown = False
         self._refresh_session_combo()
         self._update_welcome()
@@ -1144,15 +1128,6 @@ class AgentPanel(QDialog):
         else:
             self._add_status("AskBeforeEdit 模式：每步操作弹窗确认", OK)
 
-    def _on_vd_toggled(self, on: bool):
-        """静默桌面开关：任务自动在独立虚拟桌面执行（engine 复用，直接改标志）"""
-        self._auto_vd = bool(on)
-        self._settings.setValue("agent_auto_vd", "1" if on else "0")   # 记住设置
-        if self._engine is not None:
-            self._engine.auto_vd = self._auto_vd
-        self._add_status("已开启静默桌面：任务在独立虚拟桌面执行，结束自动返回主桌面"
-                         if on else "已关闭静默桌面：AI 直接在当前桌面操作", ACCENT)
-
     # ---------- 消息气泡 ----------
     @staticmethod
     def _fade_in(widget: QWidget, parent: QWidget):
@@ -1177,8 +1152,6 @@ class AgentPanel(QDialog):
                 b.setMaximumWidth(mw)
             except RuntimeError:
                 pass
-        for rec in self._img_widgets:
-            self._apply_image_size(rec)   # 图片随窗口同步缩小
 
     def showEvent(self, e):
         super().showEvent(e)
@@ -1319,7 +1292,14 @@ class AgentPanel(QDialog):
                 parts.append(f'<div style="color:{TEXT_DIM};font-size:13px;font-family:Consolas;'
                              f'border-left:3px solid {BORDER};padding:2px 10px;margin:2px 0 4px 14px;">'
                              f'{seg["html"]}</div>')
-            # image 段不渲染进气泡富文本（由 _add_image_widget 独立 QLabel 展示，避免与文字混排）
+            elif t == "image":
+                # 截图融入主对话气泡："已截屏"字样下方缩略图（display:block 独立成块，不重叠不窜位）
+                url = seg.get("url", "")
+                cap = seg.get("caption", "已截屏")
+                parts.append(
+                    f'<div style="color:{TEXT_DIM};font-size:11px;margin-top:6px;">{_esc(cap)}</div>'
+                    f'<img src="{url}" width="240" style="border-radius:8px;display:block;'
+                    'margin:4px 0 2px 0;">')
             elif t == "text":
                 parts.append(f'<div style="color:{TEXT};font-size:14px;">'
                              f'{_render_text(seg["raw"])}</div>')
@@ -1537,8 +1517,7 @@ class AgentPanel(QDialog):
                 on_result=lambda n, t, im: self.result_signal.emit(n, t, im),
                 on_reasoning=lambda s: self.reasoning_signal.emit(s),
                 confirm=self._confirm_tool,
-                ask_user=self._ask_user_tool,
-                auto_vd=self._auto_vd)
+                ask_user=self._ask_user_tool)
         return self._engine
 
     def _send(self):
@@ -1587,19 +1566,23 @@ class AgentPanel(QDialog):
         self._user_msgs.append(text)
         self._update_welcome()          # 发消息后欢迎介绍立即消失
 
-        # 用户气泡：文字入气泡；拖拽图片用独立缩小图片框展示（禁止富文本 <img> 溢出挤压）
-        self._add_bubble(text, "user")
-        for u in images:
-            self._add_image_widget(u, caption="图片")
-        # 手动截屏：截图展示在"已截屏"标签下方（用户气泡之后，独立成行不挤压）
+        # 用户气泡：文字与拖拽图片一并渲染进同一气泡（图片缩小缩略图、独立成块，不挤压不窜位）
+        if images:
+            parts = ([f'<div style="font-size:14px;">{_esc(text).replace(chr(10), "<br/>")}</div>']
+                     if text else [])
+            parts += [f'<img src="{u}" width="200" style="border-radius:8px;display:block;'
+                      'margin:6px 0 2px 0;">' for u in images]
+            self._add_bubble("<br/>".join(parts), "user", rich=True)
+        else:
+            self._add_bubble(text, "user")
+        # 手动截屏：截图段进 AI 气泡（"已截屏"字样下方缩略图，融入主对话气泡）
         send_images = list(images)
         if shot:
-            self._add_image_widget(shot)   # 默认标签"已截屏"
             send_images.append(shot)
         self._ai_bubble = None
         self._segments = []
         if shot:
-            self._segments.append({"type": "image", "url": shot})   # 保留给会话持久化恢复
+            self._segments.append({"type": "image", "url": shot, "caption": "已截屏"})
         self._user_stopped = False
         self._end_badge_shown = False
         self._think_done = False
@@ -1702,7 +1685,6 @@ class AgentPanel(QDialog):
             item = self.msg_lay.takeAt(0)
             self._free_layout_item(item)
         self._bubble_widgets = []   # 清空气泡引用，避免 resizeEvent 处理已删除对象
-        self._img_widgets = []      # 清空图片容器引用
         self.token_label.setText("tokens: 0")
         self._add_status("已清空上下文，开启新对话", TEXT_DIM)
         self._persist_current()   # 清空后同步持久化（会话内容为空）
@@ -1847,7 +1829,7 @@ class AgentPanel(QDialog):
         self._scroll_bottom()
 
     def _on_result(self, name: str, text: str, images: list = None):
-        """工具执行完成：操作行下方换行显示执行输出；截图以独立 QLabel 缩略图显示（不与文字混排）"""
+        """工具执行完成：输出文本与截图一并渲染进 AI 气泡（截图在'已截屏'字样下方，缩略图不挤压）"""
         self._last_activity = time.time()
         self._ensure_ai_bubble()
         shown = (text or "").strip()
@@ -1855,57 +1837,11 @@ class AgentPanel(QDialog):
             shown = shown[:2000] + " …（输出过长已截断显示，完整内容已返回模型）"
         shown = _esc(shown).replace("\n", "<br/>")
         self._segments.append({"type": "result", "html": shown})
-        # 截图（screenshot 工具或点击等操作后的自动验证截图）用独立图片框显示在操作输出下方
+        # 截图段（screenshot/get_screen_size 工具结果或操作后自动验证截图）渲染进主对话气泡
         for u in images or []:
-            self._segments.append({"type": "image", "url": u})
-            self._add_image_widget(u)
+            self._segments.append({"type": "image", "url": u, "caption": "已截屏"})
         self._refresh_ai_html()
         self._scroll_bottom()
-
-    def _add_image_widget(self, data_url: str, caption: str = "已截屏"):
-        """截图/图片卡片：与 AI 气泡同款底色圆角，'已截屏'标签下方缩略图，随窗口自适应，禁止溢出"""
-        try:
-            b64 = data_url.partition(",")[2]
-            img = QImage.fromData(base64.b64decode(b64))
-            if img.isNull():
-                return
-            box = QWidget()
-            box.setStyleSheet(
-                f"background: {AI_BG}; border: 1px solid {BORDER}; border-radius: 14px;")
-            v = QVBoxLayout(box)
-            v.setContentsMargins(10, 8, 10, 8)
-            v.setSpacing(4)
-            cap = QLabel(caption)
-            cap.setStyleSheet(f"color: {TEXT_DIM}; font-size: 11px;")
-            v.addWidget(cap)
-            lbl = QLabel()
-            lbl.setStyleSheet("border: none; background: transparent;")
-            v.addWidget(lbl)
-            rec = {"box": box, "lbl": lbl, "img": img}
-            self._img_widgets.append(rec)
-            self._apply_image_size(rec)
-            # 插入到消息流末尾（stretch 前），紧跟 AI 气泡左侧对齐，独立成行不挤压文字
-            self.msg_lay.insertWidget(self.msg_lay.count() - 1, box,
-                                      0, Qt.AlignmentFlag.AlignLeft)
-            self._scroll_bottom()
-        except Exception:
-            pass
-
-    def _apply_image_size(self, rec: dict):
-        """按窗口当前宽度缩小图片（宽度/高度双上限），禁止溢出气泡区域"""
-        try:
-            img = rec["img"]
-            mw = max(180, int(self._bubble_max_width() * 0.8))   # 随窗口自适应
-            w = min(img.width(), mw)
-            h = min(int(img.height() * w / max(img.width(), 1)),
-                    int(self._bubble_max_width() * 0.55))        # 高度上限防长图压扁布局
-            pix = QPixmap.fromImage(img).scaled(
-                w, h, Qt.AspectRatioMode.KeepAspectRatio,
-                Qt.TransformationMode.SmoothTransformation)
-            rec["lbl"].setPixmap(pix)
-            rec["box"].setMaximumWidth(w + 14)
-        except RuntimeError:
-            pass
 
     def _on_status(self, s: str):
         self._last_activity = time.time()

@@ -142,7 +142,7 @@ def _manifest_level(exe_path: str) -> str:
 
 
 def _process_cmdline(pid: int) -> str:
-    """ReadProcessMemory 读取目标进程 PEB.CommandLine（x64 偏移 0x70）"""
+    """ReadProcessMemory 读取目标进程 PEB.CommandLine（按进程位数自适应偏移）"""
     PROCESS_QUERY_INFORMATION = 0x0400
     PROCESS_VM_READ = 0x0010
     h = kernel32.OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, False, pid)
@@ -152,14 +152,15 @@ def _process_cmdline(pid: int) -> str:
         pbi = _sec.PROCESS_BASIC_INFORMATION()
         if ntdll.NtQueryInformationProcess(h, 0, ctypes.byref(pbi),
                                            ctypes.sizeof(pbi), None) == 0 and pbi.PebBaseAddress:
-            pp_raw = _sec._read_mem(h, pbi.PebBaseAddress + 0x20, 8)
-            if len(pp_raw) == 8:
+            layout = _sec._peb_layout(pid)
+            pp_raw = _sec._read_mem(h, pbi.PebBaseAddress + layout["pp"], layout["ptr"])
+            if len(pp_raw) == layout["ptr"]:
                 pp = int.from_bytes(pp_raw, "little")
                 if pp:
-                    us_raw = _sec._read_mem(h, pp + 0x70, 16)  # CommandLine UNICODE_STRING
-                    if len(us_raw) == 16:
+                    us_raw = _sec._read_mem(h, pp + layout["cmd"], layout["us"])
+                    if len(us_raw) == layout["us"]:
                         length = int.from_bytes(us_raw[:2], "little")
-                        buf_addr = int.from_bytes(us_raw[8:16], "little")
+                        buf_addr = int.from_bytes(us_raw[layout["ptr"]:layout["ptr"] * 2], "little")
                         if buf_addr and 0 < length <= 4096:
                             data = _sec._read_mem(h, buf_addr, length)
                             if data:
@@ -188,7 +189,13 @@ class ExecutionGuard:
             if not entry:
                 continue
             if entry["level"] == "block":
-                entry["killed"] = _sec._terminate_process(pid)
+                # 终止前二次校验（防 PID 复用误杀）：当前 PID 仍命中相同攻击特征才处置
+                recheck = self._analyze(pid)
+                if recheck is not None and recheck["level"] == "block":
+                    entry["killed"] = _sec._terminate_process(pid)
+                else:
+                    entry["killed"] = False
+                    entry["reason"] += "（进程已消失或 PID 复用，跳过终止）"
                 result["blocked"].append(entry)
             else:
                 result["warned"].append(entry)

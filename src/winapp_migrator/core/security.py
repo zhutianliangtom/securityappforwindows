@@ -43,16 +43,16 @@ MIB_TCP_STATE_LISTEN = 2
 # ------------------------------------------------------------
 # 恶意特征库（保守规则：仅收录知名恶意软件名，避免误杀）
 # ------------------------------------------------------------
-# 恶意进程名（小写，不含扩展名）
+# 恶意进程名（小写，不含扩展名）。仅收录结论性恶意名称，剔除合法工具/歧义名
+# （如 srvany 为微软 Resource Kit 合法工具、t-rex/trex 为合法基准测试名、winrar_setup/tcpviewer 为合法软件名）
 _MALICIOUS_PROCESS_NAMES = frozenset({
     # 挖矿木马
     "xmrig", "minerd", "minerd64", "cryptominer", "cpuminer",
     "lolminer", "nbminer", "phoenixminer", "claymore", "wildrig",
-    "t-rex", "trex", "teamredminer", "ethminer", "gminer", "kawpow",
+    "teamredminer", "ethminer", "gminer", "kawpow",
     # 远控木马 / 蠕虫
     "njrat", "njw0rm", "darkcomet", "poisonivy", "gh0st", "ghostrat",
-    "shellex", "winrar_setup", "srvany", "tcpviewer",
-    "asyncrat", "quasar", "quasarrat", "remcos", "comrat",
+    "shellex", "asyncrat", "quasar", "quasarrat", "remcos", "comrat",
     # 键盘记录 / 盗号 / 窃密
     "keylogger", "qakbot", "emotet", "trickbot", "botnet",
     "infostealer", "azorult", "redline", "vidar", "formbook",
@@ -66,11 +66,11 @@ _SYSTEM_DIRS = frozenset({
     "windows", "system32", "syswow64", "program files", "program files (x86)",
 })
 
-# 启动项命令中的恶意特征（下载器/临时目录随机名 exe 等）
+# 启动项命令中的恶意特征（仅保留结论性恶意软件名；剔除 temp 路径特征，
+# 因大量合法软件更新器从 %TEMP% 运行，按路径判定会误删合法启动项）
 _MALICIOUS_STARTUP_MARKERS = (
     "xmrig", "minerd", "njrat", "darkcomet", "poisonivy",
     "wannacry", "locky", "asyncrat", "quasar",
-    "\\temp\\", "\\tmp\\", "\\appdata\\local\\temp",
 )
 
 # 高危端口：暴露且防火墙关闭时提示风险
@@ -243,9 +243,60 @@ def _real_process_path(pid: int) -> str:
     return ""
 
 
+def _is_32bit_process(pid: int) -> bool:
+    """判断目标进程是否为 32 位（WOW64）；当前进程为 32 位时全部按 32 位布局处理"""
+    if ctypes.sizeof(ctypes.c_void_p) == 4:
+        return True
+    h = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+    if not h:
+        return False
+    try:
+        iswow2 = getattr(kernel32, "IsWow64Process2", None)  # Win10 1709+
+        if iswow2:
+            pm, nm = wintypes.USHORT(0), wintypes.USHORT(0)
+            iswow2.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.USHORT),
+                               ctypes.POINTER(wintypes.USHORT)]
+            iswow2.restype = wintypes.BOOL
+            if iswow2(h, ctypes.byref(pm), ctypes.byref(nm)):
+                return pm.value == 0x014C  # IMAGE_FILE_MACHINE_I386
+        else:
+            iswow = getattr(kernel32, "IsWow64Process", None)
+            if iswow:
+                wow = wintypes.BOOL(False)
+                iswow.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.BOOL)]
+                iswow.restype = wintypes.BOOL
+                if iswow(h, ctypes.byref(wow)):
+                    return bool(wow.value)
+    finally:
+        kernel32.CloseHandle(h)
+    return False
+
+
+def _peb_layout(pid: int) -> dict:
+    """目标进程 PEB 布局参数：ProcessParameters/ImagePathName/CommandLine 偏移、指针与字符串大小。
+    32 位 WOW64 与 64 位进程布局不同，读取错误偏移会拿到垃圾数据导致漏检/误检。"""
+    if _is_32bit_process(pid):
+        return {"pp": 0x10, "image": 0x38, "cmd": 0x40, "ptr": 4, "us": 8}
+    return {"pp": 0x20, "image": 0x60, "cmd": 0x70, "ptr": 8, "us": 16}
+
+
+def _process_still_matches(pid: int) -> bool:
+    """终止前二次校验：确认 PID 当前指向的进程仍命中恶意特征库。
+    防止扫描与处置之间进程退出、PID 被系统复用而误杀无辜进程。"""
+    path = _process_path(pid)
+    name = os.path.basename(path).lower().replace(".exe", "").strip() if path else ""
+    if not name:
+        for p in _enum_processes():
+            if p["pid"] == pid:
+                name = (p["name"] or "").lower().replace(".exe", "").strip()
+                break
+    return name in _MALICIOUS_PROCESS_NAMES
+
+
 def _process_path(pid: int) -> str:
     """获取进程显示路径：优先读目标进程 PEB.ImagePathName（含伪装值，
-    恶意软件常篡改 PEB 使显示路径/命令行暴露特征名），失败回退真实路径"""
+    恶意软件常篡改 PEB 使显示路径/命令行暴露特征名），失败回退真实路径。
+    按目标进程位数自适应 PEB 偏移（32 位 WOW64 与 64 位布局不同）"""
     PROCESS_QUERY_INFORMATION = 0x0400
     PROCESS_VM_READ = 0x0010
     h = kernel32.OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, False, pid)
@@ -254,14 +305,15 @@ def _process_path(pid: int) -> str:
             pbi = PROCESS_BASIC_INFORMATION()
             if ntdll.NtQueryInformationProcess(h, 0, ctypes.byref(pbi),
                                                ctypes.sizeof(pbi), None) == 0 and pbi.PebBaseAddress:
-                pp_raw = _read_mem(h, pbi.PebBaseAddress + 0x20, 8)  # x64: ProcessParameters
-                if len(pp_raw) == 8:
+                layout = _peb_layout(pid)
+                pp_raw = _read_mem(h, pbi.PebBaseAddress + layout["pp"], layout["ptr"])
+                if len(pp_raw) == layout["ptr"]:
                     pp = int.from_bytes(pp_raw, "little")
                     if pp:
-                        us_raw = _read_mem(h, pp + 0x60, 16)  # x64: ImagePathName UNICODE_STRING
-                        if len(us_raw) == 16:
+                        us_raw = _read_mem(h, pp + layout["image"], layout["us"])
+                        if len(us_raw) == layout["us"]:
                             length = int.from_bytes(us_raw[:2], "little")
-                            buf_addr = int.from_bytes(us_raw[8:16], "little")
+                            buf_addr = int.from_bytes(us_raw[layout["ptr"]:layout["ptr"] * 2], "little")
                             if buf_addr and 0 < length <= 2048:
                                 data = _read_mem(h, buf_addr, length)
                                 if data:
@@ -567,6 +619,8 @@ class SecurityScanner:
         _enable_debug_privilege()
 
         for p in self.scan_processes():
+            if not _process_still_matches(p["pid"]):
+                continue  # 进程已退出或 PID 被复用，放弃处置避免误杀
             self._record_process(p)
             if _terminate_process(p["pid"]):
                 summary["killed"].append(f"{p['name']} (PID {p['pid']})")

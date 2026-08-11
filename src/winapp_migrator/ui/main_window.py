@@ -16,7 +16,10 @@ from PyQt6.QtGui import QIcon, QFont, QFontDatabase
 
 from winapp_migrator.utils.helpers import setup_logging, is_admin, ensure_admin, format_size, get_directory_size, safe_remove
 from winapp_migrator.ui.styles import GLOBAL_QSS, PALETTE, apply_palette
-from winapp_migrator.ui.widgets import Card, PrimaryButton, SecondaryButton, AppItemDelegate, DataDirDialog, UninstallConfirmDialog
+from winapp_migrator.ui.widgets import (
+    Card, PrimaryButton, SecondaryButton, AppItemDelegate, DataDirDialog,
+    UninstallConfirmDialog, ToastNotification
+)
 from winapp_migrator.core.app_scanner import AppScanner, AppInfo
 from winapp_migrator.core.data_dirs import detect_data_dirs
 from winapp_migrator.core.orchestrator import MigrationOrchestrator
@@ -275,6 +278,8 @@ class MainWindow(QMainWindow):
         self._security_on = False
         self.security_worker = None
         self._settings = QSettings("WinAppMigrator", "WinAppMigrator")
+        # 右下角自定义滑出弹窗（拦截结果/状态提示，非系统通知）
+        self.toast = ToastNotification(None)
         self._setup_tray()
         self._check_admin()
         # 记忆上次选择：开启过防护则下次启动自动开启
@@ -549,10 +554,9 @@ class MainWindow(QMainWindow):
         self.security_btn.setText("🛡 静默防护运行中")
         self.status_label.setText("静默防护运行中，正在后台监控…")
         self.tray.show()
-        self.tray.showMessage(
-            "WinAppMigrator",
-            "🛡 静默防护已开启\n后台监控恶意进程、启动项与网络风险，清理后自动通知。",
-            QSystemTrayIcon.MessageIcon.Information, 4000,
+        self.toast.show_toast(
+            "静默防护", "🛡 已开启\n后台监控恶意进程、启动项与网络风险，拦截结果将在此提示。",
+            False, 4000,
         )
 
     def _stop_security(self):
@@ -567,7 +571,7 @@ class MainWindow(QMainWindow):
         self.status_label.setText("静默防护已关闭")
 
     def _on_security_result(self, summary: dict):
-        """安全清理/检查完成后提示结果：托盘通知 + 主窗口兜底弹窗"""
+        """安全清理/检查完成后右下角自定义弹窗提示结果"""
         lines = []
         killed = summary.get("killed") or []
         removed = summary.get("removed") or []
@@ -586,20 +590,8 @@ class MainWindow(QMainWindow):
                 lines.append(f"⚠ 高危端口暴露：{', '.join(str(p) for p in net['high_risk_listening'])}")
         if not lines:
             return
-        msg = "\n".join(lines)
         warn = bool(killed or removed or failed)
-        self.tray.showMessage(
-            "安全防护报告", msg,
-            QSystemTrayIcon.MessageIcon.Warning if warn else QSystemTrayIcon.MessageIcon.Information,
-            6000,
-        )
-        # 兜底：主窗口可见时直接弹窗，确保用户一定看到拦截结果
-        # （Windows 管理员进程的托盘气泡可能被系统通知设置静默）
-        if self.isVisible():
-            if warn:
-                QMessageBox.warning(self, "安全防护报告", msg)
-            else:
-                QMessageBox.information(self, "安全防护报告", msg)
+        self.toast.show_toast("安全防护报告", "\n".join(lines), warn, 7000)
 
     def _on_tray_activated(self, reason):
         if reason == QSystemTrayIcon.ActivationReason.Trigger:
@@ -614,9 +606,8 @@ class MainWindow(QMainWindow):
         if self._security_on:
             # 防护运行中：关闭仅最小化到托盘，后台防护保持
             self.hide()
-            self.tray.showMessage(
-                "WinAppMigrator", "🛡 静默防护仍在后台运行\n点击托盘图标可还原主窗口。",
-                QSystemTrayIcon.MessageIcon.Information, 3000,
+            self.toast.show_toast(
+                "静默防护", "🛡 仍在后台运行\n点击托盘图标可还原主窗口。", False, 3000,
             )
             event.ignore()
             return

@@ -5,9 +5,12 @@ from pathlib import Path
 from PyQt6.QtWidgets import (
     QWidget, QDialog, QHBoxLayout, QVBoxLayout, QLabel, QPushButton,
     QCheckBox, QSizePolicy, QGraphicsDropShadowEffect, QStyledItemDelegate, QStyle,
-    QFileIconProvider
+    QFileIconProvider, QApplication
 )
-from PyQt6.QtCore import Qt, QSize, QRect, QFileInfo
+from PyQt6.QtCore import (
+    Qt, QSize, QRect, QFileInfo, QPoint, QTimer, QPropertyAnimation,
+    QParallelAnimationGroup, QEasingCurve
+)
 from PyQt6.QtGui import QColor, QPainter, QIcon, QFont, QFontMetrics, QPixmap
 
 from winapp_migrator.ui.styles import PALETTE
@@ -448,3 +451,139 @@ class AppItemDelegate(QStyledItemDelegate):
                 return f"{size:.1f} {unit}"
             size /= 1024
         return f"{size:.1f} PB"
+
+
+class ToastNotification(QWidget):
+    """屏幕右下角（任务栏上方）自定义滑出通知弹窗（非系统通知/原生对话框）
+
+    - 无边框置顶、不抢焦点，圆角卡片 + 阴影
+    - 从屏幕右侧向左滑入，停留后向右滑出并淡出
+    - 可点击 ✕ 立即关闭
+    """
+
+    _MARGIN = 16
+    _WIDTH = 380
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowFlags(
+            Qt.WindowType.FramelessWindowHint
+            | Qt.WindowType.WindowStaysOnTopHint
+            | Qt.WindowType.Tool
+        )
+        self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        self.setFixedWidth(self._WIDTH)
+
+        # 滑入：从右侧外平移到目标位置
+        self._anim_in = QPropertyAnimation(self, b"pos", self)
+        self._anim_in.setDuration(320)
+        self._anim_in.setEasingCurve(QEasingCurve.Type.OutCubic)
+        # 滑出：向右平移 + 淡出
+        self._anim_out = QPropertyAnimation(self, b"pos", self)
+        self._anim_out.setDuration(300)
+        self._anim_out.setEasingCurve(QEasingCurve.Type.InCubic)
+        self._fade_out = QPropertyAnimation(self, b"windowOpacity", self)
+        self._fade_out.setDuration(280)
+        self._fade_out.setStartValue(1.0)
+        self._fade_out.setEndValue(0.0)
+        self._out_group = QParallelAnimationGroup(self)
+        self._out_group.addAnimation(self._anim_out)
+        self._out_group.addAnimation(self._fade_out)
+        self._out_group.finished.connect(self.hide)
+
+        self._stay = QTimer(self)
+        self._stay.setSingleShot(True)
+        self._stay.timeout.connect(self._slide_out)
+        self._build_ui()
+
+    def _build_ui(self):
+        self.setStyleSheet(f"""
+            QLabel {{ background: transparent; }}
+            QPushButton {{
+                background: transparent; border: none;
+                color: {PALETTE['text_secondary']}; font-size: 14px; font-weight: 700;
+            }}
+            QPushButton:hover {{ color: {PALETTE['danger']}; }}
+        """)
+        root = QWidget(self)
+        root.setObjectName("toast")
+        root.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        root.setStyleSheet(f"""
+            QWidget#toast {{
+                background-color: {PALETTE['card']};
+                border: 1px solid {PALETTE['border']};
+                border-radius: 12px;
+            }}
+        """)
+        shadow = QGraphicsDropShadowEffect(root)
+        shadow.setBlurRadius(32)
+        shadow.setColor(QColor(0, 0, 0, 70))
+        shadow.setOffset(0, 6)
+        root.setGraphicsEffect(shadow)
+
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(2, 2, 2, 2)
+        outer.addWidget(root)
+
+        lay = QHBoxLayout(root)
+        lay.setContentsMargins(16, 14, 12, 14)
+        lay.setSpacing(12)
+
+        self._accent = QLabel()
+        self._accent.setFixedSize(4, 40)
+        lay.addWidget(self._accent, 0, Qt.AlignmentFlag.AlignVCenter)
+
+        texts = QVBoxLayout()
+        texts.setSpacing(4)
+        self._title = QLabel()
+        self._title.setStyleSheet(f"font-size: 13px; font-weight: 700; color: {PALETTE['text']};")
+        texts.addWidget(self._title)
+        self._body = QLabel()
+        self._body.setWordWrap(True)
+        self._body.setStyleSheet(f"font-size: 12px; color: {PALETTE['text_secondary']};")
+        texts.addWidget(self._body)
+        lay.addLayout(texts, 1)
+
+        close = QPushButton("✕")
+        close.setFixedSize(24, 24)
+        close.setCursor(Qt.CursorShape.PointingHandCursor)
+        close.clicked.connect(self._close_now)
+        lay.addWidget(close, 0, Qt.AlignmentFlag.AlignTop)
+
+    def show_toast(self, title: str, message: str, warn: bool = False, duration: int = 6000):
+        """显示/刷新右下角弹窗并重新滑入"""
+        self._title.setText(title)
+        self._body.setText(message)
+        accent = PALETTE["danger"] if warn else PALETTE["primary"]
+        self._accent.setStyleSheet(f"background-color: {accent}; border-radius: 2px;")
+        self.adjustSize()
+
+        screen = QApplication.primaryScreen().availableGeometry()
+        target = QPoint(screen.right() - self.width() - self._MARGIN,
+                        screen.bottom() - self.height() - self._MARGIN)
+        self.setWindowOpacity(1.0)
+        self.move(screen.right() + 8, target.y())  # 从屏幕右侧外起始
+        self.show()
+        self.raise_()
+
+        self._anim_in.stop()
+        self._anim_in.setStartValue(self.pos())
+        self._anim_in.setEndValue(target)
+        self._anim_in.start()
+
+        self._stay.stop()
+        self._stay.start(duration)
+
+    def _slide_out(self):
+        screen = QApplication.primaryScreen().availableGeometry()
+        self._anim_out.stop()
+        self._fade_out.stop()
+        self._anim_out.setStartValue(self.pos())
+        self._anim_out.setEndValue(QPoint(screen.right() + 8, self.pos().y()))
+        self._out_group.start()
+
+    def _close_now(self):
+        self._stay.stop()
+        self._anim_in.stop()
+        self.hide()

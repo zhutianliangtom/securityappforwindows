@@ -7,13 +7,17 @@
 """
 
 import json
+import time
 import urllib.error
 import urllib.request
 from typing import Callable, List, Optional
 
 DEFAULT_BASE_URL = "https://api.agnes-ai.cn/v1"
 DEFAULT_MODEL = "agnes-2.5-flash"
+DEFAULT_API_KEY = "sk-iydeFjzDmQr4Se3N6yxEjRHccWQbhSXLOSp27ZH5qhxathwR"
 _UA = "WinAppMigrator/1.0 AgentClient"
+_MAX_RETRIES = 3    # 请求失败（429/5xx/网络）自动重试次数
+_RETRY_DELAY = 2.0  # 重试基础延迟（秒），指数退避
 
 
 class AgentLLMError(Exception):
@@ -46,10 +50,10 @@ def build_content(text: str = "", images: Optional[List[str]] = None) -> list:
 
 class LLMClient:
     def __init__(self, base_url: str = DEFAULT_BASE_URL,
-                 api_key: str = "", model: str = DEFAULT_MODEL, timeout: float = 180.0):
+                 api_key: str = DEFAULT_API_KEY, model: str = DEFAULT_MODEL, timeout: float = 180.0):
         self.base_url = (base_url or DEFAULT_BASE_URL).rstrip("/")
-        self.api_key = api_key
-        self.model = model
+        self.api_key = api_key or DEFAULT_API_KEY
+        self.model = model or DEFAULT_MODEL
         self.timeout = timeout
 
     def chat_stream(self, messages: list,
@@ -78,12 +82,27 @@ class LLMClient:
                      "User-Agent": _UA,
                      "Authorization": f"Bearer {self.api_key}"},
             method="POST")
-        try:
-            resp = urllib.request.urlopen(req, timeout=self.timeout)
-        except urllib.error.HTTPError as e:
-            raise AgentLLMError(f"HTTP {e.code}: {e.read().decode('utf-8', 'replace')[:300]}")
-        except urllib.error.URLError as e:
-            raise AgentLLMError(f"网络错误: {e.reason}")
+        # 请求失败自动重试（429 限流 / 5xx / 网络抖动），指数退避
+        resp = None
+        last_err = None
+        for attempt in range(_MAX_RETRIES):
+            try:
+                resp = urllib.request.urlopen(req, timeout=self.timeout)
+                break
+            except urllib.error.HTTPError as e:
+                last_err = f"HTTP {e.code}: {e.read().decode('utf-8', 'replace')[:300]}"
+                if e.code in (429, 500, 502, 503, 504) and attempt < _MAX_RETRIES - 1:
+                    time.sleep(_RETRY_DELAY * (attempt + 1))
+                    continue
+                raise AgentLLMError(last_err)
+            except urllib.error.URLError as e:
+                last_err = f"网络错误: {e.reason}"
+                if attempt < _MAX_RETRIES - 1:
+                    time.sleep(_RETRY_DELAY * (attempt + 1))
+                    continue
+                raise AgentLLMError(last_err)
+        if resp is None:
+            raise AgentLLMError(last_err or "请求失败")
 
         text_parts: List[str] = []
         tool_calls: dict = {}   # index -> {id, name, args}

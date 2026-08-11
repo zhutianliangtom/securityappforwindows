@@ -474,15 +474,7 @@ class AgentPanel(QDialog):
         clear_btn.clicked.connect(self._clear_chat)
         top.addWidget(clear_btn)
 
-        set_btn = QPushButton(_std_icon(QStyle.StandardPixmap.SP_FileDialogDetailedView), "设置")
-        set_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        set_btn.setAutoDefault(False)
-        set_btn.setStyleSheet(
-            f"QPushButton {{ background: {PANEL}; color: {TEXT}; border: 1px solid {BORDER};"
-            "border-radius: 8px; padding: 6px 12px; font-size: 12px; font-weight: 600; }}"
-            f"QPushButton:hover {{ border-color: {ACCENT}; color: {ACCENT}; }}")
-        set_btn.clicked.connect(self._open_settings)
-        top.addWidget(set_btn)
+        # 模型/接口/API Key 已写死，无需设置入口
         root.addLayout(top)
 
         # 聊天区（气泡）
@@ -698,11 +690,11 @@ class AgentPanel(QDialog):
 
     # ---------- 发送 / 停止 ----------
     def _llm_config(self) -> dict:
-        # 模型与接口固定为 Agnes 2.5，禁止用户自定义；仅 API Key 由用户配置
+        # 模型、接口与 API Key 全部写死为 Agnes 2.5，禁止用户自定义
         return {
             "base_url": agent_llm.DEFAULT_BASE_URL,
             "model": agent_llm.DEFAULT_MODEL,
-            "api_key": str(self._settings.value("agent_api_key", "")),
+            "api_key": agent_llm.DEFAULT_API_KEY,
         }
 
     def _ensure_engine(self):
@@ -723,9 +715,6 @@ class AgentPanel(QDialog):
             return
         if text.lower().startswith("/compact"):
             self._do_compact()
-            return
-        if not self._llm_config()["api_key"]:
-            QMessageBox.information(self, "提示", "请先点击「设置」填写 API Key")
             return
         engine = self._ensure_engine()
 
@@ -869,45 +858,7 @@ class AgentPanel(QDialog):
         self._confirm_evt.set()
 
     # ---------- 设置 ----------
-    def _open_settings(self):
-        dlg = QDialog(self)
-        dlg.setWindowTitle("API Key 设置")
-        dlg.setStyleSheet(
-            f"QDialog {{ background: {PANEL}; }}"
-            f"QLabel {{ color: {TEXT}; font-size: 13px; }}"
-            f"QLineEdit {{ background: {BG}; color: {TEXT}; border: 1px solid {BORDER};"
-            "border-radius: 6px; padding: 6px 10px; }}"
-            f"QPushButton {{ border: none; border-radius: 8px; padding: 7px 18px;"
-            "font-weight: 700; }}")
-        form = QFormLayout(dlg)
-        form.setContentsMargins(18, 16, 18, 16)
-        form.setSpacing(12)
-        # 模型与接口固定（只读，禁止自定义）
-        model_lbl = QLabel(agent_llm.DEFAULT_MODEL)
-        model_lbl.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-        base_lbl = QLabel(agent_llm.DEFAULT_BASE_URL)
-        base_lbl.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-        form.addRow("模型（固定）", model_lbl)
-        form.addRow("接口（固定）", base_lbl)
-        key = QLineEdit(str(self._settings.value("agent_api_key", "")))
-        key.setEchoMode(QLineEdit.EchoMode.Password)
-        form.addRow("API Key", key)
-        btns = QHBoxLayout()
-        ok = QPushButton(_std_icon(QStyle.StandardPixmap.SP_DialogYesButton), "保存")
-        ok.setStyleSheet(f"background: {OK}; color: #06281B;")
-        ok.setAutoDefault(False)
-        ok.clicked.connect(dlg.accept)
-        cancel = QPushButton("取消")
-        cancel.setStyleSheet(f"background: {PANEL}; color: {TEXT};"
-                             f"border: 1px solid {BORDER};")
-        cancel.setAutoDefault(False)
-        cancel.clicked.connect(dlg.reject)
-        btns.addWidget(ok)
-        btns.addWidget(cancel)
-        form.addRow(btns)
-        if dlg.exec() == QDialog.DialogCode.Accepted:
-            self._settings.setValue("agent_api_key", key.text().strip())
-            QMessageBox.information(self, "已保存", "API Key 已保存。")
+    # 模型/接口/API Key 已写死，无需设置对话框
 
     def closeEvent(self, event):
         if self._engine:

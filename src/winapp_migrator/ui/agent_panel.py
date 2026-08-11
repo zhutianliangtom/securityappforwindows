@@ -603,6 +603,10 @@ class AgentPanel(QDialog):
         self._think_done = False       # 思考是否已完成（已输出"已思考 x 秒"）
         self._reasoning_buf = ""       # 思考过程文本缓冲
 
+        # 卡死兜底 hooks：长时间无任何输出则自动停止
+        self._last_activity = 0.0      # 最近一次有输出/状态的时间戳
+        self._stalled_stop = False     # 是否因卡死自动停止
+
         self._build_ui()
         self._connect_signals()
 
@@ -963,6 +967,7 @@ class AgentPanel(QDialog):
         """流式思考过程：半透明小字追加显示在'思考中'下方"""
         if self._think_done:
             return
+        self._last_activity = time.time()
         self._ensure_spinner()
         self._reasoning_buf += s
         shown = self._reasoning_buf
@@ -1006,6 +1011,14 @@ class AgentPanel(QDialog):
     # ---------- 命令补全（/ 展示命令 + 内联预测，不预测技能） ----------
     def _all_commands(self) -> list:
         return ["/compact", "/clear"]
+
+    def _match_skill(self, text: str):
+        """按名称匹配内置技能（/技能名 手动调用），未匹配返回 None"""
+        q = text.lstrip("/").strip().lower()
+        for s in agent_skills.load_skills():
+            if s.get("name", "").strip().lower() == q:
+                return s
+        return None
 
     def _update_cmd_suggestions(self, text: str):
         if text.startswith("/"):
@@ -1057,6 +1070,12 @@ class AgentPanel(QDialog):
         if text.lower().startswith("/clear"):
             self._clear_chat()
             return
+        # 手动调用内置技能：/技能名 → 把技能指令作为用户消息发送给 AI
+        skill = self._match_skill(text)
+        if skill:
+            self._add_status(f"已调用技能「{skill.get('name')}」", ACCENT)
+            text = (f"请使用技能「{skill.get('name')}」，严格按其流程执行。\n\n"
+                    f"技能说明：\n{skill.get('instruction', '')}")
         engine = self._ensure_engine()
 
         self._add_bubble(text, "user")
@@ -1067,6 +1086,8 @@ class AgentPanel(QDialog):
         self._think_done = False
         self._reasoning_buf = ""
         self._think_start = 0.0
+        self._last_activity = time.time()
+        self._stalled_stop = False
         self.input.clear()
         self.input.setFocus()
 
@@ -1115,6 +1136,8 @@ class AgentPanel(QDialog):
         self._think_done = False
         self._reasoning_buf = ""
         self._think_start = 0.0
+        self._last_activity = 0.0
+        self._stalled_stop = False
         while self.msg_lay.count() > 1:  # 保留末尾 stretch
             item = self.msg_lay.takeAt(0)
             self._free_layout_item(item)
@@ -1130,13 +1153,19 @@ class AgentPanel(QDialog):
             item.layout().deleteLater()
 
     def _refresh_meta(self):
-        """轮询刷新 tokens / 按钮反馈状态"""
+        """轮询刷新 tokens / 按钮反馈状态 / 卡死兜底"""
         if self._engine:
             t = self._engine.tokens
             self.token_label.setText(
                 f"已用 {t['prompt'] + t['completion']} tokens "
                 f"(输入 {t['prompt']} / 输出 {t['completion']})")
         running = bool(self._engine and self._engine._thread and self._engine._thread.is_alive())
+        # 卡死兜底：任务进行中超过 120 秒无任何输出/状态 → 强制停止
+        if running and self._last_activity and not self._stalled_stop \
+                and time.time() - self._last_activity > 120:
+            self._stalled_stop = True
+            self._add_status("AI 长时间无响应（>120 秒），已自动停止（卡死兜底）", WARN)
+            self._engine.stop()
         if not running and not self.send_btn.isEnabled():
             self.send_btn.setText("发送")
             self.send_btn.setEnabled(True)
@@ -1146,9 +1175,13 @@ class AgentPanel(QDialog):
             if not self._end_badge_shown:
                 self._end_badge_shown = True
                 self._show_end_badge()
+            self._scroll_bottom()   # 结束执行时自动滚动到最下方
 
     def _show_end_badge(self):
         """任务结束后在 AI 气泡外显示结果徽章"""
+        if self._stalled_stop:
+            self._add_badge("Error", ERR)
+            return
         state = getattr(self._engine, "end_state", "") if self._engine else ""
         if self._user_stopped or state == "stopped":
             self._add_badge("Stop by user", WARN)
@@ -1165,6 +1198,7 @@ class AgentPanel(QDialog):
 
     def _on_delta(self, s: str):
         self._finish_thinking()   # 开始输出正文即视为思考完成
+        self._last_activity = time.time()
         self._ensure_ai_bubble()
         self._ensure_text_segment()
         self._segments[-1]["raw"] += s
@@ -1173,6 +1207,7 @@ class AgentPanel(QDialog):
 
     def _on_result(self, name: str, text: str):
         """工具执行完成：操作行下方换行显示执行输出"""
+        self._last_activity = time.time()
         self._ensure_ai_bubble()
         shown = (text or "").strip()
         if len(shown) > 2000:
@@ -1183,6 +1218,7 @@ class AgentPanel(QDialog):
         self._scroll_bottom()
 
     def _on_status(self, s: str):
+        self._last_activity = time.time()
         if s == "正在思考…":
             self._start_think()
         elif s.startswith("待执行工具:"):

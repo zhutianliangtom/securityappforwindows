@@ -18,6 +18,28 @@ DEFAULT_SKILLS = [
     {"name": "screen_operate", "description": "屏幕操控（截图分析、鼠标点击、键盘输入）",
      "instruction": ("你可以截图观察屏幕，并用鼠标点击/输入文本完成用户请求。"
                      "每次操作前说明意图，操作后截图验证结果。")},
+    {"name": "brainstorming", "description": "头脑风暴：需求探索与方案设计",
+     "instruction": ("1. 用 ask_user 依次澄清用户意图、目标与约束，直到需求明确。\n"
+                     "2. 提出 2-3 个可行方案并对比优缺点，征询用户选择。\n"
+                     "3. 确认方案后再动手，不跳过任何确认步骤。")},
+    {"name": "writing-plans", "description": "为多步骤任务制定详细执行计划",
+     "instruction": ("1. 把任务拆解为可独立执行的小步骤，每步写明目标与验证方式。\n"
+                     "2. 用文字/列表输出计划，必要时用 ask_user 请用户确认。\n"
+                     "3. 按计划逐步执行，每步完成后截图或读取结果验证再继续。")},
+    {"name": "test-driven-development", "description": "测试驱动开发：先写测试再实现",
+     "instruction": ("1. 先用 write_file 编写针对目标行为的测试用例。\n"
+                     "2. 运行测试确认失败（红）。\n"
+                     "3. 实现最小可用代码使测试通过（绿），必要时重构（重构）。\n"
+                     "4. 重复直到所有用例通过并汇报结果。")},
+    {"name": "systematic-debugging", "description": "系统化调试：不靠猜测定位问题",
+     "instruction": ("1. 复现问题并读取相关日志/输出（run_command 或 read_file）。\n"
+                     "2. 提出最可能的 2-3 个根因假设，按可能性排序。\n"
+                     "3. 逐个用最小实验验证假设，排除一个再验证下一个。\n"
+                     "4. 定位根因后修复，再复现验证已解决。")},
+    {"name": "code-review", "description": "代码审查：检查问题与改进点",
+     "instruction": ("1. 用 read_file 读取待审查文件，list_directory 了解项目结构。\n"
+                     "2. 按顺序检查：逻辑正确性、边界与错误处理、安全与权限、可维护性。\n"
+                     "3. 输出审查结论：严重问题/一般问题/建议，逐条给出文件与行号。")},
 ]
 
 DEFAULT_AGENTS = [

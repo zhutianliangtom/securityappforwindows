@@ -7,13 +7,14 @@
 - 拦截：OpenProcess + TerminateProcess
 
 策略分级：
-  block 格机/破坏性命令（format/diskpart clean/sysprep/systemreset/rm -rf 等）→ 自动终止
-  block 无文件攻击（PowerShell -EncodedCommand / IEX 远程加载）→ 自动终止
+  warn  格机/破坏性命令（format/diskpart/sysprep/rm -rf 等）→ 程序名 + 参数严格匹配，仅提示避免误杀
+  block 无文件攻击（PowerShell -EncodedCommand / IEX 远程加载）→ 仅脚本解释器命中才自动终止
   warn  申请管理员权限的程序 → 仅提示（避免误杀正常安装程序）
 """
 
 import ctypes
 import ctypes.wintypes as wintypes
+import os
 import re
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -29,21 +30,79 @@ LOAD_LIBRARY_AS_DATAFILE = 0x2
 # ------------------------------------------------------------
 # 恶意特征（保守，避免误杀正常操作）
 # ------------------------------------------------------------
-# 格机/破坏性命令特征（命令行小写子串匹配）
-_DESTRUCT_CMDS = (
-    "format ", "format.com", "diskpart", " clean", "sysprep", "systemreset",
-    "reagentc", "cipher /w", "rm -rf", "del /f /s /q c:", "del c:\\",
-    "bcdedit /set", "dism /remove",
-)
-# 破坏性程序名（即使无命令行参数也拦截）
+# 破坏性工具程序名（可执行文件本身即破坏性工具，如 format/diskpart/sysprep）
 _DESTRUCT_EXES = {
     "format.exe", "format.com", "diskpart.exe", "sysprep.exe",
     "systemreset.exe", "reagentc.exe", "bootsect.exe",
 }
-# 无文件攻击：编码执行 / 远程加载下载执行
+# 命令解释器：仅在解释器进程中做命令行关键词检测，避免误杀普通程序
+_SCRIPT_INTERPRETERS = {
+    "cmd.exe", "powershell.exe", "pwsh.exe",
+    "cscript.exe", "wscript.exe", "mshta.exe", "bash.exe", "sh.exe",
+}
+# 无文件攻击：编码执行 / 远程加载下载执行（仅脚本解释器命中）
 _LIVELESS_MARKERS = (
-    "encodedcommand", "-enc ", "downloadstring", "invoke-expression",
+    "encodedcommand", "downloadstring", "invoke-expression",
 )
+
+
+def _tokens(cmdline: str) -> List[str]:
+    """命令行分词：带引号的参数视为一个 token"""
+    return [t.strip('"') for t in re.findall(r'"(?:[^"]*)"|\S+', cmdline or "")]
+
+
+def _exe_basename(tok: str) -> str:
+    """取 token 的可执行文件名（去路径、小写）"""
+    return os.path.basename(tok.strip('"')).lower()
+
+
+def _is_drive(arg: str) -> bool:
+    """是否为盘符参数（如 C: / C:\）"""
+    return bool(re.match(r'^[a-zA-Z]:[\\/]?', arg))
+
+
+def _destructive_reason(exe_name: str, toks: List[str]) -> Optional[str]:
+    """严格匹配破坏性命令（程序名 + 参数），返回命中原因；未命中返回 None"""
+    if not toks:
+        return None
+    # 1) 可执行文件本身是破坏性工具（如运行 format.exe）
+    if exe_name in _DESTRUCT_EXES:
+        return f"启动了磁盘格式化/系统重置工具 {exe_name}"
+    # 2) 命令行中显式调用了破坏性工具（如 cmd /c format.com C:）
+    if any(_exe_basename(t) in _DESTRUCT_EXES for t in toks):
+        return "命令行中调用了磁盘格式化/系统重置工具"
+    # 3) 解释器内建命令：按 token 与参数严格匹配（避免子串误杀普通程序）
+    if exe_name not in _SCRIPT_INTERPRETERS:
+        return None
+    for i, t in enumerate(toks):
+        b = _exe_basename(t)
+        rest = toks[i + 1:]
+        if b == "format" and any(_is_drive(a) for a in rest):
+            return "执行磁盘格式化 (format)"
+        if b == "diskpart":
+            return "执行磁盘分区工具 (diskpart)"
+        if b == "del" and any(_is_drive(a) for a in rest):
+            return "执行强制删除磁盘文件 (del C:)"
+        if b == "rm" and any(re.match(r'^-[a-zA-Z]*(r[a-zA-Z]*f|f[a-zA-Z]*r)', a) for a in rest):
+            return "执行递归强制删除 (rm -rf)"
+        if b == "cipher" and any(a.lower().startswith("/w") for a in rest):
+            return "执行磁盘剩余空间擦除 (cipher /w)"
+        if b == "bcdedit" and any(a.lower().startswith("/set") for a in rest):
+            return "修改系统启动配置 (bcdedit /set)"
+        if b == "dism" and any(a.lower().startswith("/remove") for a in rest):
+            return "移除系统组件/驱动 (dism /remove)"
+    return None
+
+
+def _fileless_reason(exe_name: str, toks: List[str], low: str) -> Optional[str]:
+    """无文件攻击检测：仅脚本解释器进程命中，避免误伤普通程序"""
+    if exe_name not in _SCRIPT_INTERPRETERS:
+        return None
+    if any(t.lower().startswith("-enc") for t in toks) or "encodedcommand" in low:
+        return "检测到编码执行 (PowerShell -EncodedCommand)"
+    if any(t.lower() == "iex" for t in toks) or "downloadstring" in low or "invoke-expression" in low:
+        return "检测到远程加载执行 (IEX/DownloadString)"
+    return None
 
 
 def _manifest_level(exe_path: str) -> str:
@@ -139,17 +198,21 @@ class ExecutionGuard:
     def _analyze(self, pid: int) -> Optional[dict]:
         path = _sec._process_path(pid)
         name = Path(path).name if path else ""
+        exe = name.lower()
         cmdline = _process_cmdline(pid)
+        toks = _tokens(cmdline)
         low = cmdline.lower()
 
-        # 1) 格机/破坏性命令 → 拦截
-        if any(m in low for m in _DESTRUCT_CMDS) or (name and name.lower() in _DESTRUCT_EXES):
+        # 1) 格机/破坏性命令 → 提示（程序名 + 参数严格匹配，避免误杀）
+        reason = _destructive_reason(exe, toks)
+        if reason:
             return {"pid": pid, "name": name or f"PID {pid}", "cmdline": cmdline,
-                    "level": "block", "reason": "检测到格机/破坏性命令"}
-        # 2) 无文件攻击（编码执行/远程加载）→ 拦截
-        if any(m in low for m in _LIVELESS_MARKERS):
+                    "level": "warn", "reason": reason}
+        # 2) 无文件攻击（仅脚本解释器）→ 拦截
+        reason = _fileless_reason(exe, toks, low)
+        if reason:
             return {"pid": pid, "name": name or f"PID {pid}", "cmdline": cmdline,
-                    "level": "block", "reason": "检测到无文件攻击（编码/远程加载执行）"}
+                    "level": "block", "reason": reason}
         # 3) 申请管理员权限 → 提示（不拦截，避免误杀正常安装程序）
         if path and _manifest_level(path) == "requireAdministrator" \
                 and _sec.SecurityScanner._not_system(path):

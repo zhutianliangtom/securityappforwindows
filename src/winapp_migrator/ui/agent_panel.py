@@ -17,6 +17,7 @@ import re
 import sys
 import threading
 import time
+import uuid
 from pathlib import Path
 
 from PyQt6.QtCore import Qt, QTimer, QSettings, QPropertyAnimation, pyqtSignal, QByteArray, QBuffer, QIODevice, QFileInfo
@@ -26,6 +27,7 @@ from PyQt6.QtWidgets import (
     QVBoxLayout, QHBoxLayout, QMessageBox, QFormLayout, QWidget,
     QApplication, QStyle, QListWidget, QGraphicsOpacityEffect,
     QCompleter, QRadioButton, QCheckBox, QFileIconProvider, QListWidgetItem,
+    QStackedWidget,
 )
 
 from winapp_migrator.core import agent_llm, agent_engine, agent_skills, agent_sandbox, agent_tools
@@ -693,12 +695,19 @@ class AgentPanel(QDialog):
         self._stalled_stop = False     # 是否因卡死自动停止
         self._task_active = False      # 是否有任务在执行（结束收尾的可靠依据）
 
+        # 多对话（会话）状态：切换隔离上下文，AI 自动命名
+        self._session_id = ""          # 当前会话 id
+        self._session_name = "新对话"  # 当前会话名称
+        self._user_msgs: list = []     # 当前会话的用户消息文本（用于切换时重绘）
+        self._scroll_pending = False   # 滚动调度去重标志
+
         # 发送/停止按钮转圈动画
         self._send_anim_angle = 0
         self._stop_anim_angle = 0
 
         self._build_ui()
         self._connect_signals()
+        self._init_sessions()   # 加载会话列表，默认恢复最近对话（上下文隔离）
 
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._refresh_meta)
@@ -725,6 +734,23 @@ class AgentPanel(QDialog):
         title = QLabel("AI AGENT")
         title.setStyleSheet(f"color: {ACCENT}; font-size: 16px; font-weight: 800;")
         top.addWidget(title)
+
+        # 会话选择：切换对话（上下文隔离）+ 新对话按钮
+        self.session_combo = QComboBox()
+        self.session_combo.setMinimumWidth(150)
+        self.session_combo.setMaximumWidth(220)
+        self.session_combo.currentIndexChanged.connect(self._on_session_selected)
+        top.addWidget(self.session_combo)
+
+        new_btn = QPushButton(_std_icon(QStyle.StandardPixmap.SP_FileDialogNewFolder), "新对话")
+        new_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        new_btn.setAutoDefault(False)
+        new_btn.setStyleSheet(
+            f"QPushButton {{ background: {PANEL}; color: {ACCENT}; border: 1px solid {ACCENT};"
+            "border-radius: 8px; padding: 6px 10px; font-size: 12px; font-weight: 600; }}"
+            f"QPushButton:hover {{ background: #16233C; }}")
+        new_btn.clicked.connect(self._new_session)
+        top.addWidget(new_btn)
 
         self.agent_combo = QComboBox()
         for a in self._agents:
@@ -780,7 +806,7 @@ class AgentPanel(QDialog):
         # 模型/接口/API Key 已写死，无需设置入口
         root.addLayout(top)
 
-        # 聊天区（气泡）
+        # 聊天区（气泡）与欢迎页（无对话时居中介绍 AI 功能）用堆叠切换
         self.msg_area = QScrollArea()
         self.msg_area.setWidgetResizable(True)
         self.msg_area.setStyleSheet("QScrollArea { background: transparent; border: none; }")
@@ -791,7 +817,12 @@ class AgentPanel(QDialog):
         self.msg_lay.setSpacing(10)
         self.msg_lay.addStretch(1)   # 末尾弹性空间，消息自顶向下堆叠
         self.msg_area.setWidget(container)
-        root.addWidget(self.msg_area, 1)
+
+        self._welcome_page = self._build_welcome()
+        self.msg_stack = QStackedWidget()
+        self.msg_stack.addWidget(self.msg_area)
+        self.msg_stack.addWidget(self._welcome_page)
+        root.addWidget(self.msg_stack, 1)
 
         # 命令提示条：输入 / 时展示可用 skill/命令
         self.cmd_list = QListWidget()
@@ -878,6 +909,202 @@ class AgentPanel(QDialog):
         self.confirm_signal.connect(self._on_confirm)
         self.ask_signal.connect(self._on_ask)
         self.mcp_signal.connect(self._on_mcp_status)
+
+    # ---------- 欢迎页（无对话时居中介绍 AI 功能） ----------
+    def _build_welcome(self) -> QWidget:
+        page = QWidget()
+        page.setStyleSheet("background: transparent;")
+        lay = QVBoxLayout(page)
+        lay.setContentsMargins(40, 40, 40, 40)
+        lay.addStretch(1)
+        card = QWidget()
+        card.setMaximumWidth(520)
+        card.setStyleSheet(
+            f"background: {PANEL}; border: 1px solid {BORDER}; border-radius: 12px;")
+        cl = QVBoxLayout(card)
+        cl.setContentsMargins(28, 24, 28, 24)
+        cl.setSpacing(10)
+        t = QLabel("AI 桌面助手")
+        t.setStyleSheet(f"color: {TEXT}; font-size: 20px; font-weight: 800;")
+        t.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        cl.addWidget(t)
+        sub = QLabel("观察你的屏幕，理解你的指令，帮你完成电脑操作")
+        sub.setStyleSheet(f"color: {TEXT_DIM}; font-size: 13px;")
+        sub.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        cl.addWidget(sub)
+        cl.addSpacing(6)
+        for f in ("▪ 屏幕操控：截图分析后点击、输入、按键",
+                  "▪ 文件操作：读取、写入、编辑本地文件",
+                  "▪ 快速查找：秒查应用与文件（find_app / search_files）",
+                  "▪ 技能命令：输入 / 查看全部技能与工具",
+                  "▪ 拖拽图片：把图片拖入对话框让 AI 识别",
+                  "▪ 多对话：自动命名、切换隔离、重启恢复"):
+            lbl = QLabel(f)
+            lbl.setStyleSheet(f"color: {TEXT}; font-size: 13px; padding: 3px 0;")
+            cl.addWidget(lbl)
+        cl.addSpacing(4)
+        tip = QLabel("直接输入任务开始，例如：打开记事本并输入一段文字")
+        tip.setStyleSheet(f"color: {ACCENT}; font-size: 12px;")
+        tip.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        cl.addWidget(tip)
+        lay.addWidget(card, 0, Qt.AlignmentFlag.AlignCenter)
+        lay.addStretch(1)
+        return page
+
+    def _update_welcome(self):
+        """无对话内容时显示欢迎页，否则显示聊天区（发消息后立即切换）"""
+        has_msg = bool(self._segments or self._user_msgs)
+        self.msg_stack.setCurrentWidget(
+            self.msg_area if has_msg else self._welcome_page)
+
+    # ---------- 多对话（会话）管理 ----------
+    def _sessions_dir(self) -> Path:
+        return agent_skills.CONFIG_DIR / "sessions"
+
+    def _load_session_list(self) -> list:
+        try:
+            with open(self._sessions_dir() / "sessions.json", encoding="utf-8") as f:
+                lst = json.load(f)
+            return lst if isinstance(lst, list) else []
+        except Exception:
+            return []
+
+    def _save_session_list(self, lst: list):
+        try:
+            d = self._sessions_dir()
+            d.mkdir(parents=True, exist_ok=True)
+            with open(d / "sessions.json", "w", encoding="utf-8") as f:
+                json.dump(lst, f, ensure_ascii=False)
+        except Exception:
+            pass
+
+    def _init_sessions(self):
+        """启动时加载会话列表；默认进入最近更新的旧对话（无会话则新建）"""
+        lst = self._load_session_list()
+        if not lst:
+            self._create_session()
+            lst = self._load_session_list()
+        lst.sort(key=lambda s: s.get("updated", 0))   # 旧的在前，最近对话最后
+        self._switch_to(lst[-1]["id"])
+        self._update_welcome()
+
+    def _create_session(self) -> dict:
+        s = {"id": uuid.uuid4().hex[:12],
+             "name": "新对话", "created": time.time(), "updated": time.time()}
+        lst = self._load_session_list()
+        lst.append(s)
+        self._save_session_list(lst)
+        return s
+
+    def _persist_current(self):
+        """保存当前会话：模型消息 + 界面气泡（segments/用户消息）+ 更新时间"""
+        if not self._session_id:
+            return
+        d = self._sessions_dir()
+        d.mkdir(parents=True, exist_ok=True)
+        if self._engine:
+            self._engine.save_context(d / f"{self._session_id}.json")
+        try:
+            with open(d / f"{self._session_id}.ui.json", "w", encoding="utf-8") as f:
+                json.dump({"segments": self._segments, "user_msgs": self._user_msgs},
+                          f, ensure_ascii=False)
+        except Exception:
+            pass
+        lst = self._load_session_list()
+        for x in lst:
+            if x.get("id") == self._session_id:
+                x["updated"] = time.time()
+                x["name"] = self._session_name
+        self._save_session_list(lst)
+
+    def _refresh_session_combo(self):
+        lst = self._load_session_list()
+        self.session_combo.blockSignals(True)
+        self.session_combo.clear()
+        for s in lst:
+            self.session_combo.addItem(s.get("name", "新对话"), s.get("id"))
+        idx = self.session_combo.findData(self._session_id)
+        if idx >= 0:
+            self.session_combo.setCurrentIndex(idx)
+        self.session_combo.blockSignals(False)
+
+    def _on_session_selected(self, idx):
+        sid = self.session_combo.itemData(idx)
+        if sid and sid != self._session_id:
+            self._switch_to(sid)
+
+    def _switch_to(self, sid: str):
+        """切换会话：保存当前 → 加载目标（上下文互相隔离）"""
+        self._persist_current()
+        self._session_id = sid
+        lst = self._load_session_list()
+        s = next((x for x in lst if x.get("id") == sid), None)
+        self._session_name = s.get("name", "新对话") if s else "新对话"
+        self._ai_bubble = None
+        self._segments = []
+        self._user_msgs = []
+        self._hide_spinner()
+        while self.msg_lay.count() > 1:  # 清空消息流（保留末尾 stretch）
+            item = self.msg_lay.takeAt(0)
+            self._free_layout_item(item)
+        d = self._sessions_dir()
+        eng = self._ensure_engine()
+        eng.load_context(d / f"{sid}.json")
+        segs, ums = [], []
+        try:
+            with open(d / f"{sid}.ui.json", encoding="utf-8") as f:
+                data = json.load(f)
+            segs, ums = data.get("segments") or [], data.get("user_msgs") or []
+        except Exception:
+            pass
+        self._segments, self._user_msgs = segs, ums
+        for u in ums:                       # 重绘用户气泡与 AI 气泡
+            self._add_bubble(u, "user")
+        if segs:
+            self._ensure_ai_bubble()
+            self._refresh_ai_html()
+        self._end_badge_shown = False
+        self._refresh_session_combo()
+        self._update_welcome()
+        self._add_status(f"已切换到对话「{self._session_name}」", TEXT_DIM)
+        self._scroll_bottom()
+
+    def _new_session(self):
+        """新开对话：保存当前 → 创建空会话（上下文与旧对话隔离）"""
+        if self._engine and self._engine._thread and self._engine._thread.is_alive():
+            self._engine.stop()
+        self._persist_current()
+        s = self._create_session()
+        self._session_id = s["id"]
+        self._session_name = "新对话"
+        if self._engine:
+            self._engine.clear_history()
+        self._ai_bubble = None
+        self._segments = []
+        self._user_msgs = []
+        self._hide_spinner()
+        while self.msg_lay.count() > 1:
+            item = self.msg_lay.takeAt(0)
+            self._free_layout_item(item)
+        self._refresh_session_combo()
+        self._update_welcome()
+        self._add_status("已开启新对话，上下文与旧对话隔离", ACCENT)
+        self._scroll_bottom()
+
+    def _auto_name_session(self, text: str):
+        """AI 自动命名：会话无名称时用首条消息前 20 字命名"""
+        if self._session_name != "新对话":
+            return
+        name = (text or "").strip()[:20]
+        if not name:
+            return
+        self._session_name = name
+        lst = self._load_session_list()
+        for x in lst:
+            if x.get("id") == self._session_id:
+                x["name"] = name
+        self._save_session_list(lst)
+        self._refresh_session_combo()
 
     # ---------- 执行模式 ----------
     def _apply_mode_style(self):
@@ -998,12 +1225,16 @@ class AgentPanel(QDialog):
         self.stop_btn.setIcon(_std_icon(QStyle.StandardPixmap.SP_MediaStop))
 
     def _scroll_bottom(self):
-        # 延迟到布局更新后再滚动，否则 maximum 还是旧值导致滚不到底；
-        # 双调度：0ms 立即滚，100ms 再滚一次兜底（气泡最终高度稳定后）
+        # 流式输出高频调用时去重，避免 singleShot 堆积；
+        # 0ms 立即滚 + 150ms 兜底（气泡最终高度稳定后再滚一次）
+        if self._scroll_pending:
+            return
+        self._scroll_pending = True
         QTimer.singleShot(0, self._do_scroll_bottom)
-        QTimer.singleShot(100, self._do_scroll_bottom)
+        QTimer.singleShot(150, self._do_scroll_bottom)
 
     def _do_scroll_bottom(self):
+        self._scroll_pending = False
         bar = self.msg_area.verticalScrollBar()
         bar.setValue(bar.maximum())
 
@@ -1256,9 +1487,6 @@ class AgentPanel(QDialog):
                 on_reasoning=lambda s: self.reasoning_signal.emit(s),
                 confirm=self._confirm_tool,
                 ask_user=self._ask_user_tool)
-            n = self._engine.load_context()   # 重启后恢复上次对话上下文
-            if n:
-                self._add_status(f"已恢复上次对话上下文（{n} 条消息），AI 可继续之前任务", TEXT_DIM)
         return self._engine
 
     def _send(self):
@@ -1294,6 +1522,9 @@ class AgentPanel(QDialog):
                 "\n".join(f"- {p}" for p in files)
             text = (text + "\n\n" if text else "") + note
         engine = self._ensure_engine()
+        self._auto_name_session(text)   # 无名称会话：用首条消息自动命名
+        self._user_msgs.append(text)
+        self._update_welcome()          # 发消息后欢迎介绍立即消失
 
         # 用户气泡：图片以缩略图显示，不显示源文本
         if images:
@@ -1411,6 +1642,7 @@ class AgentPanel(QDialog):
             self._free_layout_item(item)
         self.token_label.setText("tokens: 0")
         self._add_status("已清空上下文，开启新对话", TEXT_DIM)
+        self._persist_current()   # 清空后同步持久化（会话内容为空）
 
     # ---------- 拖拽附件（图片/文件） ----------
     _IMG_EXTS = (".png", ".jpg", ".jpeg", ".bmp", ".gif", ".webp")
@@ -1520,8 +1752,7 @@ class AgentPanel(QDialog):
             if not self._end_badge_shown:
                 self._end_badge_shown = True
                 self._show_end_badge()
-            if self._engine:
-                self._engine.save_context()   # 任务结束即持久化上下文（重启可恢复）
+            self._persist_current()   # 任务结束即持久化当前会话（重启可恢复）
             self._scroll_bottom()   # 结束执行时自动滚动到最下方
 
     def _show_end_badge(self):
@@ -1643,7 +1874,7 @@ class AgentPanel(QDialog):
         if self._engine:
             self._engine.stop()
             self._engine.join(3)
-            self._engine.save_context()   # 关闭前持久化上下文（重启可恢复）
+        self._persist_current()   # 关闭前持久化当前会话（重启可恢复）
         try:
             self._mcp.close_all()
         except Exception:

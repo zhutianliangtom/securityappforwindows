@@ -1790,9 +1790,17 @@ class AgentPanel(QDialog):
         if not sid:
             return
         name = self.session_combo.itemText(idx.row())
+        orig = self.session_combo.currentIndex()   # 记录原索引，防止 popup 关闭误切换对话
         menu = QMenu(self)
         del_act = menu.addAction(f"删除对话「{name}」")
-        if menu.exec(view.viewport().mapToGlobal(pos)) == del_act:
+        act = menu.exec(view.viewport().mapToGlobal(pos))
+        # 菜单/下拉关闭时 QComboBox 会把高亮项同步为当前项，误触发 _on_session_selected：
+        # 屏蔽信号恢复原索引，避免右键一下却切进了被点的对话
+        if self.session_combo.currentIndex() != orig:
+            self.session_combo.blockSignals(True)
+            self.session_combo.setCurrentIndex(orig)
+            self.session_combo.blockSignals(False)
+        if act == del_act:
             self._remove_session(sid, name)
 
     def _remove_session(self, sid: str, name: str):

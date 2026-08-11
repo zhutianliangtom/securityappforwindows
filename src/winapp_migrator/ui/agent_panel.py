@@ -1290,8 +1290,8 @@ class AgentPanel(QDialog):
             return False
 
     def _font_scale(self) -> float:
-        """全屏时排版自适应：气泡最大宽度相对基准 560 的缩放系数（1.0 ~ 1.6）"""
-        return min(1.6, max(1.0, self._bubble_max_width() / 560.0))
+        """全屏/非全屏字体始终保持原 5 号大小（14px），不随窗口缩放"""
+        return 1.0
 
     def _scale_user_html(self, src: str, s: float) -> str:
         """把用户气泡原始富文本按缩放系数放大（字号 14px、图片 200px）"""
@@ -1323,8 +1323,9 @@ class AgentPanel(QDialog):
                 cap = seg.get("caption", "已截屏")
                 parts.append(
                     f'<div style="color:{TEXT_DIM};font-size:{f_sm}px;margin-top:6px;">{_esc(cap)}</div>'
+                    f'<div style="padding-left:30px;">'
                     f'<img src="{url}" width="{img_w}" style="border-radius:8px;display:block;'
-                    'margin:12px 0 12px 30px;">')
+                    'margin:12px 0 12px 0;"></div>')
             elif t == "text":
                 parts.append(f'<div style="color:{TEXT};font-size:{f_main}px;">'
                              f'{_render_text(seg["raw"])}</div>')

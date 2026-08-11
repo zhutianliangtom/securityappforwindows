@@ -37,6 +37,7 @@ TCP_TABLE_OWNER_PID_ALL = 5
 MIB_TCP_STATE_SYN_RCVD = 2
 MIB_TCP_STATE_SYN_SENT = 3
 MIB_IPNET_TYPE_DYNAMIC = 3   # Windows SDK: DYNAMIC=3, STATIC=4（写 4 会把动态网关条目全过滤导致检测失效）
+MIB_IPNET_TYPE_STATIC = 4
 
 iphlpapi = ctypes.WinDLL("iphlpapi", use_last_error=True)
 iphlpapi.GetIpNetTable.argtypes = [ctypes.c_void_p, ctypes.POINTER(wintypes.DWORD), wintypes.BOOL]
@@ -45,6 +46,10 @@ iphlpapi.GetIpForwardTable.argtypes = [ctypes.c_void_p, ctypes.POINTER(wintypes.
 iphlpapi.GetIpForwardTable.restype = wintypes.DWORD
 iphlpapi.GetTcpStatistics.argtypes = [ctypes.c_void_p]
 iphlpapi.GetTcpStatistics.restype = wintypes.DWORD
+iphlpapi.DeleteIpNetEntry.argtypes = [ctypes.c_void_p]
+iphlpapi.DeleteIpNetEntry.restype = wintypes.DWORD
+iphlpapi.CreateIpNetEntry.argtypes = [ctypes.c_void_p]
+iphlpapi.CreateIpNetEntry.restype = wintypes.DWORD
 
 
 class MIB_IPNETROW(ctypes.Structure):
@@ -109,6 +114,11 @@ def _fmt_ip(dw: int) -> str:
     return socket.inet_ntoa(struct.pack("<I", dw & 0xFFFFFFFF))
 
 
+def _ip_to_dw(ip: str) -> int:
+    """IP 字符串 → GetIpNetTable 使用的 dwAddr（内存按网络字节序存储的 DWORD）"""
+    return int.from_bytes(socket.inet_aton(ip), "little")
+
+
 def _get_gateway() -> str:
     """GetIpForwardTable 读取默认路由（0.0.0.0/0）下一跳作为网关"""
     size = wintypes.DWORD(0)
@@ -127,8 +137,8 @@ def _get_gateway() -> str:
     return ""
 
 
-def _arp_table() -> Dict[str, str]:
-    """GetIpNetTable 读取 ARP 缓存，返回 {ip: mac}（仅动态条目）"""
+def _arp_table() -> Dict[str, Tuple[str, int]]:
+    """GetIpNetTable 读取 ARP 缓存，返回 {ip: (mac, 接口索引)}（仅动态条目）"""
     size = wintypes.DWORD(0)
     iphlpapi.GetIpNetTable(None, ctypes.byref(size), False)
     if not size.value:
@@ -145,7 +155,7 @@ def _arp_table() -> Dict[str, str]:
             ip = _fmt_ip(row.dwAddr)
             mac = ":".join(f"{row.bPhysAddr[j]:02x}" for j in range(row.dwPhysAddrLen))
             if mac:
-                table[ip] = mac
+                table[ip] = (mac, row.dwIndex)
     return table
 
 
@@ -218,6 +228,37 @@ def block_ip(ip: str) -> bool:
         return False
 
 
+def _restore_gateway_arp(gateway: str, polluted_mac: str, correct_mac: str, if_index: int) -> bool:
+    """修复网关 ARP 条目：删除被污染的动态条目，并静态绑定正确网关 MAC。
+
+    静态条目不会被后续 ARP 应答更新，因此可对抗 arpspoof 持续欺骗；
+    Windows 8+ 上静态条目仅会话内有效（重启/接口重置自动清除，不会长期残留）。
+    """
+    def _mac_bytes(mac: str) -> bytes:
+        return bytes.fromhex(mac.replace(":", ""))[:6]
+
+    try:
+        # 删除当前被污染的条目（条目可能已被系统刷新而失败，不影响后续绑定）
+        del_row = MIB_IPNETROW()
+        del_row.dwIndex = if_index
+        del_row.dwPhysAddrLen = 6
+        del_row.bPhysAddr[:6] = _mac_bytes(polluted_mac)
+        del_row.dwAddr = _ip_to_dw(gateway)
+        del_row.dwType = MIB_IPNET_TYPE_DYNAMIC
+        iphlpapi.DeleteIpNetEntry(ctypes.byref(del_row))
+
+        # 创建静态条目绑定基线（正确）MAC
+        fix_row = MIB_IPNETROW()
+        fix_row.dwIndex = if_index
+        fix_row.dwPhysAddrLen = 6
+        fix_row.bPhysAddr[:6] = _mac_bytes(correct_mac)
+        fix_row.dwAddr = _ip_to_dw(gateway)
+        fix_row.dwType = MIB_IPNET_TYPE_STATIC
+        return iphlpapi.CreateIpNetEntry(ctypes.byref(fix_row)) == 0
+    except Exception:
+        return False
+
+
 # ------------------------------------------------------------
 # 检测器
 # ------------------------------------------------------------
@@ -250,10 +291,10 @@ class NetworkDefender:
 
     # ---------- ARP 欺骗 ----------
     def _check_arp_spoof(self, gateway: str) -> Optional[dict]:
-        arp = _arp_table()
-        mac = arp.get(gateway)
-        if not mac:
+        entry = _arp_table().get(gateway)
+        if not entry:
             return None
+        mac, if_index = entry
         # MAC 合理性校验：拒绝全零地址与组播/广播（首字节最低位=1）。
         # 注意首字节为 0x00 的厂商 OUI（如 VMware 00:0c:29）是合法单播，不能误拒
         try:
@@ -278,8 +319,9 @@ class NetworkDefender:
         baseline = self._arp_baseline[gateway]
         if mac == baseline:
             return None
-        # 网关 MAC 突变 → 疑似 ARP 欺骗（仅告警，不主动发包修复：
-        # 伪造 ARP 应答包可能触发网络侧误判，且攻击中会把错误映射固化）
+        # 网关 MAC 突变 → 疑似 ARP 欺骗：删除污染条目并静态绑定基线 MAC 尝试修复。
+        # 修复尝试放在冷却判断之前，失败时每轮巡检都会重试，直到网络恢复
+        repaired = _restore_gateway_arp(gateway, mac, baseline, if_index)
         if time.time() - self._last_arp_warn < ARP_WARN_COOLDOWN:
             return None
         self._last_arp_warn = time.time()
@@ -288,8 +330,9 @@ class NetworkDefender:
             "gateway": gateway,
             "old_mac": baseline,
             "new_mac": mac,
-            "repaired": False,
-            "reason": "建议核对网关设备 MAC 或重启路由器恢复",
+            "repaired": repaired,
+            "reason": ("已删除污染条目并静态绑定正确网关 MAC，网络已恢复"
+                       if repaired else "自动修复失败，建议核对网关设备 MAC 或重启路由器"),
         }
 
     # ---------- 洪泛检测 ----------

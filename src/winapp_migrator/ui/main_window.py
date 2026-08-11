@@ -609,9 +609,11 @@ class MainWindow(QMainWindow):
         attacks = summary.get("attacks") or {}
         spoof = attacks.get("arp_spoof")
         if spoof:
+            fix = ("✅ 已自动修复：删除污染条目并静态绑定正确网关 MAC"
+                   if spoof.get("repaired") else "❌ 自动修复失败，请手动核对网关 MAC")
             line = (f"🚨 ARP 欺骗: 网关 {spoof['gateway']} MAC 突变\n"
                     f"   {spoof['old_mac']} → {spoof['new_mac']}\n"
-                    f"   ⚠ {spoof['reason']}")
+                    f"   {fix}")
             lines.append(line)
         flood = attacks.get("flood")
         if flood:

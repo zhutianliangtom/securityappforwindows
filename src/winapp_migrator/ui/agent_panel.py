@@ -1572,7 +1572,7 @@ class AgentPanel(QDialog):
             parts = ([f'<div style="font-size:14px;">{_esc(text).replace(chr(10), "<br/>")}</div>']
                      if text else [])
             parts += [f'<img src="{u}" width="200" style="border-radius:8px;display:block;'
-                      'margin:6px 0 2px 0;">' for u in images]
+                      'margin:12px 0 12px 0;">' for u in images]
             self._add_bubble("<br/>".join(parts), "user", rich=True)
         else:
             self._add_bubble(text, "user")

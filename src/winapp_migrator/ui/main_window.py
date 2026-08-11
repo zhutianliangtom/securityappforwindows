@@ -11,7 +11,7 @@ from PyQt6.QtWidgets import (
     QTextEdit, QMessageBox, QApplication, QSizePolicy, QSpacerItem,
     QFileDialog, QDialog, QScrollArea, QFrame, QSystemTrayIcon, QMenu
 )
-from PyQt6.QtCore import Qt, QSize, QThread, pyqtSignal, QPropertyAnimation, QEasingCurve
+from PyQt6.QtCore import Qt, QSize, QThread, pyqtSignal, QPropertyAnimation, QEasingCurve, QSettings, QTimer
 from PyQt6.QtGui import QIcon, QFont, QFontDatabase
 
 from winapp_migrator.utils.helpers import setup_logging, is_admin, ensure_admin, format_size, get_directory_size, safe_remove
@@ -232,17 +232,21 @@ class SecurityMonitorWorker(QThread):
 
     def run(self):
         tick = 0
-        while not self._stop.wait(45):
+        while True:
+            tick += 1
             try:
-                tick += 1
                 summary = self.scanner.sweep(
-                    include_network=(tick % 5 == 0),    # 每 ~4 分钟检查网络
-                    include_defender=(tick % 15 == 0),  # 每 ~11 分钟 Defender 快速扫描
+                    include_network=(tick % 5 == 0),    # 每 ~2.5 分钟检查网络
+                    include_defender=(tick % 15 == 0),  # 每 ~7.5 分钟 Defender 快速扫描
                 )
-                if summary["killed"] or summary["removed"] or summary["network"] or summary["defender"]:
+                if summary["killed"] or summary["removed"] or summary["failed"] \
+                        or summary["network"] or summary["defender"]:
                     self.result.emit(summary)
             except Exception:
                 logger.exception("安全监控异常")
+            # 首次立即扫描，之后每 30 秒巡检
+            if self._stop.wait(30):
+                break
 
 
 def _app_icon_path() -> str:
@@ -271,8 +275,12 @@ class MainWindow(QMainWindow):
         self.progress_anim.setEasingCurve(QEasingCurve.Type.OutCubic)
         self._security_on = False
         self.security_worker = None
+        self._settings = QSettings("WinAppMigrator", "WinAppMigrator")
         self._setup_tray()
         self._check_admin()
+        # 记忆上次选择：开启过防护则下次启动自动开启
+        if self._settings.value("security_auto", False, type=bool) and is_admin():
+            QTimer.singleShot(0, self._start_security)
         self._start_scan()
 
     def _setup_ui(self):
@@ -521,19 +529,20 @@ class MainWindow(QMainWindow):
         self.tray.hide()
 
     def _toggle_security(self):
-        """开启/关闭静默防护"""
+        """开启/关闭静默防护，并记忆用户选择"""
         if self._security_on:
-            if self.security_worker and self.security_worker.isRunning():
-                self.security_worker.stop()
-                self.security_worker.wait(3000)
-            self._security_on = False
-            self.security_btn.setText("🛡 开启静默防护")
-            self.tray.hide()
-            self.status_label.setText("静默防护已关闭")
+            self._stop_security()
+        else:
+            self._start_security()
+
+    def _start_security(self):
+        """开启静默防护（首次立即扫描，之后每 30 秒巡检）"""
+        if self._security_on:
             return
         if not is_admin():
             QMessageBox.warning(self, "权限不足", "静默防护需要管理员权限。")
             return
+        self._settings.setValue("security_auto", True)
         self.security_worker = SecurityMonitorWorker(self)
         self.security_worker.result.connect(self._on_security_result)
         self.security_worker.start()
@@ -547,15 +556,29 @@ class MainWindow(QMainWindow):
             QSystemTrayIcon.MessageIcon.Information, 4000,
         )
 
+    def _stop_security(self):
+        """关闭静默防护"""
+        if self.security_worker and self.security_worker.isRunning():
+            self.security_worker.stop()
+            self.security_worker.wait(3000)
+        self._settings.setValue("security_auto", False)
+        self._security_on = False
+        self.security_btn.setText("🛡 开启静默防护")
+        self.tray.hide()
+        self.status_label.setText("静默防护已关闭")
+
     def _on_security_result(self, summary: dict):
         """安全清理/检查完成后右下角弹窗提示结果"""
         lines = []
         killed = summary.get("killed") or []
         removed = summary.get("removed") or []
+        failed = summary.get("failed") or []
         if killed:
             lines.append(f"🔴 已结束恶意进程 {len(killed)} 个：{', '.join(killed[:3])}")
         if removed:
             lines.append(f"🧹 已删除恶意启动项 {len(removed)} 个")
+        if failed:
+            lines.append(f"⚠ 检测到威胁但清理失败 {len(failed)} 项")
         net = summary.get("network")
         if net:
             if net.get("firewall_off"):

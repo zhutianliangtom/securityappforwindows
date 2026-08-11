@@ -251,6 +251,7 @@ $procs
         summary = {
             "killed": [],      # 已结束的恶意进程
             "removed": [],     # 已删除的恶意启动项
+            "failed": [],      # 检测到但清理失败（仍需通知用户）
             "network": None,
             "defender": None,
             "risk": False,
@@ -259,10 +260,14 @@ $procs
         for p in self.scan_processes():
             if self._kill_process(p):
                 summary["killed"].append(f"{p['name']} (PID {p['pid']})")
+            else:
+                summary["failed"].append(f"进程 {p['name']} (PID {p['pid']}) 清理失败")
 
         for s in self.scan_startup():
             if self._remove_startup(s):
                 summary["removed"].append(f"{s['where']} → {s['name']}")
+            else:
+                summary["failed"].append(f"启动项 {s['name']} 清理失败")
 
         if include_network:
             net = self.check_network()

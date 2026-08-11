@@ -30,7 +30,7 @@ from PyQt6.QtWidgets import (
     QStackedWidget,
 )
 
-from winapp_migrator.core import agent_llm, agent_engine, agent_skills, agent_sandbox, agent_tools
+from winapp_migrator.core import agent_llm, agent_engine, agent_skills, agent_sandbox, agent_tools, agent_screen
 from winapp_migrator.core.agent_mcp import McpManager
 from winapp_migrator.core.agent_screen import capture_screen_data_url
 
@@ -701,7 +701,10 @@ class AgentPanel(QDialog):
         self._user_msgs: list = []     # 当前会话的用户消息文本（用于切换时重绘）
         self._scroll_pending = False   # 滚动调度去重标志
         self._bubble_widgets: list = []  # 所有气泡 QLabel（窗口缩放时同步宽度）
+        self._img_widgets: list = []   # 截图/图片容器（窗口缩放时同步缩小，禁止溢出）
         self._maximized_once = False   # 首次显示即最大化（默认最大化展示）
+        # 静默虚拟桌面：任务自动在独立桌面执行，结束自动返回主桌面（QSettings 记住选择）
+        self._auto_vd = str(self._settings.value("agent_auto_vd", "1")) != "0"
 
         # 发送/停止按钮转圈动画
         self._send_anim_angle = 0
@@ -774,6 +777,16 @@ class AgentPanel(QDialog):
         self.mode_combo.currentIndexChanged.connect(self._on_mode_changed)
         self._apply_mode_style()
         top.addWidget(self.mode_combo)
+
+        # 静默桌面：任务自动在独立虚拟桌面执行，AI 操作不打扰主桌面，结束自动返回
+        self.vd_check = QCheckBox("静默桌面")
+        self.vd_check.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.vd_check.setToolTip("开启后任务自动切到独立虚拟桌面执行，结束后自动返回主桌面；"
+                                 "AI 操作对主桌面完全无感，可继续正常使用电脑")
+        self.vd_check.setChecked(self._auto_vd)
+        self.vd_check.setStyleSheet(f"QCheckBox {{ color: {TEXT}; font-size: 12px; spacing: 5px; }}")
+        self.vd_check.toggled.connect(self._on_vd_toggled)
+        top.addWidget(self.vd_check)
 
         self.mcp_label = QLabel("MCP: 连接中…")
         self.mcp_label.setStyleSheet(f"color: {TEXT_DIM}; font-size: 12px;")
@@ -1131,6 +1144,15 @@ class AgentPanel(QDialog):
         else:
             self._add_status("AskBeforeEdit 模式：每步操作弹窗确认", OK)
 
+    def _on_vd_toggled(self, on: bool):
+        """静默桌面开关：任务自动在独立虚拟桌面执行（engine 复用，直接改标志）"""
+        self._auto_vd = bool(on)
+        self._settings.setValue("agent_auto_vd", "1" if on else "0")   # 记住设置
+        if self._engine is not None:
+            self._engine.auto_vd = self._auto_vd
+        self._add_status("已开启静默桌面：任务在独立虚拟桌面执行，结束自动返回主桌面"
+                         if on else "已关闭静默桌面：AI 直接在当前桌面操作", ACCENT)
+
     # ---------- 消息气泡 ----------
     @staticmethod
     def _fade_in(widget: QWidget, parent: QWidget):
@@ -1155,6 +1177,8 @@ class AgentPanel(QDialog):
                 b.setMaximumWidth(mw)
             except RuntimeError:
                 pass
+        for rec in self._img_widgets:
+            self._apply_image_size(rec)   # 图片随窗口同步缩小
 
     def showEvent(self, e):
         super().showEvent(e)
@@ -1442,12 +1466,16 @@ class AgentPanel(QDialog):
         return None
 
     def _match_tool(self, text: str):
-        """/工具名 [参数] → (name, args_text)；未匹配返回 None"""
+        """/工具名 [参数] → (name, args_text)；支持中文别名（截屏/截图→screenshot）；未匹配返回 None"""
         body = text.lstrip("/").strip()
         parts = body.split(None, 1)
         if not parts:
             return None
         name = parts[0].strip().lower()
+        aliases = {"截屏": "screenshot", "截图": "screenshot",
+                   "看屏幕": "screenshot", "查看屏幕": "screenshot",
+                   "查看桌面": "screenshot", "刷新": "screenshot"}
+        name = aliases.get(name, name)
         names = {t["function"]["name"] for t in agent_tools.TOOLS}
         if name not in names:
             return None
@@ -1509,7 +1537,8 @@ class AgentPanel(QDialog):
                 on_result=lambda n, t, im: self.result_signal.emit(n, t, im),
                 on_reasoning=lambda s: self.reasoning_signal.emit(s),
                 confirm=self._confirm_tool,
-                ask_user=self._ask_user_tool)
+                ask_user=self._ask_user_tool,
+                auto_vd=self._auto_vd)
         return self._engine
 
     def _send(self):
@@ -1533,12 +1562,21 @@ class AgentPanel(QDialog):
                     f"技能说明：\n{skill.get('instruction', '')}")
         # 手动指定工具：/工具名 [参数] → 转成指令由 AI 调用对应工具
         tool = self._match_tool(text)
+        shot = None
         if tool:
             tname, targs = tool
             self._add_status(f"已指定工具「{tname}」", ACCENT)
-            text = (f"请调用工具「{tname}」完成以下任务，参数必须按 JSON 传入。\n"
-                    f"工具参数说明：{self._tool_params_hint(tname)}\n"
-                    f"参数原始文本：{targs or '(无，可自行确定合理参数，不确定时先 ask_user 澄清)'}")
+            if tname == "screenshot":
+                # 手动截屏：面板直接截图并展示（不依赖 AI 调用工具，保证必定出图）
+                try:
+                    shot = agent_screen.capture_screen_data_url()
+                    text = "已截取当前屏幕并展示在对话中，请基于截图内容回答或继续执行。"
+                except Exception:
+                    shot = None
+            else:
+                text = (f"请调用工具「{tname}」完成以下任务，参数必须按 JSON 传入。\n"
+                        f"工具参数说明：{self._tool_params_hint(tname)}\n"
+                        f"参数原始文本：{targs or '(无，可自行确定合理参数，不确定时先 ask_user 澄清)'}")
         # 非图片附件：把路径文本附加给 AI（不显示源内容），AI 可按需 read_file
         if files:
             note = "以下为拖入的附件文件，请按需读取内容：\n" + \
@@ -1549,19 +1587,19 @@ class AgentPanel(QDialog):
         self._user_msgs.append(text)
         self._update_welcome()          # 发消息后欢迎介绍立即消失
 
-        # 用户气泡：图片以缩略图显示，不显示源文本
-        if images:
-            parts = []
-            if text:
-                parts.append(_esc(text).replace("\n", "<br/>"))
-            parts.extend(
-                f'<img src="{u}" width="220" style="border-radius:8px;'
-                'display:block;margin:6px 0;">' for u in images)
-            self._add_bubble("<br/>".join(parts), "user", rich=True)
-        else:
-            self._add_bubble(text, "user")
+        # 用户气泡：文字入气泡；拖拽图片用独立缩小图片框展示（禁止富文本 <img> 溢出挤压）
+        self._add_bubble(text, "user")
+        for u in images:
+            self._add_image_widget(u, caption="图片")
+        # 手动截屏：截图展示在"已截屏"标签下方（用户气泡之后，独立成行不挤压）
+        send_images = list(images)
+        if shot:
+            self._add_image_widget(shot)   # 默认标签"已截屏"
+            send_images.append(shot)
         self._ai_bubble = None
         self._segments = []
+        if shot:
+            self._segments.append({"type": "image", "url": shot})   # 保留给会话持久化恢复
         self._user_stopped = False
         self._end_badge_shown = False
         self._think_done = False
@@ -1573,7 +1611,7 @@ class AgentPanel(QDialog):
         self.input.setFocus()
 
         est = agent_llm.estimate_tokens(text) + \
-            agent_llm.estimate_image_tokens() * len(images)
+            agent_llm.estimate_image_tokens() * len(send_images)
         self.token_label.setText(f"本次预计 {est} tokens · 累计 0")
 
         self.send_btn.setText("发送中…")
@@ -1585,7 +1623,7 @@ class AgentPanel(QDialog):
         self._clear_attachments()   # 发送后清空附件条
         agent_name = self.agent_combo.currentData() or "桌面助手"
         self._task_active = True
-        engine.start(text, agent_name, images)
+        engine.start(text, agent_name, send_images)
 
     def _stop(self):
         if self._engine:
@@ -1664,6 +1702,7 @@ class AgentPanel(QDialog):
             item = self.msg_lay.takeAt(0)
             self._free_layout_item(item)
         self._bubble_widgets = []   # 清空气泡引用，避免 resizeEvent 处理已删除对象
+        self._img_widgets = []      # 清空图片容器引用
         self.token_label.setText("tokens: 0")
         self._add_status("已清空上下文，开启新对话", TEXT_DIM)
         self._persist_current()   # 清空后同步持久化（会话内容为空）
@@ -1823,26 +1862,49 @@ class AgentPanel(QDialog):
         self._refresh_ai_html()
         self._scroll_bottom()
 
-    def _add_image_widget(self, data_url: str):
-        """把截图渲染为独立 QLabel（QPixmap 缩略图），避免与气泡文字重叠/挤压"""
+    def _add_image_widget(self, data_url: str, caption: str = "已截屏"):
+        """截图/图片独立容器：'已截屏'标签 + 缩小后的图片框，随窗口自适应，禁止溢出挤压"""
         try:
             b64 = data_url.partition(",")[2]
             img = QImage.fromData(base64.b64decode(b64))
             if img.isNull():
                 return
-            pix = QPixmap.fromImage(img).scaled(
-                320, 320, Qt.AspectRatioMode.KeepAspectRatio,
-                Qt.TransformationMode.SmoothTransformation)
+            box = QWidget()
+            box.setStyleSheet(
+                f"background: {PANEL}; border: 1px solid {BORDER}; border-radius: 8px;")
+            v = QVBoxLayout(box)
+            v.setContentsMargins(6, 6, 6, 6)
+            v.setSpacing(4)
+            cap = QLabel(caption)
+            cap.setStyleSheet(f"color: {TEXT_DIM}; font-size: 11px;")
+            v.addWidget(cap)
             lbl = QLabel()
-            lbl.setPixmap(pix)
-            lbl.setStyleSheet(
-                f"border: 1px solid {BORDER}; border-radius: 8px; padding: 2px;")
-            lbl.setMaximumWidth(400)
-            # 插入到消息流末尾（stretch 前），紧跟 AI 气泡，独立成行不挤压文字
-            self.msg_lay.insertWidget(self.msg_lay.count() - 1, lbl,
+            lbl.setStyleSheet("border: none; background: transparent;")
+            v.addWidget(lbl)
+            rec = {"box": box, "lbl": lbl, "img": img}
+            self._img_widgets.append(rec)
+            self._apply_image_size(rec)
+            # 插入到消息流末尾（stretch 前），独立成行不挤压文字
+            self.msg_lay.insertWidget(self.msg_lay.count() - 1, box,
                                       0, Qt.AlignmentFlag.AlignLeft)
             self._scroll_bottom()
         except Exception:
+            pass
+
+    def _apply_image_size(self, rec: dict):
+        """按窗口当前宽度缩小图片（宽度/高度双上限），禁止溢出气泡区域"""
+        try:
+            img = rec["img"]
+            mw = max(180, int(self._bubble_max_width() * 0.8))   # 随窗口自适应
+            w = min(img.width(), mw)
+            h = min(int(img.height() * w / max(img.width(), 1)),
+                    int(self._bubble_max_width() * 0.55))        # 高度上限防长图压扁布局
+            pix = QPixmap.fromImage(img).scaled(
+                w, h, Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation)
+            rec["lbl"].setPixmap(pix)
+            rec["box"].setMaximumWidth(w + 14)
+        except RuntimeError:
             pass
 
     def _on_status(self, s: str):

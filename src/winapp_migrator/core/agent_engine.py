@@ -16,7 +16,7 @@ from PyQt6.QtCore import Qt, QByteArray, QBuffer, QIODevice
 from PyQt6.QtGui import QImage
 
 from winapp_migrator.core import agent_llm, agent_tools, agent_skills
-from winapp_migrator.core.agent_screen import capture_screen_data_url
+from winapp_migrator.core.agent_screen import capture_screen_data_url, virtual_desktop
 
 # 会改变屏幕、需要执行后自动截图验证的工具
 _SCREEN_CHANGING = {"click", "drag", "scroll", "press_key", "type_text",
@@ -82,7 +82,7 @@ class AgentEngine:
     def __init__(self, llm: agent_llm.LLMClient,
                  mcp_manager=None,
                  on_delta=None, on_status=None, on_result=None, confirm=None,
-                 ask_user=None, on_reasoning=None):
+                 ask_user=None, on_reasoning=None, auto_vd: bool = False):
         """
         on_delta: Callable[[str], None]      流式文本增量
         on_status: Callable[[str], None]     步骤状态（如"正在思考/执行工具 click"）
@@ -90,6 +90,8 @@ class AgentEngine:
         confirm: Callable[[str, dict], bool] 工具执行前确认；None 表示自动放行（测试用）
         ask_user: Callable[[dict], str]      ask_user 提问回调（阻塞式，返回用户回答）
         on_reasoning: Callable[[str], None]  流式思考过程增量
+        auto_vd: bool 任务自动在独立虚拟桌面执行（开始新建并切入，结束自动返回主桌面），
+                 实现"完全静默无感"：AI 操作不打扰用户主桌面
         """
         self.llm = llm
         self.mcp = mcp_manager
@@ -99,6 +101,7 @@ class AgentEngine:
         self.confirm = confirm
         self.ask_user = ask_user
         self.on_reasoning = on_reasoning
+        self.auto_vd = auto_vd
         self._messages: list = []
         self.tokens = {"prompt": 0, "completion": 0}
         self.last_estimate = 0       # 最近一次请求前的预计算（输入 tokens）
@@ -231,12 +234,18 @@ class AgentEngine:
     # ---------- 工具 ----------
     def _all_tools(self) -> list:
         tools = list(agent_tools.tool_schemas())
+        if self.auto_vd:
+            # 自动虚拟桌面接管时，不再暴露 virtual_desktop 工具（避免 AI 重复切桌面）
+            tools = [t for t in tools if t["function"]["name"] != "virtual_desktop"]
         if self.mcp:
             tools.extend(self.mcp.tool_schemas())
         return tools
 
     def _execute(self, name: str, args: dict, allow_dangerous: bool = False) -> dict:
         """执行内置或 MCP 工具，返回 {"text", "images"}"""
+        if self.auto_vd and name == "virtual_desktop":
+            # 自动虚拟桌面接管时，禁止 AI 手动切换桌面（防止重复 new/back 打乱静默流程）
+            return {"text": "[自动模式] 系统已在独立虚拟桌面执行本任务，结束后自动返回主桌面，无需手动切换", "images": []}
         if name == "ask_user":
             # 提问工具：不经沙盒/确认，直接向用户提问
             if self.ask_user:
@@ -277,6 +286,16 @@ class AgentEngine:
             self._messages[0]["content"] = system  # 切换 Agent 时更新系统提示
         self._messages.append({"role": "user",
                                "content": agent_llm.build_content(user_input, images)})
+        # 静默虚拟桌面：任务开始切到独立桌面，结束自动返回主桌面（finally 兜底所有结束路径）
+        switched = False
+        if self.auto_vd:
+            try:
+                virtual_desktop("new")
+                switched = True
+                if self.on_status:
+                    self.on_status("已在独立虚拟桌面开始工作")
+            except Exception:
+                switched = False
         try:
             for _ in range(30):  # 最多 30 轮工具循环，防死循环
                 if self._stop.is_set():
@@ -374,6 +393,13 @@ class AgentEngine:
             self.end_state = "stopped" if stopped else "error"
             if self.on_status:
                 self.on_status("已停止" if stopped else f"错误: {e}")
+        finally:
+            # 任何结束路径（完成/停止/错误/超轮数）都返回用户桌面，AI 操作完全无感
+            if switched:
+                try:
+                    virtual_desktop("back")
+                except Exception:
+                    pass
 
     def _accum_usage(self, usage):
         if not usage:

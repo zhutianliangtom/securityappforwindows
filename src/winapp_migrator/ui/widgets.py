@@ -9,7 +9,7 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtCore import (
     Qt, QSize, QRect, QFileInfo, QPoint, QTimer, QPropertyAnimation,
-    QParallelAnimationGroup, QEasingCurve, pyqtSignal, Property
+    QParallelAnimationGroup, QEasingCurve, pyqtSignal, pyqtProperty
 )
 from PyQt6.QtGui import QColor, QPainter, QIcon, QFont, QFontMetrics, QPixmap
 
@@ -46,7 +46,7 @@ class SwitchButton(QWidget):
         self._knob = v
         self.update()
 
-    knob = Property(float, knob, set_knob)
+    knob = pyqtProperty(float, knob, set_knob)
 
     def isChecked(self) -> bool:
         return self._checked

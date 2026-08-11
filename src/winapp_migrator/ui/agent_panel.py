@@ -130,6 +130,238 @@ class _ConfirmDialog(QDialog):
         self.accept()
 
 
+# 常用 MCP 服务器模板（选择后预填命令）
+_MCP_TEMPLATES = [
+    ("自定义", None),
+    ("Excel 表格操作", {"command": "npx",
+                        "args": ["-y", "@executeautomation/excel-mcp-server"]}),
+    ("文件系统操作", {"command": "npx",
+                      "args": ["-y", "@modelcontextprotocol/server-filesystem"]}),
+    ("WPS 文本操作（需自建服务器）", {"command": "", "args": []}),
+]
+
+
+class _McpServerDialog(QDialog):
+    """单个 MCP 服务器配置：stdio（命令+参数）或 SSE（URL）"""
+
+    def __init__(self, server: dict = None, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("编辑 MCP 服务器" if server else "添加 MCP 服务器")
+        self.setMinimumWidth(460)
+        self.setStyleSheet(
+            f"QDialog {{ background: {PANEL}; }}"
+            f"QLabel {{ color: {TEXT}; font-size: 13px; }}"
+            f"QLineEdit, QComboBox {{ background: {BG}; color: {TEXT};"
+            f"border: 1px solid {BORDER}; border-radius: 6px; padding: 6px 10px; }}")
+        self._server = server or {}
+        form = QFormLayout(self)
+        form.setContentsMargins(18, 16, 18, 16)
+        form.setSpacing(12)
+
+        self.name_edit = QLineEdit(server.get("name", "") if server else "")
+        self.name_edit.setPlaceholderText("服务器名称，如 Excel、WPS")
+        form.addRow("名称", self.name_edit)
+
+        self.type_combo = QComboBox()
+        self.type_combo.addItem("stdio（本地命令）", "stdio")
+        self.type_combo.addItem("sse（远程 URL）", "sse")
+        if server:
+            idx = self.type_combo.findData(server.get("type", "stdio"))
+            self.type_combo.setCurrentIndex(idx if idx >= 0 else 0)
+        self.type_combo.currentIndexChanged.connect(self._sync_type)
+        form.addRow("类型", self.type_combo)
+
+        self.template_combo = QComboBox()
+        for tpl, _ in _MCP_TEMPLATES:
+            self.template_combo.addItem(tpl)
+        self.template_combo.currentIndexChanged.connect(self._apply_template)
+        form.addRow("模板", self.template_combo)
+
+        self.command_edit = QLineEdit(server.get("command", "") if server else "")
+        self.command_edit.setPlaceholderText("如 npx / uvx / python")
+        form.addRow("命令", self.command_edit)
+
+        self.args_edit = QLineEdit(" ".join(server.get("args", [])) if server else "")
+        self.args_edit.setPlaceholderText("参数，空格分隔，如 -y @executeautomation/excel-mcp-server")
+        form.addRow("参数", self.args_edit)
+
+        self.url_edit = QLineEdit(server.get("url", "") if server else "")
+        self.url_edit.setPlaceholderText("https://…/sse")
+        form.addRow("URL", self.url_edit)
+
+        btns = QHBoxLayout()
+        ok = QPushButton(_std_icon(QStyle.StandardPixmap.SP_DialogYesButton), "确定")
+        ok.setStyleSheet(f"background: {OK}; color: #06281B;")
+        ok.setAutoDefault(False)
+        ok.clicked.connect(self._accept_check)
+        cancel = QPushButton("取消")
+        cancel.setStyleSheet(f"background: {PANEL}; color: {TEXT};"
+                             f"border: 1px solid {BORDER};")
+        cancel.setAutoDefault(False)
+        cancel.clicked.connect(self.reject)
+        btns.addWidget(ok)
+        btns.addWidget(cancel)
+        form.addRow(btns)
+
+        self._sync_type()
+        if server and server.get("type") == "sse":
+            self.template_combo.setCurrentIndex(0)
+
+    def _sync_type(self):
+        sse = self.type_combo.currentData() == "sse"
+        self.command_edit.setEnabled(not sse)
+        self.args_edit.setEnabled(not sse)
+        self.url_edit.setEnabled(sse)
+
+    def _apply_template(self, idx):
+        tpl = _MCP_TEMPLATES[idx][1]
+        if not tpl:
+            return
+        if tpl.get("command"):
+            self.command_edit.setText(tpl["command"])
+            self.args_edit.setText(" ".join(tpl["args"]))
+            self.type_combo.setCurrentIndex(0)
+            self.url_edit.clear()
+
+    def _accept_check(self):
+        name = self.name_edit.text().strip()
+        if not name:
+            QMessageBox.warning(self, "提示", "请输入服务器名称")
+            return
+        if self.type_combo.currentData() == "sse":
+            if not self.url_edit.text().strip():
+                QMessageBox.warning(self, "提示", "SSE 类型需要填写 URL")
+                return
+        else:
+            if not self.command_edit.text().strip():
+                QMessageBox.warning(self, "提示", "stdio 类型需要填写命令")
+                return
+        self.accept()
+
+    def server_data(self) -> dict:
+        d = {"name": self.name_edit.text().strip(),
+             "type": self.type_combo.currentData()}
+        if d["type"] == "sse":
+            d["url"] = self.url_edit.text().strip()
+        else:
+            d["command"] = self.command_edit.text().strip()
+            args = [a for a in self.args_edit.text().split() if a.strip()]
+            if args:
+                d["args"] = args
+        return d
+
+
+class _McpManagerDialog(QDialog):
+    """MCP 服务器管理：列表 + 添加/编辑/删除 + 保存并重连"""
+
+    def __init__(self, on_saved, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("MCP 服务器配置")
+        self.setMinimumSize(520, 420)
+        self.on_saved = on_saved
+        self.servers = agent_skills.load_mcp_servers()
+        self.setStyleSheet(
+            f"QDialog {{ background: {PANEL}; }}"
+            f"QLabel {{ color: {TEXT}; font-size: 13px; }}"
+            f"QListWidget {{ background: {BG}; color: {TEXT}; border: 1px solid {BORDER};"
+            "border-radius: 8px; padding: 6px; }}"
+            f"QPushButton {{ border: none; border-radius: 8px; padding: 7px 16px;"
+            "font-weight: 700; }}")
+
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(16, 14, 16, 14)
+        lay.setSpacing(10)
+
+        head = QLabel("已配置的 MCP 服务器（保存后自动重连，AI 即可调用其工具）")
+        head.setStyleSheet(f"color: {TEXT_DIM}; font-size: 12px;")
+        lay.addWidget(head)
+
+        self.list_w = QListWidget()
+        self.list_w.setMinimumHeight(220)
+        lay.addWidget(self.list_w, 1)
+
+        btns = QHBoxLayout()
+        add_b = QPushButton(_std_icon(QStyle.StandardPixmap.SP_FileDialogNewFolder), "添加")
+        add_b.setStyleSheet(f"background: {PANEL}; color: {ACCENT};"
+                            f"border: 1px solid {ACCENT};")
+        add_b.clicked.connect(self._on_add)
+        edit_b = QPushButton("编辑")
+        edit_b.setStyleSheet(f"background: {PANEL}; color: {TEXT};"
+                             f"border: 1px solid {BORDER};")
+        edit_b.clicked.connect(self._on_edit)
+        del_b = QPushButton("删除")
+        del_b.setStyleSheet(f"background: {PANEL}; color: {ERR};"
+                            f"border: 1px solid {ERR};")
+        del_b.clicked.connect(self._on_delete)
+        for b in (add_b, edit_b, del_b):
+            b.setAutoDefault(False)
+        btns.addWidget(add_b)
+        btns.addWidget(edit_b)
+        btns.addWidget(del_b)
+        btns.addStretch(1)
+        lay.addLayout(btns)
+
+        save_b = QPushButton(_std_icon(QStyle.StandardPixmap.SP_DialogYesButton), "保存并重连")
+        save_b.setStyleSheet(f"background: {OK}; color: #06281B;")
+        save_b.setAutoDefault(False)
+        save_b.clicked.connect(self._on_save)
+        cancel_b = QPushButton("取消")
+        cancel_b.setStyleSheet(f"background: {PANEL}; color: {TEXT};"
+                               f"border: 1px solid {BORDER};")
+        cancel_b.setAutoDefault(False)
+        cancel_b.clicked.connect(self.reject)
+        foot = QHBoxLayout()
+        foot.addWidget(save_b)
+        foot.addWidget(cancel_b)
+        lay.addLayout(foot)
+
+        self._reload_list()
+
+    def _reload_list(self):
+        self.list_w.clear()
+        for s in self.servers:
+            typ = "stdio" if s.get("type", "stdio") == "stdio" else "sse"
+            detail = s.get("command", "") or s.get("url", "")
+            self.list_w.addItem(f"{s.get('name', '?')}  [{typ}]  {detail}")
+
+    def _current_server(self) -> dict:
+        row = self.list_w.currentRow()
+        if 0 <= row < len(self.servers):
+            return self.servers[row]
+        return None
+
+    def _on_add(self):
+        dlg = _McpServerDialog(parent=self)
+        if dlg.exec() == QDialog.DialogCode.Accepted:
+            self.servers.append(dlg.server_data())
+            self._reload_list()
+
+    def _on_edit(self):
+        s = self._current_server()
+        if s is None:
+            QMessageBox.information(self, "提示", "请先选择一个服务器")
+            return
+        dlg = _McpServerDialog(server=s, parent=self)
+        if dlg.exec() == QDialog.DialogCode.Accepted:
+            self.servers[self.list_w.currentRow()] = dlg.server_data()
+            self._reload_list()
+
+    def _on_delete(self):
+        row = self.list_w.currentRow()
+        if 0 <= row < len(self.servers):
+            self.servers.pop(row)
+            self._reload_list()
+
+    def _on_save(self):
+        if agent_skills.save_mcp_servers(self.servers):
+            if self.on_saved:
+                self.on_saved()   # 触发后台重连
+            QMessageBox.information(self, "已保存", "MCP 配置已保存，正在重新连接…")
+            self.accept()
+        else:
+            QMessageBox.warning(self, "错误", "保存 MCP 配置失败（无写入权限）")
+
+
 class AgentPanel(QDialog):
     delta_signal = pyqtSignal(str)
     status_signal = pyqtSignal(str)
@@ -215,6 +447,16 @@ class AgentPanel(QDialog):
         self.mcp_label = QLabel("MCP: 连接中…")
         self.mcp_label.setStyleSheet(f"color: {TEXT_DIM}; font-size: 12px;")
         top.addWidget(self.mcp_label)
+
+        mcp_btn = QPushButton(_std_icon(QStyle.StandardPixmap.SP_ComputerIcon), "MCP")
+        mcp_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        mcp_btn.setAutoDefault(False)
+        mcp_btn.setStyleSheet(
+            f"QPushButton {{ background: {PANEL}; color: {ACCENT}; border: 1px solid {ACCENT};"
+            "border-radius: 8px; padding: 6px 12px; font-size: 12px; font-weight: 600; }}"
+            f"QPushButton:hover {{ background: #16233C; }}")
+        mcp_btn.clicked.connect(self._open_mcp_manager)
+        top.addWidget(mcp_btn)
 
         top.addStretch(1)
 
@@ -425,6 +667,7 @@ class AgentPanel(QDialog):
     # ---------- MCP 初始化 ----------
     def _init_mcp(self):
         try:
+            self._mcp.close_all()   # 重连前关闭旧连接
             servers = agent_skills.load_mcp_servers()
             if not servers:
                 self.mcp_signal.emit("MCP: 未配置服务器")
@@ -445,12 +688,21 @@ class AgentPanel(QDialog):
         self.mcp_label.setText(text)
         self.mcp_label.setStyleSheet(f"color: {color}; font-size: 12px;")
 
+    def _open_mcp_manager(self):
+        """打开 MCP 服务器配置面板；保存后后台重连"""
+        dlg = _McpManagerDialog(on_saved=self._reconnect_mcp, parent=self)
+        dlg.exec()
+
+    def _reconnect_mcp(self):
+        threading.Thread(target=self._init_mcp, daemon=True).start()
+
     # ---------- 发送 / 停止 ----------
     def _llm_config(self) -> dict:
+        # 模型与接口固定为 Agnes 2.5，禁止用户自定义；仅 API Key 由用户配置
         return {
-            "base_url": str(self._settings.value("agent_base_url", agent_llm.DEFAULT_BASE_URL)),
+            "base_url": agent_llm.DEFAULT_BASE_URL,
+            "model": agent_llm.DEFAULT_MODEL,
             "api_key": str(self._settings.value("agent_api_key", "")),
-            "model": str(self._settings.value("agent_model", agent_llm.DEFAULT_MODEL)),
         }
 
     def _ensure_engine(self):
@@ -618,9 +870,8 @@ class AgentPanel(QDialog):
 
     # ---------- 设置 ----------
     def _open_settings(self):
-        cfg = self._llm_config()
         dlg = QDialog(self)
-        dlg.setWindowTitle("Agent 模型设置")
+        dlg.setWindowTitle("API Key 设置")
         dlg.setStyleSheet(
             f"QDialog {{ background: {PANEL}; }}"
             f"QLabel {{ color: {TEXT}; font-size: 13px; }}"
@@ -631,13 +882,16 @@ class AgentPanel(QDialog):
         form = QFormLayout(dlg)
         form.setContentsMargins(18, 16, 18, 16)
         form.setSpacing(12)
-        base = QLineEdit(cfg["base_url"])
-        key = QLineEdit(cfg["api_key"])
+        # 模型与接口固定（只读，禁止自定义）
+        model_lbl = QLabel(agent_llm.DEFAULT_MODEL)
+        model_lbl.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        base_lbl = QLabel(agent_llm.DEFAULT_BASE_URL)
+        base_lbl.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        form.addRow("模型（固定）", model_lbl)
+        form.addRow("接口（固定）", base_lbl)
+        key = QLineEdit(str(self._settings.value("agent_api_key", "")))
         key.setEchoMode(QLineEdit.EchoMode.Password)
-        model = QLineEdit(cfg["model"])
-        form.addRow("Base URL", base)
         form.addRow("API Key", key)
-        form.addRow("模型", model)
         btns = QHBoxLayout()
         ok = QPushButton(_std_icon(QStyle.StandardPixmap.SP_DialogYesButton), "保存")
         ok.setStyleSheet(f"background: {OK}; color: #06281B;")
@@ -652,10 +906,8 @@ class AgentPanel(QDialog):
         btns.addWidget(cancel)
         form.addRow(btns)
         if dlg.exec() == QDialog.DialogCode.Accepted:
-            self._settings.setValue("agent_base_url", base.text().strip())
             self._settings.setValue("agent_api_key", key.text().strip())
-            self._settings.setValue("agent_model", model.text().strip())
-            QMessageBox.information(self, "已保存", "模型设置已保存。")
+            QMessageBox.information(self, "已保存", "API Key 已保存。")
 
     def closeEvent(self, event):
         if self._engine:

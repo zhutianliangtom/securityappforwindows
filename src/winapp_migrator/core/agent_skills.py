@@ -68,6 +68,17 @@ def load_mcp_servers() -> list:
     return _load("mcp_servers.json", [])
 
 
+def save_mcp_servers(servers: list) -> bool:
+    """把 MCP 服务器配置写入 mcp_servers.json"""
+    try:
+        CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+        with open(CONFIG_DIR / "mcp_servers.json", "w", encoding="utf-8") as f:
+            json.dump(servers, f, ensure_ascii=False, indent=2)
+        return True
+    except OSError:
+        return False
+
+
 def skill_instructions(skill_names: list) -> str:
     """把所选技能的 instruction 拼装成 system prompt 附加段落"""
     by_name = {s.get("name"): s for s in load_skills()}

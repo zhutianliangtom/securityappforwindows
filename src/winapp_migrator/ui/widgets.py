@@ -9,7 +9,7 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtCore import (
     Qt, QSize, QRect, QFileInfo, QPoint, QTimer, QPropertyAnimation,
-    QParallelAnimationGroup, QEasingCurve
+    QParallelAnimationGroup, QEasingCurve, pyqtSignal, Property
 )
 from PyQt6.QtGui import QColor, QPainter, QIcon, QFont, QFontMetrics, QPixmap
 
@@ -22,6 +22,61 @@ _BANNED_EXE = {
 }
 # UWP 包内常见 logo 命名，优先选用
 _UWP_LOGO_HINTS = ("storelogo", "square150x150logo", "square44x44logo", "applogo")
+
+
+class SwitchButton(QWidget):
+    """滑块开关：点击切换，带动画。信号 toggled(bool) 在用户点击时发射"""
+
+    toggled = pyqtSignal(bool)
+
+    def __init__(self, checked: bool = False, parent=None):
+        super().__init__(parent)
+        self._checked = checked
+        self._knob = 1.0 if checked else 0.0   # 滑块位置 0~1
+        self.setFixedSize(48, 26)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._anim = QPropertyAnimation(self, b"knob", self)
+        self._anim.setDuration(160)
+        self._anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+
+    def knob(self) -> float:
+        return self._knob
+
+    def set_knob(self, v: float):
+        self._knob = v
+        self.update()
+
+    knob = Property(float, knob, set_knob)
+
+    def isChecked(self) -> bool:
+        return self._checked
+
+    def setChecked(self, checked: bool):
+        if checked == self._checked:
+            return
+        self._checked = checked
+        self._anim.stop()
+        self._anim.setStartValue(self._knob)
+        self._anim.setEndValue(1.0 if checked else 0.0)
+        self._anim.start()
+        self.update()
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.setChecked(not self._checked)
+            self.toggled.emit(self._checked)
+
+    def paintEvent(self, event):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(QColor(PALETTE["primary"]) if self._checked else QColor("#E5E7EB"))
+        p.drawRoundedRect(self.rect(), 13, 13)
+        pad = 3
+        d = self.height() - pad * 2
+        x = pad + self._knob * (self.width() - d - pad * 2)
+        p.setBrush(QColor("#FFFFFF"))
+        p.drawEllipse(int(round(x)), pad, d, d)
 
 
 class Card(QWidget):

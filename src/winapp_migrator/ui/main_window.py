@@ -7,7 +7,7 @@ from typing import List
 
 from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit,
-    QComboBox, QPushButton, QCheckBox, QListWidget, QListWidgetItem, QProgressBar,
+    QComboBox, QPushButton, QListWidget, QListWidgetItem, QProgressBar,
     QTextEdit, QMessageBox, QApplication, QSizePolicy, QSpacerItem,
     QFileDialog, QDialog, QScrollArea, QFrame, QSystemTrayIcon, QMenu
 )
@@ -18,7 +18,7 @@ from winapp_migrator.utils.helpers import setup_logging, is_admin, ensure_admin,
 from winapp_migrator.ui.styles import GLOBAL_QSS, PALETTE, apply_palette
 from winapp_migrator.ui.widgets import (
     Card, PrimaryButton, SecondaryButton, AppItemDelegate, DataDirDialog,
-    UninstallConfirmDialog, ToastNotification
+    UninstallConfirmDialog, ToastNotification, SwitchButton
 )
 from winapp_migrator.core.app_scanner import AppScanner, AppInfo
 from winapp_migrator.core.data_dirs import detect_data_dirs
@@ -520,11 +520,17 @@ class MainWindow(QMainWindow):
         self.security_btn.clicked.connect(self._toggle_security)
         layout.addWidget(self.security_btn)
 
-        self.toast_check = QCheckBox("🔔 安全提醒弹窗")
-        self.toast_check.setToolTip("检测到威胁时是否弹出右下角提醒；关闭后拦截仍生效，仅不弹窗")
-        self.toast_check.setChecked(self._toast_enabled)
-        self.toast_check.toggled.connect(self._on_toast_toggle)
-        layout.addWidget(self.toast_check)
+        # 安全提醒弹窗滑块开关（拦截始终生效，仅控制是否弹窗；选择持久化）
+        switch_row = QHBoxLayout()
+        switch_row.setSpacing(8)
+        self.toast_switch = SwitchButton(self._toast_enabled)
+        self.toast_switch.toggled.connect(self._on_toast_toggle)
+        switch_row.addWidget(self.toast_switch)
+        switch_label = QLabel("🔔 安全提醒弹窗")
+        switch_label.setStyleSheet(f"color: {PALETTE['text']}; font-size: 13px;")
+        switch_row.addWidget(switch_label)
+        switch_row.addStretch(1)
+        layout.addLayout(switch_row)
 
         return card
 
@@ -583,10 +589,11 @@ class MainWindow(QMainWindow):
         self.security_btn.setText("🛡 静默防护运行中")
         self.status_label.setText("静默防护运行中，正在后台监控…")
         self.tray.show()
-        self.toast.show_toast(
-            "静默防护", "🛡 已开启\n后台监控恶意进程、启动项与网络风险，拦截结果将在此提示。",
-            False, 4000,
-        )
+        if self._toast_enabled:
+            self.toast.show_toast(
+                "静默防护", "🛡 已开启\n后台监控恶意进程、启动项与网络风险，拦截结果将在此提示。",
+                False, 4000,
+            )
 
     def _stop_security(self):
         """关闭静默防护"""
@@ -663,9 +670,10 @@ class MainWindow(QMainWindow):
         if self._security_on:
             # 防护运行中：关闭仅最小化到托盘，后台防护保持
             self.hide()
-            self.toast.show_toast(
-                "静默防护", "🛡 仍在后台运行\n点击托盘图标可还原主窗口。", False, 3000,
-            )
+            if self._toast_enabled:
+                self.toast.show_toast(
+                    "静默防护", "🛡 仍在后台运行\n点击托盘图标可还原主窗口。", False, 3000,
+                )
             event.ignore()
             return
         if self.security_worker and self.security_worker.isRunning():

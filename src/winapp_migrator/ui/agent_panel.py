@@ -1,12 +1,15 @@
-"""AI Agent 工具面板（深色"星际控制台"风格）
+"""AI Agent 工具面板（深色"星际控制台"风格，无 emoji，矢量图标）
 
-- 聊天气泡：用户消息靠右（青色渐变）、AI 消息靠左（深色卡片），流式逐字输出
+消息气泡（TRAE 风格，单气泡一体化）：
+- AI 气泡内依次渲染：思考过程 → 操作步骤 → 最终文本输出，均在同一气泡内
+- 用户消息靠右（青色）、AI 消息靠左（深色卡片）
 - 上下文：engine 复用保留跨任务对话历史（截图仅保留最近 2 张防膨胀），可一键清空
-- 反馈：发送中/停止中按钮状态 + "思考中"逐点动画 + tokens 实时统计
-- 每步确认：工具执行前弹窗展示"当前屏幕截图 + 操作 + 风险"，用户允许/拒绝
+- 反馈：发送中/停止中按钮状态 + "思考中"点号动画 + tokens 实时统计
+- 每步确认：AskBeforeEdit 弹窗确认（确认后危险命令可执行）；YOLO 无确认、危险命令一律拒绝
 - MCP / skills / agents：从 ~/.winapp_migrator/agent/*.json 加载
 """
 
+import html as _html
 import json
 import os
 import sys
@@ -18,6 +21,7 @@ from PyQt6.QtGui import QIcon, QFont
 from PyQt6.QtWidgets import (
     QDialog, QLabel, QLineEdit, QPushButton, QComboBox, QScrollArea,
     QVBoxLayout, QHBoxLayout, QMessageBox, QFormLayout, QWidget,
+    QApplication, QStyle,
 )
 
 from winapp_migrator.core import agent_llm, agent_engine, agent_skills, agent_sandbox
@@ -31,7 +35,7 @@ BORDER = "#1E2A44"        # 边框
 TEXT = "#E6EDF7"          # 主文本
 TEXT_DIM = "#8A9BB8"      # 次要文本
 ACCENT = "#22D3EE"        # 强调（青）
-USER_BG = "#0EA5E9"       # 用户气泡/发送按钮底色（纯色，Qt QSS 渐变解析不稳定已弃用）
+USER_BG = "#0EA5E9"       # 用户气泡/发送按钮底色（纯色）
 AI_BG = "#1A2540"         # AI 气泡底色
 OK = "#34D399"
 WARN = "#FBBF24"
@@ -44,12 +48,21 @@ def _app_icon_path() -> str:
     return str(Path(__file__).resolve().parents[3] / "assets" / "icon.ico")
 
 
+def _std_icon(sp) -> QIcon:
+    """系统矢量图标（无 emoji）"""
+    return QApplication.style().standardIcon(sp)
+
+
+def _esc(s: str) -> str:
+    return _html.escape(str(s), quote=False)
+
+
 class _ConfirmDialog(QDialog):
     """工具执行确认：显示当前屏幕截图 + 操作 + 风险等级"""
 
     def __init__(self, name: str, args: dict, risk: str, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("🤖 AI 请求执行操作")
+        self.setWindowTitle("AI 请求执行操作")
         self.setMinimumSize(520, 620)
         self.result_ok = False
 
@@ -65,13 +78,14 @@ class _ConfirmDialog(QDialog):
 
         risk_color = {"safe": OK, "risky": WARN, "dangerous": ERR}
         risk_txt = {"safe": "安全（白名单）", "risky": "需谨慎", "dangerous": "危险（确认后将执行）"}
-        head = QLabel(f"AI 想执行：<b>{name}</b>　风险：<span style='color:{risk_color.get(risk, TEXT)}'>"
+        head = QLabel(f"AI 想执行：<b>{_esc(name)}</b>　风险：<span style='color:{risk_color.get(risk, TEXT)}'>"
                       f"{risk_txt.get(risk, risk)}</span>")
         head.setStyleSheet("font-size: 14px;")
         lay.addWidget(head)
 
         arg_txt = QLabel(json.dumps(args, ensure_ascii=False, indent=2))
         arg_txt.setWordWrap(True)
+        arg_txt.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         arg_txt.setStyleSheet(
             f"background: {BG}; color: {TEXT_DIM}; border: 1px solid {BORDER};"
             "border-radius: 8px; padding: 10px; font-size: 12px; font-family: Consolas;")
@@ -95,11 +109,13 @@ class _ConfirmDialog(QDialog):
             pic_label.setText("截图不可用")
 
         btns = QHBoxLayout()
-        deny = QPushButton("❌ 拒绝")
+        deny = QPushButton(_std_icon(QStyle.StandardPixmap.SP_DialogNoButton), "拒绝")
         deny.setStyleSheet(f"background: {ERR}; color: white;")
+        deny.setAutoDefault(False)
         deny.clicked.connect(self._deny)
-        allow = QPushButton("✅ 允许执行")
+        allow = QPushButton(_std_icon(QStyle.StandardPixmap.SP_DialogYesButton), "允许执行")
         allow.setStyleSheet(f"background: {OK}; color: #06281B;")
+        allow.setAutoDefault(False)
         allow.clicked.connect(self._allow)
         btns.addWidget(deny)
         btns.addWidget(allow)
@@ -122,7 +138,7 @@ class AgentPanel(QDialog):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("🤖 AI Agent 工具面板")
+        self.setWindowTitle("AI Agent 工具面板")
         self.setWindowIcon(QIcon(_app_icon_path()))
         self.setMinimumSize(760, 600)
         self.resize(900, 660)
@@ -143,8 +159,11 @@ class AgentPanel(QDialog):
         self._mcp = McpManager()
         self._agents = agent_skills.load_agents()
 
-        self._ai_bubble = None       # 当前流式输出的 AI 气泡
-        self._think_lbl = None       # "思考中"动画行
+        # 当前 AI 气泡内容状态（思考区 / 操作区 / 正文区）
+        self._ai_bubble = None
+        self._think_html = ""
+        self._op_list = []        # 操作行（HTML 片段）
+        self._body_html = ""
         self._think_idx = 0
 
         self._build_ui()
@@ -152,7 +171,6 @@ class AgentPanel(QDialog):
 
         self._think_timer = QTimer(self)
         self._think_timer.timeout.connect(self._tick_think)
-        self._think_frames = ["💭 思考中 ●○○", "💭 思考中 ○●○", "💭 思考中 ○○●"]
 
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._refresh_meta)
@@ -166,10 +184,10 @@ class AgentPanel(QDialog):
         root.setContentsMargins(16, 14, 16, 14)
         root.setSpacing(10)
 
-        # 顶栏：标题 + Agent 选择 + MCP 状态 + tokens + 清空 + 设置
+        # 顶栏：标题 + Agent 选择 + 模式 + MCP + tokens + 清空 + 设置
         top = QHBoxLayout()
         top.setSpacing(10)
-        title = QLabel("⚡ AI AGENT")
+        title = QLabel("AI AGENT")
         title.setStyleSheet(f"color: {ACCENT}; font-size: 16px; font-weight: 800;")
         top.addWidget(title)
 
@@ -183,9 +201,9 @@ class AgentPanel(QDialog):
 
         # 执行模式：AskBeforeEdit（默认，每步确认） / YOLO（无确认直行）
         self.mode_combo = QComboBox()
-        self.mode_combo.addItem("🔒 AskBeforeEdit（每步确认）", "ask")
-        self.mode_combo.addItem("🔥 YOLO（无确认直行）", "yolo")
-        self.mode_combo.setMinimumWidth(210)
+        self.mode_combo.addItem("AskBeforeEdit（每步确认）", "ask")
+        self.mode_combo.addItem("YOLO（无确认直行）", "yolo")
+        self.mode_combo.setMinimumWidth(190)
         saved_mode = str(self._settings.value("agent_mode", "ask"))
         idx = self.mode_combo.findData(saved_mode)
         self.mode_combo.setCurrentIndex(idx if idx >= 0 else 0)
@@ -204,20 +222,22 @@ class AgentPanel(QDialog):
         self.token_label.setStyleSheet(f"color: {TEXT_DIM}; font-size: 12px;")
         top.addWidget(self.token_label)
 
-        clear_btn = QPushButton("🧹 清空")
+        clear_btn = QPushButton(_std_icon(QStyle.StandardPixmap.SP_TrashIcon), "清空")
         clear_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        clear_btn.setAutoDefault(False)
         clear_btn.setStyleSheet(
             f"QPushButton {{ background: {PANEL}; color: {TEXT}; border: 1px solid {BORDER};"
-            "border-radius: 8px; padding: 6px 14px; font-size: 12px; font-weight: 600; }}"
+            "border-radius: 8px; padding: 6px 12px; font-size: 12px; font-weight: 600; }}"
             f"QPushButton:hover {{ border-color: {ACCENT}; color: {ACCENT}; }}")
         clear_btn.clicked.connect(self._clear_chat)
         top.addWidget(clear_btn)
 
-        set_btn = QPushButton("⚙ 设置")
+        set_btn = QPushButton(_std_icon(QStyle.StandardPixmap.SP_FileDialogDetailedView), "设置")
         set_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        set_btn.setAutoDefault(False)
         set_btn.setStyleSheet(
             f"QPushButton {{ background: {PANEL}; color: {TEXT}; border: 1px solid {BORDER};"
-            "border-radius: 8px; padding: 6px 14px; font-size: 12px; font-weight: 600; }}"
+            "border-radius: 8px; padding: 6px 12px; font-size: 12px; font-weight: 600; }}"
             f"QPushButton:hover {{ border-color: {ACCENT}; color: {ACCENT}; }}")
         set_btn.clicked.connect(self._open_settings)
         top.addWidget(set_btn)
@@ -249,20 +269,20 @@ class AgentPanel(QDialog):
         self.input.returnPressed.connect(self._send)
         bottom.addWidget(self.input, 1)
 
-        self.send_btn = QPushButton("🚀 发送")
+        self.send_btn = QPushButton(_std_icon(QStyle.StandardPixmap.SP_ArrowUp), "发送")
         self.send_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.send_btn.setAutoDefault(False)
         self.send_btn.setMinimumHeight(42)
         self.send_btn.setMinimumWidth(96)
         self.send_btn.setStyleSheet(
             f"QPushButton {{ background: {USER_BG}; color: white; border: none;"
-            "border-radius: 10px; padding: 0 18px; font-size: 13px; font-weight: 700; }}"
+            "border-radius: 10px; padding: 0 16px; font-size: 13px; font-weight: 700; }}"
             f"QPushButton:hover {{ border: 1px solid {ACCENT}; }}"
             f"QPushButton:disabled {{ background: #1A2540; color: {TEXT_DIM}; }}")
         self.send_btn.clicked.connect(self._send)
         bottom.addWidget(self.send_btn)
 
-        self.stop_btn = QPushButton("⏹ 停止")
+        self.stop_btn = QPushButton(_std_icon(QStyle.StandardPixmap.SP_MediaStop), "停止")
         self.stop_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.stop_btn.setAutoDefault(False)
         self.stop_btn.setMinimumHeight(42)
@@ -270,7 +290,7 @@ class AgentPanel(QDialog):
         self.stop_btn.setEnabled(False)
         self.stop_btn.setStyleSheet(
             f"QPushButton {{ background: {ERR}; color: white; border: none;"
-            "border-radius: 10px; padding: 0 16px; font-size: 13px; font-weight: 700; }}"
+            "border-radius: 10px; padding: 0 14px; font-size: 13px; font-weight: 700; }}"
             f"QPushButton:hover {{ background: #EF4444; }}"
             f"QPushButton:disabled {{ background: #1A2540; color: {TEXT_DIM}; }}")
         self.stop_btn.clicked.connect(self._stop)
@@ -278,7 +298,8 @@ class AgentPanel(QDialog):
         root.addLayout(bottom)
 
         tip = QLabel("提示：AskBeforeEdit 模式每步操作弹窗确认，确认后危险命令（关机/删除等）也会执行；"
-                     "YOLO 模式不弹窗，危险命令一律拒绝。skills/agents/MCP 配置见 ~/.winapp_migrator/agent/")
+                     "YOLO 模式不弹窗，危险命令一律拒绝。输入 /compact 压缩上下文。"
+                     "skills/agents/MCP 配置见 ~/.winapp_migrator/agent/")
         tip.setStyleSheet(f"color: {TEXT_DIM}; font-size: 11px;")
         root.addWidget(tip)
 
@@ -302,21 +323,22 @@ class AgentPanel(QDialog):
         self._settings.setValue("agent_mode", self._mode)   # 记住设置，下次启动恢复
         self._apply_mode_style()
         if self._mode == "yolo":
-            self._add_status("🔥 YOLO 模式：AI 操作不再弹窗确认（危险命令仍被沙盒硬拒绝）", WARN)
+            self._add_status("YOLO 模式：AI 操作不再弹窗确认（危险命令一律拒绝）", WARN)
         else:
-            self._add_status("🔒 AskBeforeEdit 模式：每步操作弹窗确认", OK)
+            self._add_status("AskBeforeEdit 模式：每步操作弹窗确认", OK)
 
     # ---------- 消息气泡 ----------
     def _add_bubble(self, text: str, align: str) -> QLabel:
         bubble = QLabel(text)
-        bubble.setTextFormat(Qt.TextFormat.PlainText)   # 纯文本，防止 LLM 输出被当 HTML
         bubble.setWordWrap(True)
         bubble.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         bubble.setMaximumWidth(560)
         if align == "user":
+            bubble.setTextFormat(Qt.TextFormat.PlainText)   # 用户消息纯文本
             bubble.setStyleSheet(f"background: {USER_BG}; color: white;"
                                  "border-radius: 14px; padding: 10px 14px; font-size: 13px;")
         else:
+            bubble.setTextFormat(Qt.TextFormat.RichText)    # AI 消息富文本（思考/操作/正文）
             bubble.setStyleSheet(f"background: {AI_BG}; color: {TEXT};"
                                  f"border: 1px solid {BORDER}; border-radius: 14px;"
                                  "padding: 10px 14px; font-size: 13px;")
@@ -332,9 +354,9 @@ class AgentPanel(QDialog):
         self._scroll_bottom()
         return bubble
 
-    def _add_status(self, text_html: str, color: str):
-        lbl = QLabel(text_html)
-        lbl.setStyleSheet(f"color: {color}; font-size: 12px; padding: 2px 4px;")
+    def _add_status(self, text: str, color: str):
+        lbl = QLabel(f"<span style='color:{color};'>{_esc(text)}</span>")
+        lbl.setStyleSheet(f"font-size: 12px; padding: 2px 4px;")
         row = QHBoxLayout()
         row.setContentsMargins(0, 0, 0, 0)
         row.addWidget(lbl)
@@ -343,44 +365,62 @@ class AgentPanel(QDialog):
         self._scroll_bottom()
 
     def _scroll_bottom(self):
+        # 延迟到布局更新后再滚动，否则 maximum 还是旧值导致滚不到底
+        QTimer.singleShot(0, self._do_scroll_bottom)
+
+    def _do_scroll_bottom(self):
         bar = self.msg_area.verticalScrollBar()
         bar.setValue(bar.maximum())
 
+    # ---------- AI 气泡内容（思考 / 操作 / 正文 一体化） ----------
+    def _ensure_ai_bubble(self):
+        if self._ai_bubble is None or not self._bubble_alive(self._ai_bubble):
+            self._ai_bubble = self._add_bubble("", "ai")
+        return self._ai_bubble
+
+    @staticmethod
+    def _bubble_alive(lbl: QLabel) -> bool:
+        try:
+            lbl.text()
+            return True
+        except RuntimeError:
+            return False
+
+    def _refresh_ai_html(self):
+        if self._ai_bubble is None:
+            return
+        parts = []
+        if self._think_html:
+            parts.append(f'<div style="color:{TEXT_DIM};font-size:12px;font-style:italic;">'
+                         f'{self._think_html}</div>')
+        for op in self._op_list:
+            parts.append(f'<div style="color:{ACCENT};font-size:12px;'
+                         f'font-family:Consolas;">{op}</div>')
+        if self._body_html:
+            parts.append(f'<div style="color:{TEXT};font-size:13px;">{self._body_html}</div>')
+        try:
+            self._ai_bubble.setText("".join(parts))
+        except RuntimeError:
+            self._ai_bubble = None
+
     # ---------- "思考中"动画 ----------
     def _start_think(self):
-        if self._think_lbl is not None:
-            try:
-                self._think_lbl.setText("")
-            except RuntimeError:
-                self._think_lbl = None   # 已被删除，重建
-        if self._think_lbl is None:
-            self._think_lbl = QLabel()
-            self._think_lbl.setStyleSheet(f"color: {ACCENT}; font-size: 12px; padding: 2px 4px;")
-            row = QHBoxLayout()
-            row.setContentsMargins(0, 0, 0, 0)
-            row.addWidget(self._think_lbl)
-            row.addStretch(1)
-            self.msg_lay.insertLayout(self.msg_lay.count() - 1, row)
         self._think_idx = 0
-        self._think_lbl.setText(self._think_frames[0])
+        self._think_html = "思考中"
+        self._refresh_ai_html()
         self._think_timer.start(350)
 
     def _tick_think(self):
-        if self._think_lbl is None:
-            return
-        try:
-            self._think_idx = (self._think_idx + 1) % len(self._think_frames)
-            self._think_lbl.setText(self._think_frames[self._think_idx])
-        except RuntimeError:
-            self._think_lbl = None
+        self._think_idx += 1
+        self._think_html = "思考中" + "." * (self._think_idx % 4)
+        self._refresh_ai_html()
 
     def _stop_think(self):
         self._think_timer.stop()
-        if self._think_lbl is not None:
-            try:
-                self._think_lbl.setText("")
-            except RuntimeError:
-                self._think_lbl = None
+        # 保留思考行（固定文字），思考区始终位于气泡顶部，下方跟操作与正文
+        if self._think_html:
+            self._think_html = "思考中"
+            self._refresh_ai_html()
 
     # ---------- MCP 初始化 ----------
     def _init_mcp(self):
@@ -439,6 +479,9 @@ class AgentPanel(QDialog):
 
         self._add_bubble(text, "user")
         self._ai_bubble = None
+        self._think_html = ""
+        self._op_list = []
+        self._body_html = ""
         self.input.clear()
         self.input.setFocus()
 
@@ -447,7 +490,7 @@ class AgentPanel(QDialog):
 
         self.send_btn.setText("发送中…")
         self.send_btn.setEnabled(False)
-        self.stop_btn.setText("⏹ 停止")
+        self.stop_btn.setText("停止")
         self.stop_btn.setEnabled(True)
 
         agent_name = self.agent_combo.currentData() or "桌面助手"
@@ -463,13 +506,13 @@ class AgentPanel(QDialog):
         """/compact：压缩上下文，把旧消息合并为摘要"""
         self.input.clear()
         if not self._engine or not self._engine._messages:
-            self._add_status("ℹ️ 当前无可压缩的上下文", TEXT_DIM)
+            self._add_status("当前无可压缩的上下文", TEXT_DIM)
             return
         n = self._engine.compress_history(keep_recent=2)
         if n:
-            self._add_status(f"🧬 已压缩上下文：{n} 条旧消息合并为摘要（保留最近 2 条完整）", ACCENT)
+            self._add_status(f"已压缩上下文：{n} 条旧消息合并为摘要（保留最近 2 条完整）", ACCENT)
         else:
-            self._add_status("ℹ️ 上下文较短，无需压缩", TEXT_DIM)
+            self._add_status("上下文较短，无需压缩", TEXT_DIM)
 
     def _clear_chat(self):
         """清空上下文：停止引擎、清空历史与气泡、tokens 归零"""
@@ -483,8 +526,11 @@ class AgentPanel(QDialog):
             self._free_layout_item(item)
         self.token_label.setText("tokens: 0")
         self._ai_bubble = None
-        self._think_lbl = None   # 气泡已全部删除，引用必须重置防悬空
-        self._add_status("🧹 已清空上下文，开启新对话", TEXT_DIM)
+        self._think_lbl = None   # 兼容旧引用（无则忽略）
+        self._think_html = ""
+        self._op_list = []
+        self._body_html = ""
+        self._add_status("已清空上下文，开启新对话", TEXT_DIM)
 
     def _free_layout_item(self, item):
         if item.widget():
@@ -503,46 +549,51 @@ class AgentPanel(QDialog):
                 f"(输入 {t['prompt']} / 输出 {t['completion']})")
         running = bool(self._engine and self._engine._thread and self._engine._thread.is_alive())
         if not running and not self.send_btn.isEnabled():
-            self.send_btn.setText("🚀 发送")
+            self.send_btn.setText("发送")
             self.send_btn.setEnabled(True)
-            self.stop_btn.setText("⏹ 停止")
+            self.stop_btn.setText("停止")
             self.stop_btn.setEnabled(False)
             self._stop_think()
 
     # ---------- 引擎回调（信号槽，主线程） ----------
     def _on_delta(self, s: str):
         self._stop_think()
-        if self._ai_bubble is None or not self._bubble_alive(self._ai_bubble):
-            self._ai_bubble = self._add_bubble("", "ai")
-        try:
-            self._ai_bubble.setText(self._ai_bubble.text() + s)
-        except RuntimeError:
-            self._ai_bubble = self._add_bubble("", "ai")
-            self._ai_bubble.setText(s)
+        self._ensure_ai_bubble()
+        self._body_html += _esc(s)
+        self._refresh_ai_html()
         self._scroll_bottom()
 
-    @staticmethod
-    def _bubble_alive(lbl: QLabel) -> bool:
-        try:
-            lbl.text()
-            return True
-        except RuntimeError:
-            return False
-
     def _on_status(self, s: str):
-        self._stop_think()
         if s == "正在思考…":
             self._start_think()
-        elif s.startswith("错误"):
-            self._add_status(f"❌ {s}", ERR)
-        elif s.startswith("待执行") or s.startswith("正在执行"):
-            self._add_status(f"⚙️ {s}", WARN)
+        elif s.startswith("待执行工具:"):
+            name = s.split(":", 1)[1].strip()
+            self._op_list.append(f"▎{_esc(name)}")
+            self._refresh_ai_html()
+        elif s.startswith("正在执行:"):
+            name = s.split(":", 1)[1].strip()
+            if self._op_list:
+                self._op_list[-1] = f"▎{_esc(name)} …"
+            else:
+                self._op_list.append(f"▎{_esc(name)} …")
+            self._refresh_ai_html()
         elif s == "完成":
-            self._add_status("✅ 完成", OK)
+            pass   # 正文即最终输出，无需额外标记
         elif s == "已停止":
-            self._add_status("⏹ 已停止", TEXT_DIM)
+            self._stop_think()
+            self._ensure_ai_bubble()
+            self._body_html += f'<br/><span style="color:{TEXT_DIM};">已停止</span>'
+            self._refresh_ai_html()
+        elif s.startswith("错误"):
+            self._stop_think()
+            self._ensure_ai_bubble()
+            self._body_html += f'<br/><span style="color:{ERR};">{_esc(s)}</span>'
+            self._refresh_ai_html()
         elif s == "已达到最大工具轮数，自动结束":
-            self._add_status(f"⚠️ {s}", WARN)
+            self._stop_think()
+            self._ensure_ai_bubble()
+            self._body_html += f'<br/><span style="color:{TEXT_DIM};">{_esc(s)}</span>'
+            self._refresh_ai_html()
 
     # ---------- 每步确认（engine 线程调用 → 信号 → 主线程弹窗） ----------
     def _confirm_tool(self, name: str, args: dict) -> bool:
@@ -588,12 +639,14 @@ class AgentPanel(QDialog):
         form.addRow("API Key", key)
         form.addRow("模型", model)
         btns = QHBoxLayout()
-        ok = QPushButton("✅ 保存")
+        ok = QPushButton(_std_icon(QStyle.StandardPixmap.SP_DialogYesButton), "保存")
         ok.setStyleSheet(f"background: {OK}; color: #06281B;")
+        ok.setAutoDefault(False)
         ok.clicked.connect(dlg.accept)
         cancel = QPushButton("取消")
         cancel.setStyleSheet(f"background: {PANEL}; color: {TEXT};"
                              f"border: 1px solid {BORDER};")
+        cancel.setAutoDefault(False)
         cancel.clicked.connect(dlg.reject)
         btns.addWidget(ok)
         btns.addWidget(cancel)

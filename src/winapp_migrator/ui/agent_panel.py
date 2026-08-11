@@ -183,6 +183,19 @@ class AgentPanel(QDialog):
         self.agent_combo.setMinimumWidth(130)
         top.addWidget(self.agent_combo)
 
+        # 执行模式：AskBeforeEdit（默认，每步确认） / YOLO（无确认直行）
+        self.mode_combo = QComboBox()
+        self.mode_combo.addItem("🔒 AskBeforeEdit（每步确认）", "ask")
+        self.mode_combo.addItem("🔥 YOLO（无确认直行）", "yolo")
+        self.mode_combo.setMinimumWidth(210)
+        saved_mode = str(self._settings.value("agent_mode", "ask"))
+        idx = self.mode_combo.findData(saved_mode)
+        self.mode_combo.setCurrentIndex(idx if idx >= 0 else 0)
+        self._mode = self.mode_combo.currentData()
+        self.mode_combo.currentIndexChanged.connect(self._on_mode_changed)
+        self._apply_mode_style()
+        top.addWidget(self.mode_combo)
+
         self.mcp_label = QLabel("MCP: 连接中…")
         self.mcp_label.setStyleSheet(f"color: {TEXT_DIM}; font-size: 12px;")
         top.addWidget(self.mcp_label)
@@ -274,6 +287,24 @@ class AgentPanel(QDialog):
         self.status_signal.connect(self._on_status)
         self.confirm_signal.connect(self._on_confirm)
         self.mcp_signal.connect(self._on_mcp_status)
+
+    # ---------- 执行模式 ----------
+    def _apply_mode_style(self):
+        yolo = self._mode == "yolo"
+        border = ERR if yolo else ACCENT
+        self.mode_combo.setStyleSheet(
+            f"QComboBox {{ background: {PANEL}; color: {border}; border: 1px solid {border};"
+            "border-radius: 8px; padding: 5px 10px; font-size: 12px; font-weight: 700; }}"
+            f"QComboBox::drop-down {{ border: none; width: 22px; }}")
+
+    def _on_mode_changed(self, idx):
+        self._mode = self.mode_combo.currentData()
+        self._settings.setValue("agent_mode", self._mode)   # 记住设置，下次启动恢复
+        self._apply_mode_style()
+        if self._mode == "yolo":
+            self._add_status("🔥 YOLO 模式：AI 操作不再弹窗确认（危险命令仍被沙盒硬拒绝）", WARN)
+        else:
+            self._add_status("🔒 AskBeforeEdit 模式：每步操作弹窗确认", OK)
 
     # ---------- 消息气泡 ----------
     def _add_bubble(self, text: str, align: str) -> QLabel:
@@ -385,6 +416,9 @@ class AgentPanel(QDialog):
         text = self.input.text().strip()
         if not text or (self._engine and self._engine._thread and self._engine._thread.is_alive()):
             return
+        if text.lower().startswith("/compact"):
+            self._do_compact()
+            return
         if not self._llm_config()["api_key"]:
             QMessageBox.information(self, "提示", "请先点击「设置」填写 API Key")
             return
@@ -411,6 +445,18 @@ class AgentPanel(QDialog):
             self._engine.stop()
         self.stop_btn.setText("停止中…")
         self.stop_btn.setEnabled(False)
+
+    def _do_compact(self):
+        """/compact：压缩上下文，把旧消息合并为摘要"""
+        self.input.clear()
+        if not self._engine or not self._engine._messages:
+            self._add_status("ℹ️ 当前无可压缩的上下文", TEXT_DIM)
+            return
+        n = self._engine.compress_history(keep_recent=2)
+        if n:
+            self._add_status(f"🧬 已压缩上下文：{n} 条旧消息合并为摘要（保留最近 2 条完整）", ACCENT)
+        else:
+            self._add_status("ℹ️ 上下文较短，无需压缩", TEXT_DIM)
 
     def _clear_chat(self):
         """清空上下文：停止引擎、清空历史与气泡、tokens 归零"""
@@ -474,6 +520,8 @@ class AgentPanel(QDialog):
 
     # ---------- 每步确认（engine 线程调用 → 信号 → 主线程弹窗） ----------
     def _confirm_tool(self, name: str, args: dict) -> bool:
+        if self._mode == "yolo":
+            return True   # YOLO 模式：无确认直行（危险命令仍由沙盒硬拒绝）
         level, reason = agent_sandbox.assess_tool(name, args)
         self._confirm_evt.clear()
         self.confirm_signal.emit(name, json.dumps(args, ensure_ascii=False), level)

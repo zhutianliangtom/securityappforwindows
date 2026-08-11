@@ -52,6 +52,34 @@ class AgentEngine:
         self._messages = []
         self.reset_tokens()
 
+    def compress_history(self, keep_recent: int = 2) -> int:
+        """启发式压缩上下文：保留最近 keep_recent 条消息完整，更早的文本合并为一条摘要。
+
+        返回被合并的消息条数（0 表示无需压缩）。
+        """
+        if len(self._messages) <= keep_recent + 1:
+            return 0
+        head = self._messages[0]                       # system 提示
+        recent = self._messages[-keep_recent:]
+        old = self._messages[1:-keep_recent]
+        parts = []
+        for m in old:
+            c = m.get("content")
+            if isinstance(c, str) and c:
+                parts.append(c)
+            elif isinstance(c, list):
+                for x in c:
+                    if isinstance(x, dict) and x.get("type") == "text" and x.get("text"):
+                        parts.append(x["text"])
+        summary = ("（上下文已压缩，以下是此前对话的摘要）\n"
+                   + "\n".join(parts[-2000:]) if parts else "")
+        self._messages = [head]
+        if summary:
+            self._messages.append({"role": "user",
+                                   "content": agent_llm.build_content(summary)})
+        self._messages.extend(recent)
+        return len(old)
+
     def _prune_images(self, max_keep=2):
         """历史中的截图只保留最近 max_keep 张，其余剥离 image_url 只留文本，防止上下文膨胀"""
         seen = 0

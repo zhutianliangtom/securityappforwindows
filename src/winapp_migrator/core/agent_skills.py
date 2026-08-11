@@ -91,6 +91,7 @@ def build_system_prompt(agent_name: str = "") -> str:
             prompt += "\n\n" + inst
     prompt += ("\n\n可用内置工具：screenshot(截屏观察)、get_screen_size(分辨率)、"
                "move_mouse/click/drag/scroll(鼠标)、press_key/type_text(键盘)、"
-               "run_command(白名单命令)、read_file(读文件)。"
+               "run_command(白名单命令)、read_file/write_file/edit_file(读写编辑文件)、"
+               "list_directory(列目录)。"
                "若连接了 MCP 服务器，其工具同样可用。")
     return prompt

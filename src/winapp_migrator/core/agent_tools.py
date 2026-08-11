@@ -116,6 +116,39 @@ TOOLS = [
                            "required": ["path"]},
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "write_file",
+            "description": "创建或覆盖写入文本文件（仅允许用户目录，目录不存在自动创建，最大 500KB）。",
+            "parameters": {"type": "object",
+                           "properties": {"path": {"type": "string"},
+                                          "content": {"type": "string"}},
+                           "required": ["path", "content"]},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "edit_file",
+            "description": "编辑文件：把文件中的 old_text 精确替换为 new_text（仅替换第一处，仅允许用户目录，最大 200KB）。",
+            "parameters": {"type": "object",
+                           "properties": {"path": {"type": "string"},
+                                          "old_text": {"type": "string"},
+                                          "new_text": {"type": "string"}},
+                           "required": ["path", "old_text", "new_text"]},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_directory",
+            "description": "列出目录内容（仅允许用户目录，最多 200 项，带 DIR/FILE 标记），用于探索文件结构。",
+            "parameters": {"type": "object",
+                           "properties": {"path": {"type": "string"}},
+                           "required": ["path"]},
+        },
+    },
 ]
 
 # 沙盒拒绝返回（无截图）
@@ -168,6 +201,14 @@ def execute_tool(name: str, args: dict) -> dict:
             return _run_command(str(args.get("command", "")))
         if name == "read_file":
             return _read_file(str(args.get("path", "")))
+        if name == "write_file":
+            return _write_file(str(args.get("path", "")), str(args.get("content", "")))
+        if name == "edit_file":
+            return _edit_file(str(args.get("path", "")),
+                              str(args.get("old_text", "")),
+                              str(args.get("new_text", "")))
+        if name == "list_directory":
+            return _list_directory(str(args.get("path", "")))
     except Exception as e:
         return _blocked(f"[工具执行错误] {name}: {e}")
     return _blocked(f"[未知工具] {name}")
@@ -202,6 +243,61 @@ def _read_file(path: str) -> dict:
             return _blocked(f"[沙盒] 文件过大（{size} 字节 > 200KB）")
         with open(path, "r", encoding="utf-8", errors="replace") as f:
             return {"text": f.read()[:4000], "images": []}
+    except Exception as e:
+        return _blocked(f"[沙盒] 读取失败: {e}")
+
+
+def _write_file(path: str, content: str) -> dict:
+    """创建/覆盖写入文件（仅允许用户目录，目录不存在自动创建）"""
+    level, reason = agent_sandbox.assess_path(path)
+    if level != "safe":
+        return _blocked(f"[沙盒拒绝] {reason}")
+    if len(content) > 500 * 1024:
+        return _blocked("[沙盒] 内容过大（>500KB）")
+    try:
+        os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(content)
+        return {"text": f"已写入 {len(content)} 字符到 {path}", "images": []}
+    except Exception as e:
+        return _blocked(f"[沙盒] 写入失败: {e}")
+
+
+def _edit_file(path: str, old_text: str, new_text: str) -> dict:
+    """编辑文件：精确替换第一处 old_text（仅允许用户目录）"""
+    level, reason = agent_sandbox.assess_path(path)
+    if level != "safe":
+        return _blocked(f"[沙盒拒绝] {reason}")
+    try:
+        if os.path.getsize(path) > 200 * 1024:
+            return _blocked("[沙盒] 文件过大（>200KB）")
+        with open(path, "r", encoding="utf-8", errors="replace") as f:
+            data = f.read()
+        if old_text not in data:
+            return _blocked("[沙盒] 未找到要替换的内容")
+        data = data.replace(old_text, new_text, 1)
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(data)
+        return {"text": f"已替换 1 处内容到 {path}", "images": []}
+    except Exception as e:
+        return _blocked(f"[沙盒] 编辑失败: {e}")
+
+
+def _list_directory(path: str) -> dict:
+    """列出目录内容（仅允许用户目录，最多 200 项）"""
+    level, reason = agent_sandbox.assess_path(path)
+    if level != "safe":
+        return _blocked(f"[沙盒拒绝] {reason}")
+    try:
+        entries = sorted(os.listdir(path))
+        lines = []
+        for e in entries[:200]:
+            full = os.path.join(path, e)
+            mark = "DIR " if os.path.isdir(full) else "FILE"
+            lines.append(f"{mark}\t{e}")
+        text = f"{path} 共 {len(entries)} 项" + (f"（仅显示前 200）" if len(entries) > 200 else "") + "：\n"
+        text += "\n".join(lines)
+        return {"text": text, "images": []}
     except Exception as e:
         return _blocked(f"[沙盒] 读取失败: {e}")
 

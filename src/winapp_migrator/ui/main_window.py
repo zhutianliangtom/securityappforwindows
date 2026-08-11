@@ -285,6 +285,10 @@ class MainWindow(QMainWindow):
         self.selected_app: AppInfo = None
         self.uninstaller = Uninstaller()
 
+        # 记忆用户选择：是否显示安全提醒弹窗（默认开启）。须在 _setup_ui 之前初始化（_build_right_panel 会读取）
+        self._settings = QSettings("WinAppMigrator", "WinAppMigrator")
+        self._toast_enabled = self._settings.value("security_toast", True, type=bool)
+
         self._setup_ui()
         # 迁移进度平滑动画
         self.progress_anim = QPropertyAnimation(self.progress, b"value", self)
@@ -292,9 +296,6 @@ class MainWindow(QMainWindow):
         self.progress_anim.setEasingCurve(QEasingCurve.Type.OutCubic)
         self._security_on = False
         self.security_worker = None
-        self._settings = QSettings("WinAppMigrator", "WinAppMigrator")
-        # 记忆用户选择：是否显示安全提醒弹窗（默认开启）
-        self._toast_enabled = self._settings.value("security_toast", True, type=bool)
         # 右下角自定义滑出弹窗（拦截结果/状态提示，非系统通知）
         self.toast = ToastNotification(None)
         self._setup_tray()

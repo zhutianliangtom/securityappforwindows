@@ -156,7 +156,7 @@ class AgentPanel(QDialog):
         self.output = QTextBrowser()
         self.output.setOpenExternalLinks(True)
         self.output.setStyleSheet(
-            f"background: {PALETTE['bg_secondary']}; color: {PALETTE['text']};"
+            f"background: {PALETTE['card']}; color: {PALETTE['text']};"
             "border: 1px solid #E5E7EB; border-radius: 8px; padding: 8px; font-size: 13px;")
         lay.addWidget(self.output, 1)
 
@@ -196,17 +196,20 @@ class AgentPanel(QDialog):
 
     # ---------- MCP 初始化 ----------
     def _init_mcp(self):
-        servers = agent_skills.load_mcp_servers()
-        if not servers:
-            self.mcp_signal.emit("MCP: 未配置服务器")
-            return
         try:
-            tools = self._mcp.connect_all(servers)
-            n = len(tools)
-            errs = "；".join(self._mcp.errors)
-            msg = f"MCP: 已连接 {n} 个工具" + (f"（失败: {errs}）" if errs else "")
+            servers = agent_skills.load_mcp_servers()
+            if not servers:
+                self.mcp_signal.emit("MCP: 未配置服务器")
+                return
+            try:
+                tools = self._mcp.connect_all(servers)
+                n = len(tools)
+                errs = "；".join(self._mcp.errors)
+                msg = f"MCP: 已连接 {n} 个工具" + (f"（失败: {errs}）" if errs else "")
+            except Exception as e:
+                msg = f"MCP: 初始化失败 {e}"
         except Exception as e:
-            msg = f"MCP: 初始化失败 {e}"
+            msg = f"MCP: 初始化异常 {e}"
         self.mcp_signal.emit(msg)
 
     def _on_mcp_status(self, text: str):

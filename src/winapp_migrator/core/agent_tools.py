@@ -8,9 +8,14 @@
 import json
 import os
 import subprocess
+from datetime import datetime
+from pathlib import Path
 
 from winapp_migrator.core import agent_sandbox
 from winapp_migrator.core import agent_screen
+
+# 本地记忆文件（AI 长期记忆，markdown 格式）
+MEMORY_FILE = Path.home() / ".winapp_migrator" / "agent" / "memory.md"
 
 # ---------- 工具定义（LLM 可见） ----------
 TOOLS = [
@@ -149,6 +154,26 @@ TOOLS = [
                            "required": ["path"]},
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "save_memory",
+            "description": "把任务中的关键信息（用户偏好、重要结论、文件路径、约定等）追加保存到本地记忆文件 "
+                           "memory.md（自动带时间戳，单条 ≤8000 字符）。值得长期记住的内容请主动保存。",
+            "parameters": {"type": "object",
+                           "properties": {"content": {"type": "string"}},
+                           "required": ["content"]},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "load_memory",
+            "description": "读取本地记忆文件 memory.md 的完整内容。开始新任务或需要回忆过往信息时，"
+                           "由你自行决定是否调用。",
+            "parameters": {"type": "object", "properties": {}, "required": []},
+        },
+    },
 ]
 
 # 沙盒拒绝返回（无截图）
@@ -209,6 +234,10 @@ def execute_tool(name: str, args: dict) -> dict:
                               str(args.get("new_text", "")))
         if name == "list_directory":
             return _list_directory(str(args.get("path", "")))
+        if name == "save_memory":
+            return _save_memory(str(args.get("content", "")))
+        if name == "load_memory":
+            return _load_memory()
     except Exception as e:
         return _blocked(f"[工具执行错误] {name}: {e}")
     return _blocked(f"[未知工具] {name}")
@@ -300,6 +329,50 @@ def _list_directory(path: str) -> dict:
         return {"text": text, "images": []}
     except Exception as e:
         return _blocked(f"[沙盒] 读取失败: {e}")
+
+
+_MEMORY_MAX_TOTAL = 50 * 1024   # 记忆文件总上限 50KB（超出后截断旧部分）
+_MEMORY_MAX_ENTRY = 8000       # 单条记忆上限 8000 字符
+
+
+def _save_memory(content: str) -> dict:
+    """把关键信息追加写入本地记忆文件（markdown，自动带时间戳）"""
+    content = (content or "").strip()
+    if not content:
+        return _blocked("[记忆] 内容为空，未保存")
+    if len(content) > _MEMORY_MAX_ENTRY:
+        return _blocked(f"[记忆] 单条内容过长（{len(content)} 字符 > {_MEMORY_MAX_ENTRY}）")
+    try:
+        MEMORY_FILE.parent.mkdir(parents=True, exist_ok=True)
+        # 超限时截断：保留尾部内容
+        if MEMORY_FILE.exists() and MEMORY_FILE.stat().st_size > _MEMORY_MAX_TOTAL:
+            with open(MEMORY_FILE, "r", encoding="utf-8") as f:
+                old = f.read()
+            old = old[-(_MEMORY_MAX_TOTAL // 2):]   # 保留最近 ~25KB
+            with open(MEMORY_FILE, "w", encoding="utf-8") as f:
+                f.write("<!-- 记忆已达上限，旧内容已截断 -->\n" + old)
+        stamp = datetime.now().strftime("%Y-%m-%d %H:%M")
+        with open(MEMORY_FILE, "a", encoding="utf-8") as f:
+            f.write(f"\n## {stamp}\n{content}\n")
+        return {"text": f"已保存到记忆文件 memory.md（{len(content)} 字符）", "images": []}
+    except Exception as e:
+        return _blocked(f"[记忆] 保存失败: {e}")
+
+
+def _load_memory() -> dict:
+    """读取本地记忆文件完整内容"""
+    try:
+        if not MEMORY_FILE.exists():
+            return {"text": "（记忆文件为空，暂无历史记忆。可在遇到值得记住的关键信息时调用 save_memory 保存。）",
+                    "images": []}
+        size = MEMORY_FILE.stat().st_size
+        if size > _MEMORY_MAX_TOTAL:
+            return _blocked(f"[记忆] 记忆文件过大（{size // 1024}KB > {_MEMORY_MAX_TOTAL // 1024}KB），请人工清理")
+        with open(MEMORY_FILE, "r", encoding="utf-8") as f:
+            text = f.read().strip() or "（记忆为空）"
+        return {"text": text, "images": []}
+    except Exception as e:
+        return _blocked(f"[记忆] 读取失败: {e}")
 
 
 def tool_schemas() -> list:

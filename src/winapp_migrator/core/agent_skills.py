@@ -92,6 +92,9 @@ def build_system_prompt(agent_name: str = "") -> str:
     prompt += ("\n\n可用内置工具：screenshot(截屏观察)、get_screen_size(分辨率)、"
                "move_mouse/click/drag/scroll(鼠标)、press_key/type_text(键盘)、"
                "run_command(白名单命令)、read_file/write_file/edit_file(读写编辑文件)、"
-               "list_directory(列目录)。"
+               "list_directory(列目录)、save_memory/load_memory(本地长期记忆)。"
                "若连接了 MCP 服务器，其工具同样可用。")
+    prompt += ("\n\n记忆：你有本地长期记忆文件 memory.md。遇到用户偏好、重要结论、约定、常用路径等"
+               "值得长期记住的信息时，调用 save_memory 保存；新任务开始或需要回忆过往信息时，"
+               "自行决定是否调用 load_memory 查看。")
     return prompt

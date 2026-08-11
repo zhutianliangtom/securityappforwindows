@@ -11,7 +11,7 @@ import time
 from ctypes import wintypes
 
 from PyQt6.QtCore import QBuffer, QByteArray, QIODevice, Qt
-from PyQt6.QtGui import QColor, QFont, QImage, QPainter, QPen
+from PyQt6.QtGui import QColor, QFont, QImage, QPainter, QPainterPath, QPen
 from PyQt6.QtWidgets import QApplication
 
 user32 = ctypes.windll.user32
@@ -30,11 +30,13 @@ VK = {"enter": 0x0D, "return": 0x0D, "tab": 0x09, "escape": 0x1B, "esc": 0x1B,
 
 
 # ---- 截屏 ----
-_shot_size = None   # 最近一次截图尺寸 (w, h)，供"截图像素 → 屏幕物理像素"坐标换算
+_shot_size = None    # 原始截图尺寸 (w, h)，物理屏幕采样基准
+_model_size = None   # 发给视觉模型的截图尺寸（统一缩放到 _MODEL_W 宽），模型刻度读数基准
+_MODEL_W = 1280      # 视觉模型统一输入宽度：截图先缩放再叠刻度，刻度与所见图像同基准，杜绝 API 二次缩放导致的读数偏差
 
 
 def capture_screen_png() -> bytes:
-    """全屏截图，返回 PNG 字节；同时记录截图尺寸供坐标换算"""
+    """全屏截图，返回 PNG 字节；同时记录原始截图尺寸供坐标换算"""
     global _shot_size
     screen = QApplication.primaryScreen()
     pix = screen.grabWindow(0)
@@ -48,10 +50,10 @@ def capture_screen_png() -> bytes:
 
 
 def screen_scale() -> tuple:
-    """截图像素 → 屏幕物理像素 的换算比例 (sx, sy)。
+    """原始截图像素 → 屏幕物理像素 的换算比例 (sx, sy)。
 
-    模型基于截图给出像素坐标；若截图分辨率与屏幕物理分辨率不一致
-    （如系统 DPI 缩放 125%/150%），点击必须按比例换算，否则系统性偏移。
+    截图分辨率与屏幕物理分辨率不一致（如系统 DPI 缩放 125%/150%）时，
+    点击必须按比例换算，否则系统性偏移。
     """
     w, h = screen_size()
     sw, sh = _shot_size or (w, h)
@@ -59,7 +61,18 @@ def screen_scale() -> tuple:
 
 
 def map_to_screen(x: int, y: int) -> tuple:
-    """把模型基于最近截图给出的坐标，换算为屏幕物理像素坐标"""
+    """模型读数（基于发给模型的缩放截图 _model_size 系）→ 屏幕物理像素。
+
+    两段换算：
+      缩放系（模型刻度读数）→ 原始截图系 → 屏幕物理像素（DPI）
+    模型看到的刻度数字与所见图像同基准，读数直接可信；此处换算到真实
+    屏幕坐标，杜绝模型自行心算导致的双重误差。
+    """
+    w_orig, h_orig = _shot_size or screen_size()
+    mw, mh = _model_size or (w_orig, h_orig)
+    if mw > 0 and mh > 0:
+        x = x * w_orig / mw
+        y = y * h_orig / mh
     sx, sy = screen_scale()
     return int(x * sx), int(y * sy)
 
@@ -67,16 +80,21 @@ def map_to_screen(x: int, y: int) -> tuple:
 def capture_screen_data_url(grid: bool = True) -> str:
     """全屏截图 → data URL（OpenAI 兼容 image_url 输入）。
 
-    grid=True 时叠加坐标网格与像素刻度：模型直接按刻度读取坐标，
-    返回的坐标就是截图像素坐标（与 _shot_size 同基准），再由 map_to_screen
-    换算到屏幕物理像素，从根本上消除视觉模型目测坐标的系统性偏差。
+    grid=True 时先等比缩放到统一宽度 _MODEL_W，再叠加坐标网格与像素刻度：
+    模型看到的图像与刻度数字同基准（缩放系），按刻度读数即可精确到像素，
+    系统端由 map_to_screen 换算回屏幕物理坐标，彻底消除视觉坐标系统性偏差。
     """
     import base64
+    global _model_size
     png = capture_screen_png()
-    if not grid:
-        return "data:image/png;base64," + base64.b64encode(png).decode()
     img = QImage.fromData(png)
-    _draw_coord_grid(img)
+    if grid:
+        if img.width() > _MODEL_W:
+            img = img.scaledToWidth(_MODEL_W, Qt.TransformationMode.SmoothTransformation)
+        _model_size = (img.width(), img.height())
+        _draw_coord_grid(img)
+    else:
+        _model_size = _shot_size
     ba = QByteArray()
     buf = QBuffer(ba)
     buf.open(QIODevice.OpenModeFlag.WriteOnly)
@@ -84,33 +102,41 @@ def capture_screen_data_url(grid: bool = True) -> str:
     return "data:image/png;base64," + base64.b64encode(bytes(ba)).decode()
 
 
-def _draw_coord_grid(img: QImage, cells: int = 8):
-    """在截图上叠加半透明坐标网格 + 像素刻度，帮助视觉模型精确定位。
+def _draw_coord_grid(img: QImage, cells: int = 16):
+    """在缩放后的截图上叠加坐标网格、像素刻度与中心十字线，帮助视觉模型精确定位。
 
-    - 网格线：每格 1/cells 屏宽，红色细线
-    - 刻度：网格线两端标注该处的截图像素值（X 轴顶部、Y 轴左侧）
-    - 刻度与 _shot_size 同基准，模型读出的刻度值可直接作为点击坐标
+    - 网格线：每格 1/cells 屏宽，红色细线（加密到 16 格，缩小内插误差）
+    - 中心十字：半透明白色十字，辅助模型判断图像中心
+    - 刻度：网格线两端标注该处的图像像素值，黑色描边 + 亮色填充保证 API
+      缩放后仍清晰可读；X 轴顶部黄色、Y 轴左侧青色，每 2 格标一个数字防拥挤
+    - 刻度与 _model_size 同基准：模型读出的数字可直接作为 click 坐标
     """
     w, h = img.width(), img.height()
     p = QPainter(img)
     p.setRenderHint(QPainter.RenderHint.Antialiasing, False)
-    pen = QPen(QColor(255, 60, 60, 130), 1)
-    p.setPen(pen)
+    # 网格线
+    p.setPen(QPen(QColor(255, 80, 80, 120), 1))
     for i in range(1, cells):
-        x = w * i // cells
-        y = h * i // cells
-        p.drawLine(x, 0, x, h)          # 竖线
-        p.drawLine(0, y, w, y)          # 横线
-    # 刻度文字
-    font = QFont("Consolas", max(8, min(12, w // 200)))
-    p.setFont(font)
-    for i in range(cells + 1):
-        x = w * i // cells
-        y = h * i // cells
-        p.setPen(QColor(255, 230, 0, 230))   # X 轴刻度（顶部黄色）
-        p.drawText(x + 2, font.pointSize(), f"{x}")
-        p.setPen(QColor(0, 255, 170, 230))   # Y 轴刻度（左侧青色）
-        p.drawText(2, y + font.pointSize(), f"{y}")
+        x, y = w * i // cells, h * i // cells
+        p.drawLine(x, 0, x, h)
+        p.drawLine(0, y, w, y)
+    # 中心十字线
+    p.setPen(QPen(QColor(255, 255, 255, 150), 1))
+    p.drawLine(w // 2, 0, w // 2, h)
+    p.drawLine(0, h // 2, w, h // 2)
+    # 刻度文字（黑色描边 + 亮色填充）
+    font = QFont("Consolas", 13)
+    font.setBold(True)
+    step = max(1, cells // 2)   # 每 2 格标注一个数字，避免顶部/左侧数字拥挤
+    for i in range(0, cells + 1, step):
+        x, y = w * i // cells, h * i // cells
+        for txt, px, py, color in ((f"{x}", x + 3, 18, QColor(255, 230, 0, 255)),
+                                   (f"{y}", 4, y + 18, QColor(0, 255, 170, 255))):
+            path = QPainterPath()
+            path.addText(px, py, font, txt)
+            p.setPen(QPen(QColor(0, 0, 0, 220), 3))   # 黑色描边，保证缩放后仍可读
+            p.drawPath(path)
+            p.fillPath(path, color)
     p.end()
 
 

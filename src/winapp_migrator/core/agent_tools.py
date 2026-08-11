@@ -280,13 +280,13 @@ def execute_tool(name: str, args: dict, allow_dangerous: bool = False,
                                     agent_sandbox.to_int(args.get("y")))
             return {"text": f"鼠标已移动到 ({args.get('x')}, {args.get('y')})", "images": []}
         if name == "click":
-            agent_screen.click(agent_sandbox.to_int(args.get("x")),
-                               agent_sandbox.to_int(args.get("y")),
+            x, y = agent_sandbox.to_int(args.get("x")), agent_sandbox.to_int(args.get("y"))
+            px, py = agent_screen.map_to_screen(x, y)   # 换算后的真实屏幕坐标（供模型核对）
+            agent_screen.click(x, y,
                                str(args.get("button", "left")),
                                agent_sandbox.to_int(args.get("clicks", 1)))
-            return {"text": f"已点击 ({args.get('x')}, {args.get('y')}) "
-                            f"{args.get('button', 'left')} 键 x{args.get('clicks', 1)}",
-                    "images": []}
+            return {"text": f"已点击 ({x}, {y}) {args.get('button', 'left')} 键 x{args.get('clicks', 1)}"
+                            f"（换算屏幕坐标 {px},{py}）", "images": []}
         if name == "drag":
             agent_screen.drag(agent_sandbox.to_int(args.get("x1")),
                               agent_sandbox.to_int(args.get("y1")),

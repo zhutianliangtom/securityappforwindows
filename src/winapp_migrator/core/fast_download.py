@@ -74,9 +74,17 @@ class DownloadTask:
             self.error = err
 
     def cancel(self):
-        """取消下载：清理分片，线程在下一次读取循环时退出"""
+        """取消下载：清理分片并更新状态。
+
+        下载中：设置取消事件，线程在下一次读取循环时退出并清理；
+        已暂停：无活跃线程，直接清理分片并置为已取消。
+        """
         self._cancel.set()
         self._pause.clear()
+        if self.snapshot()["status"] == "paused":
+            if self.path:
+                self._cleanup(glob.glob(self.path + ".part*"))
+            self._set_status("canceled")
 
     def pause(self):
         """暂停下载：保留已下载分片（断点续传的前提）"""
@@ -89,15 +97,6 @@ class DownloadTask:
         self._pause.clear()
         self._thread = threading.Thread(target=self._resume_run, daemon=True)
         self._thread.start()
-
-    def discard(self):
-        """放弃已暂停任务：清理分片并置为已取消（暂停状态下无活跃线程）"""
-        if self.snapshot()["status"] != "paused":
-            return
-        self._cancel.set()
-        if self.path:
-            self._cleanup(glob.glob(self.path + ".part*"))
-        self._set_status("canceled")
 
     def start(self):
         self._thread = threading.Thread(target=self._run, daemon=True)

@@ -310,10 +310,7 @@ class DownloadDialog(QDialog):
                 event.ignore()
                 return
             for t in active:
-                if t.snapshot()["status"] == "paused":
-                    t.discard()  # 无活跃线程，直接清理分片
-                else:
-                    t.cancel()
+                t.cancel()
             for t in active:
                 t.join(3)
         event.accept()

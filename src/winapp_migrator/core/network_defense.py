@@ -225,7 +225,8 @@ class NetworkDefender:
     """网络攻击检测与防御：ARP 欺骗 / SYN 洪泛 / TCP 洪泛"""
 
     def __init__(self):
-        self._arp_candidates: Dict[str, List[str]] = {}  # 网关 IP -> 观察到的 MAC 候选
+        self._arp_baseline: Dict[str, str] = {}       # 网关 IP -> 基线 MAC（连续 N 次稳定样本建立）
+        self._arp_candidates: Dict[str, List[str]] = {}  # 基线建立前的样本缓冲
         self._last_arp_warn: float = 0.0
         self._last_segs: Optional[int] = None
         self._last_seg_time: float = 0.0
@@ -253,22 +254,28 @@ class NetworkDefender:
         mac = arp.get(gateway)
         if not mac:
             return None
-        # MAC 合理性校验：拒绝组播/广播（首字节最低位=1）与全零地址
+        # MAC 合理性校验：拒绝全零地址与组播/广播（首字节最低位=1）。
+        # 注意首字节为 0x00 的厂商 OUI（如 VMware 00:0c:29）是合法单播，不能误拒
         try:
             first = int(mac.split(":")[0], 16)
-            if first == 0 or (first & 1):
+            if mac == "00:00:00:00:00:00" or (first & 1):
                 return None
         except (ValueError, IndexError):
             return None
-        # 基线需连续稳定样本：避免攻击已发生时首个样本即被污染，或被临时抖动误报
-        cands = self._arp_candidates.setdefault(gateway, [])
-        if not cands or cands[-1] != mac:
-            cands.append(mac)
-            if len(cands) > ARP_BASELINE_SAMPLES:
-                cands.pop(0)
-        if len(cands) < ARP_BASELINE_SAMPLES or len(set(cands)) > 1:
-            return None  # 样本未稳定，继续观察
-        baseline = cands[0]
+
+        # 基线未建立：需连续 N 次相同样本（防止临时抖动/攻击发生时首样本即被污染）
+        if gateway not in self._arp_baseline:
+            cands = self._arp_candidates.setdefault(gateway, [])
+            if not cands or cands[-1] == mac:
+                cands.append(mac)
+                if len(cands) >= ARP_BASELINE_SAMPLES:
+                    self._arp_baseline[gateway] = cands[-1]  # 连续稳定样本 → 基线成立
+                    self._arp_candidates.pop(gateway, None)
+            else:
+                self._arp_candidates[gateway] = [mac]  # 样本变化，重新累计
+            return None
+
+        baseline = self._arp_baseline[gateway]
         if mac == baseline:
             return None
         # 网关 MAC 突变 → 疑似 ARP 欺骗（仅告警，不主动发包修复：

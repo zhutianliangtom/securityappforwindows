@@ -14,7 +14,7 @@ import urllib.error
 import urllib.request
 from typing import Optional
 
-DEFAULT_SEGMENTS = 16
+DEFAULT_SEGMENTS = 32
 MIN_SEGMENT_BYTES = 1024 * 1024   # 小于 1MB 不分段（分片开销大于收益）
 SEGMENT_RETRY = 2                 # 每段失败重试次数
 READ_CHUNK = 1024 * 1024          # 1MB 读缓冲，减少锁竞争与 IO 次数
@@ -86,7 +86,7 @@ class DownloadTask:
             return {
                 "status": self.status, "total": self.total, "done": self.done,
                 "filename": self.filename, "path": self.path, "error": self.error,
-                "mode": self.mode,
+                "mode": self.mode, "segments": self._segments,
             }
 
     @property
@@ -190,10 +190,25 @@ class DownloadTask:
             self._cleanup(part_paths)
             self._set_status("canceled")
             return
-        for pp in part_paths:
-            if not os.path.exists(pp) or os.path.getsize(pp) <= 0:
+
+        # 失败段串行补下：服务器限制单 IP 并发数时，32 段中部分会失败，
+        # 这里降级为串行续传保证不整体失败（比限并发下的多段重试更稳更快）
+        for i, (start, end) in enumerate(ranges):
+            if self._cancelled:
+                break
+            if not os.path.exists(part_paths[i]) or \
+                    os.path.getsize(part_paths[i]) < end - start + 1:
+                self._repair_segment(start, end, part_paths[i])
+        if self._cancelled:
+            self._cleanup(part_paths)
+            self._set_status("canceled")
+            return
+        # 严格校验每段完整，避免合并出损坏文件
+        for i, (start, end) in enumerate(ranges):
+            if not os.path.exists(part_paths[i]) or \
+                    os.path.getsize(part_paths[i]) < end - start + 1:
                 self._cleanup(part_paths)
-                self._set_status("error", "分片下载失败（服务器可能中断连接）")
+                self._set_status("error", "分片下载失败（服务器限制连接数或中断连接）")
                 return
         try:
             with open(self.path, "wb") as out:
@@ -232,4 +247,26 @@ class DownloadTask:
                     return  # 该段完整下载完成
             except Exception:
                 time.sleep(0.5)
-        # 重试耗尽：段文件可能不完整，交由合并阶段检测并报错
+        # 重试耗尽：段可能不完整，由补下阶段处理
+
+    def _repair_segment(self, start: int, end: int, part_path: str):
+        """单线程续传补下失败段：从已写位置继续 Range 下载"""
+        for _ in range(SEGMENT_RETRY + 1):
+            if self._cancelled:
+                return
+            written = os.path.getsize(part_path) if os.path.exists(part_path) else 0
+            if written >= end - start + 1:
+                return
+            try:
+                headers = {"Range": f"bytes={start + written}-{end}"}
+                with self._open("GET", headers) as resp, open(part_path, "ab") as f:
+                    while True:
+                        if self._cancelled:
+                            return
+                        chunk = resp.read(READ_CHUNK)
+                        if not chunk:
+                            break
+                        f.write(chunk)
+                        self._update_done(len(chunk))
+            except Exception:
+                time.sleep(0.5)

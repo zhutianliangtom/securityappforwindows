@@ -16,7 +16,7 @@ from PyQt6.QtGui import QIcon
 from PyQt6.QtWidgets import (
     QDialog, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit,
     QPushButton, QProgressBar, QListWidget, QListWidgetItem, QMessageBox,
-    QFileDialog,
+    QFileDialog, QComboBox,
 )
 
 from winapp_migrator.core.fast_download import DownloadTask
@@ -84,7 +84,8 @@ class _TaskRow(QWidget):
         if status == "downloading":
             self.cancel_btn.setVisible(True)
             self.cancel_btn.setText("取消")
-            mode_txt = "16 线程分段" if snap.get("mode") == "multi" else "单线程"
+            segs = int(snap.get("segments") or 16)
+            mode_txt = f"{segs} 线程分段" if snap.get("mode") == "multi" else "单线程"
             info = f"⏳ 下载中 · {_fmt_size(done)} / {_fmt_size(total)} · {mode_txt}"
             if speed > 0:
                 info += f" · {_fmt_size(int(speed))}/s"
@@ -160,6 +161,22 @@ class DownloadDialog(QDialog):
         input_row.addWidget(self.add_btn)
         lay.addLayout(input_row)
 
+        opt_row = QHBoxLayout()
+        opt_row.setSpacing(8)
+        opt_label = QLabel("速度档位")
+        opt_label.setStyleSheet(f"font-size: 13px; color: {PALETTE['text_secondary']};")
+        opt_row.addWidget(opt_label)
+        self.seg_combo = QComboBox()
+        self.seg_combo.addItem("⚡ 极限 · 32 连接（榨干带宽）", 32)
+        self.seg_combo.addItem("🚀 高速 · 16 连接", 16)
+        self.seg_combo.addItem("标准 · 8 连接", 8)
+        saved = self._settings.value("download_segments", 32, type=int)
+        idx = self.seg_combo.findData(saved)
+        self.seg_combo.setCurrentIndex(idx if idx >= 0 else 0)
+        opt_row.addWidget(self.seg_combo)
+        opt_row.addStretch(1)
+        lay.addLayout(opt_row)
+
         self.task_list = QListWidget()
         self.task_list.setStyleSheet(
             "QListWidget { background: transparent; border: none; }"
@@ -191,7 +208,9 @@ class DownloadDialog(QDialog):
         if not dest:
             return
 
-        task = DownloadTask(url, dest)
+        segments = int(self.seg_combo.currentData())
+        self._settings.setValue("download_segments", segments)
+        task = DownloadTask(url, dest, segments=segments)
         task.start()
         self._tasks.append(task)
 

@@ -20,6 +20,7 @@ from PyQt6.QtWidgets import (
 )
 
 from winapp_migrator.core.fast_download import DownloadTask, parse_ed2k
+from winapp_migrator.core.ed2k_client import Ed2kTask, parse_ed2k_full
 from winapp_migrator.ui.styles import PALETTE
 
 _DONE_STATES = ("done", "error", "canceled")

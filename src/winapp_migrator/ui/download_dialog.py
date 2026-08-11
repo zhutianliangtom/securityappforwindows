@@ -16,6 +16,7 @@ from PyQt6.QtGui import QIcon
 from PyQt6.QtWidgets import (
     QDialog, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit,
     QPushButton, QProgressBar, QListWidget, QListWidgetItem, QMessageBox,
+    QFileDialog,
 )
 
 from winapp_migrator.core.fast_download import DownloadTask
@@ -175,7 +176,7 @@ class DownloadDialog(QDialog):
         last = self._settings.value("download_dir", str(Path.home() / "Downloads"))
         if not os.path.isdir(str(last)):
             last = str(Path.home())
-        dest = QMessageBox.getExistingDirectory(self, "选择下载保存目录", str(last))
+        dest = QFileDialog.getExistingDirectory(self, "选择下载保存目录", str(last))
         if dest:
             self._settings.setValue("download_dir", dest)
         return dest or None

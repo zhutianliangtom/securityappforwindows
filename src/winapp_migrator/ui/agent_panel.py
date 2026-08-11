@@ -832,9 +832,8 @@ class AgentPanel(QDialog):
         self.msg_stack.addWidget(self._welcome_page)
         root.addWidget(self.msg_stack, 1)
 
-        # 命令提示条：输入 / 时展示可用 skill/命令
+        # 命令提示条：输入 / 时展示可用 skill/命令（高度随显示条数自适应）
         self.cmd_list = QListWidget()
-        self.cmd_list.setMaximumHeight(112)
         self.cmd_list.setStyleSheet(
             f"QListWidget {{ background: {PANEL}; color: {ACCENT};"
             f"border: 1px solid {BORDER}; border-radius: 8px;"
@@ -1559,9 +1558,11 @@ class AgentPanel(QDialog):
         return "(无参数)"
 
     def _update_cmd_suggestions(self, text: str):
-        # 空 "/" 时不预测；输入至少一个字符才列出匹配命令（"/c" → /compact 置顶）
-        if text.startswith("/") and len(text) > 1:
-            matches = [c for c in self._all_commands() if c.startswith(text)]
+        # 空 "/" 显示全部技能/命令；否则按前缀过滤匹配（"/c" → /compact 置顶）
+        if text.startswith("/"):
+            all_cmds = self._all_commands()
+            matches = all_cmds if text == "/" else \
+                [c for c in all_cmds if c.startswith(text)]
             if matches:
                 self.cmd_list.clear()
                 for c in matches:
@@ -1570,9 +1571,18 @@ class AgentPanel(QDialog):
                     if desc:
                         item.setToolTip(desc)
                     self.cmd_list.addItem(item)
+                self._resize_cmd_list()
                 self.cmd_list.show()
                 return
         self.cmd_list.hide()
+
+    def _resize_cmd_list(self):
+        """命令列表高度随显示条数自适应：最多 5 行，最少 1 行"""
+        count = self.cmd_list.count()
+        row_h = self.cmd_list.sizeHintForRow(0)
+        if row_h <= 0:
+            row_h = 30   # 兜底：13px 字体 + 内边距
+        self.cmd_list.setFixedHeight(min(count, 5) * row_h)
 
     def _on_cmd_selected(self, item):
         self.input.setText(item.text())

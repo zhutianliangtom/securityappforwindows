@@ -12,6 +12,7 @@ import re
 import threading
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from typing import Optional
 
@@ -43,19 +44,107 @@ def _filename_from(url: str, content_disp: str = "") -> str:
     return _sanitize_name(name)
 
 
+def parse_ed2k(url: str) -> Optional[dict]:
+    """解析 ed2k://|file|文件名|大小|MD4哈希|/ ，返回 {filename, size, md4}"""
+    try:
+        body = url.split("ed2k://", 1)[1]
+        parts = body.split("|")
+        if len(parts) < 6 or parts[1] != "file":
+            return None
+        filename = urllib.parse.unquote(parts[2])
+        size = int(parts[3]) if parts[3].isdigit() else 0
+        md4 = parts[4].lower()
+        if not re.fullmatch(r"[0-9a-f]{32}", md4):
+            return None
+        return {"filename": _sanitize_name(filename), "size": size, "md4": md4}
+    except (ValueError, IndexError):
+        return None
+
+
+class _MD4:
+    """纯 Python MD4（RFC 1320），支持流式 update，用于 ed2k 哈希校验（无第三方依赖）"""
+
+    def __init__(self):
+        self._a, self._b, self._c, self._d = 0x67452301, 0xEFCDAB89, 0x98BADCFE, 0x10325476
+        self._buf = bytearray()
+        self._len = 0
+
+    @staticmethod
+    def _rol(x: int, n: int) -> int:
+        return ((x << n) | (x >> (32 - n))) & 0xFFFFFFFF
+
+    def update(self, data: bytes):
+        self._buf += data
+        self._len += len(data)
+        while len(self._buf) >= 64:
+            self._process(bytes(self._buf[:64]))
+            del self._buf[:64]
+
+    def _process(self, block: bytes):
+        x = [int.from_bytes(block[j:j + 4], "little") for j in range(0, 64, 4)]
+        a, b, c, d = self._a, self._b, self._c, self._d
+        r1 = [(0, 3), (1, 7), (2, 11), (3, 19), (4, 3), (5, 7), (6, 11), (7, 19),
+              (8, 3), (9, 7), (10, 11), (11, 19), (12, 3), (13, 7), (14, 11), (15, 19)]
+        r2 = [(0, 3), (4, 5), (8, 9), (12, 13), (1, 3), (5, 5), (9, 9), (13, 13),
+              (2, 3), (6, 5), (10, 9), (14, 13), (3, 3), (7, 5), (11, 9), (15, 13)]
+        r3 = [(0, 3), (8, 9), (4, 11), (12, 15), (2, 3), (10, 9), (6, 11), (14, 15),
+              (1, 3), (9, 9), (5, 11), (13, 15), (3, 3), (11, 9), (7, 11), (15, 15)]
+        for k, s in r1:
+            a = self._rol((a + ((b & c) | (~b & d)) + x[k]) & 0xFFFFFFFF, s)
+            a, b, c, d = d, a, b, c
+        for k, s in r2:
+            a = self._rol((a + ((b & c) | (b & d) | (c & d)) + x[k] + 0x5A827999) & 0xFFFFFFFF, s)
+            a, b, c, d = d, a, b, c
+        for k, s in r3:
+            a = self._rol((a + (b ^ c ^ d) + x[k] + 0x6ED9EBA1) & 0xFFFFFFFF, s)
+            a, b, c, d = d, a, b, c
+        self._a = (self._a + a) & 0xFFFFFFFF
+        self._b = (self._b + b) & 0xFFFFFFFF
+        self._c = (self._c + c) & 0xFFFFFFFF
+        self._d = (self._d + d) & 0xFFFFFFFF
+
+    def hexdigest(self) -> str:
+        msg = bytearray(self._buf)
+        msg.append(0x80)
+        while (len(msg) % 64) != 56:
+            msg.append(0)
+        msg += (self._len * 8).to_bytes(8, "little")
+        h = _MD4()
+        h._a, h._b, h._c, h._d = self._a, self._b, self._c, self._d
+        for i in range(0, len(msg), 64):
+            h._process(bytes(msg[i:i + 64]))
+        return "".join(v.to_bytes(4, "little").hex() for v in (h._a, h._b, h._c, h._d))
+
+
+def _md4_file(path: str) -> str:
+    """流式计算文件 MD4 哈希"""
+    h = _MD4()
+    with open(path, "rb") as f:
+        while True:
+            chunk = f.read(1024 * 1024)
+            if not chunk:
+                break
+            h.update(chunk)
+    return h.hexdigest()
+
+
 class DownloadTask:
     """一个下载任务。状态字段线程安全，UI 侧轮询 snapshot() 刷新"""
 
-    def __init__(self, url: str, dest_dir: str, segments: int = DEFAULT_SEGMENTS):
+    def __init__(self, url: str, dest_dir: str, segments: int = DEFAULT_SEGMENTS,
+                 md4: str = "", display_name: str = ""):
         self.url = url
         self.dest_dir = dest_dir
         self.filename = ""            # 探测后确定
         self.path = ""                # 最终文件完整路径
         self.total = 0
         self.done = 0                 # 已下载字节
-        self.status = "pending"       # pending/downloading/done/error/canceled
+        self.status = "pending"       # pending/downloading/done/error/canceled/paused
         self.error = ""
         self.mode = "single"          # multi=分段并行 / single=单线程（探测后更新）
+        self._md4 = (md4 or "").lower()          # ed2k 哈希，非空则下载完成后校验
+        self._display_name = display_name or ""
+        self._md4_ok = False
         self._segments = segments
         self._cancel = threading.Event()
         self._pause = threading.Event()
@@ -112,6 +201,7 @@ class DownloadTask:
                 "status": self.status, "total": self.total, "done": self.done,
                 "filename": self.filename, "path": self.path, "error": self.error,
                 "mode": self.mode, "segments": self._segments,
+                "display_name": self._display_name, "md4_ok": self._md4_ok,
             }
 
     @property
@@ -162,6 +252,8 @@ class DownloadTask:
             else:
                 self.mode = "multi"
                 self._download_multi()
+            if self.snapshot()["status"] == "done" and self._md4:
+                self._verify_done()
         except urllib.error.HTTPError as e:
             self._set_status("error", f"HTTP {e.code} {e.reason}")
         except urllib.error.URLError as e:
@@ -177,12 +269,27 @@ class DownloadTask:
                 self._download_multi()
             else:
                 self._download_single(self._range_ok)
+            if self.snapshot()["status"] == "done" and self._md4:
+                self._verify_done()
         except urllib.error.HTTPError as e:
             self._set_status("error", f"HTTP {e.code} {e.reason}")
         except urllib.error.URLError as e:
             self._set_status("error", f"网络错误 {e.reason}")
         except Exception as e:
             self._set_status("error", str(e))
+
+    def _verify_done(self):
+        """ed2k 场景：下载完成后用 MD4 哈希校验文件完整性（校验失败保留文件并提示）"""
+        try:
+            h = _md4_file(self.path)
+        except OSError as e:
+            self._set_status("error", f"哈希校验失败 {e}")
+            return
+        if h == self._md4:
+            self._md4_ok = True
+        else:
+            self._set_status("error",
+                             f"MD4 哈希校验失败（期望 {self._md4[:12]}…，实际 {h[:12]}…），镜像可能不正确")
 
     def _cleanup(self, paths):
         items = paths if isinstance(paths, (list, tuple)) else [paths]

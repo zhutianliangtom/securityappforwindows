@@ -16,10 +16,10 @@ from PyQt6.QtGui import QIcon
 from PyQt6.QtWidgets import (
     QDialog, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit,
     QPushButton, QProgressBar, QListWidget, QListWidgetItem, QMessageBox,
-    QFileDialog, QComboBox,
+    QFileDialog, QComboBox, QInputDialog,
 )
 
-from winapp_migrator.core.fast_download import DownloadTask
+from winapp_migrator.core.fast_download import DownloadTask, parse_ed2k
 from winapp_migrator.ui.styles import PALETTE
 
 _DONE_STATES = ("done", "error", "canceled")
@@ -103,7 +103,8 @@ class _TaskRow(QWidget):
 
     def update_view(self, snap: dict, speed: float):
         """按任务快照刷新显示"""
-        name = snap["filename"] or os.path.basename(snap["path"]) or self.task.url.split("/")[-1]
+        name = snap.get("display_name") or snap["filename"] \
+            or os.path.basename(snap["path"]) or self.task.url.split("/")[-1]
         self.name_label.setText(name)
         status = snap["status"]
         total, done = snap["total"], snap["done"]
@@ -134,7 +135,10 @@ class _TaskRow(QWidget):
         elif status == "done":
             self.pause_btn.setVisible(False)
             self.cancel_btn.setVisible(False)
-            info = f"✅ 已完成 · {_fmt_size(total)} → {snap['path']}"
+            info = f"✅ 已完成 · {_fmt_size(total)}"
+            if snap.get("md4_ok"):
+                info += " · MD4 哈希校验通过"
+            info += f" → {snap['path']}"
         elif status == "error":
             self.pause_btn.setVisible(False)
             self.cancel_btn.setVisible(False)
@@ -233,7 +237,8 @@ class DownloadDialog(QDialog):
         )
         lay.addWidget(self.task_list, 1)
 
-        hint = QLabel("提示：需服务器支持断点续传（Range）才能分段加速，否则自动单线程下载")
+        hint = QLabel("提示：支持 http/https 直链；ed2k:// 链接需填 HTTP(S) 镜像直链，下载后自动校验 MD4 哈希。"
+                      "多线程加速需服务器支持 Range，否则自动单线程")
         hint.setStyleSheet(f"font-size: 12px; color: {PALETTE['text_secondary']};")
         lay.addWidget(hint)
 
@@ -250,8 +255,30 @@ class DownloadDialog(QDialog):
 
     def _add_task(self):
         url = self.url_edit.text().strip()
-        if not url.lower().startswith(("http://", "https://")):
-            QMessageBox.warning(self, "提示", "请输入以 http:// 或 https:// 开头的下载地址")
+        md4 = ""
+        display_name = ""
+        if url.lower().startswith("ed2k://"):
+            info = parse_ed2k(url)
+            if not info:
+                QMessageBox.warning(self, "提示", "ed2k 链接格式无效，应为：\ned2k://|file|文件名|大小|MD4哈希|/")
+                return
+            mirror, ok = QInputDialog.getMultiLineText(
+                self, "ed2k 镜像直链",
+                f"文件：{info['filename']}\n"
+                f"大小：{_fmt_size(info['size'])}\n"
+                f"MD4：{info['md4']}\n\n"
+                "ed2k 是 P2P 协议，无法直接分段加速；\n"
+                "请输入该文件的 HTTP(S) 镜像下载直链（下载完成后将自动校验 MD4 哈希）：")
+            if not ok or not mirror.strip():
+                return
+            url = mirror.strip()
+            if not url.lower().startswith(("http://", "https://")):
+                QMessageBox.warning(self, "提示", "镜像直链必须以 http:// 或 https:// 开头")
+                return
+            md4 = info["md4"]
+            display_name = info["filename"]
+        elif not url.lower().startswith(("http://", "https://")):
+            QMessageBox.warning(self, "提示", "请输入以 http://、https:// 或 ed2k:// 开头的下载地址")
             return
         dest = self._pick_dir()
         if not dest:
@@ -259,7 +286,7 @@ class DownloadDialog(QDialog):
 
         segments = int(self.seg_combo.currentData())
         self._settings.setValue("download_segments", segments)
-        task = DownloadTask(url, dest, segments=segments)
+        task = DownloadTask(url, dest, segments=segments, md4=md4, display_name=display_name)
         task.start()
         self._tasks.append(task)
 

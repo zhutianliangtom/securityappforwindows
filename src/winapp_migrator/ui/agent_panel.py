@@ -691,6 +691,7 @@ class AgentPanel(QDialog):
         # 卡死兜底 hooks：长时间无任何输出则自动停止
         self._last_activity = 0.0      # 最近一次有输出/状态的时间戳
         self._stalled_stop = False     # 是否因卡死自动停止
+        self._task_active = False      # 是否有任务在执行（结束收尾的可靠依据）
 
         # 发送/停止按钮转圈动画
         self._send_anim_angle = 0
@@ -997,8 +998,10 @@ class AgentPanel(QDialog):
         self.stop_btn.setIcon(_std_icon(QStyle.StandardPixmap.SP_MediaStop))
 
     def _scroll_bottom(self):
-        # 延迟到布局更新后再滚动，否则 maximum 还是旧值导致滚不到底
+        # 延迟到布局更新后再滚动，否则 maximum 还是旧值导致滚不到底；
+        # 双调度：0ms 立即滚，100ms 再滚一次兜底（气泡最终高度稳定后）
         QTimer.singleShot(0, self._do_scroll_bottom)
+        QTimer.singleShot(100, self._do_scroll_bottom)
 
     def _do_scroll_bottom(self):
         bar = self.msg_area.verticalScrollBar()
@@ -1327,6 +1330,7 @@ class AgentPanel(QDialog):
 
         self._clear_attachments()   # 发送后清空附件条
         agent_name = self.agent_combo.currentData() or "桌面助手"
+        self._task_active = True
         engine.start(text, agent_name, images)
 
     def _stop(self):
@@ -1356,6 +1360,7 @@ class AgentPanel(QDialog):
         self.send_btn.setEnabled(True)
         self.stop_btn.setText("停止")
         self.stop_btn.setEnabled(False)
+        self._task_active = False
         self._hide_spinner()
         self._stop_button_anim()
         if not self._end_badge_shown:
@@ -1387,6 +1392,12 @@ class AgentPanel(QDialog):
         self._hide_spinner()
         self.cmd_list.hide()
         self._stop_button_anim()
+        # 任务进行中清空时，显式恢复按钮与任务标志，避免残留禁用/转圈
+        self.send_btn.setText("发送")
+        self.send_btn.setEnabled(True)
+        self.stop_btn.setText("停止")
+        self.stop_btn.setEnabled(False)
+        self._task_active = False
         self._user_stopped = False
         self._end_badge_shown = False
         self._think_done = False
@@ -1496,8 +1507,10 @@ class AgentPanel(QDialog):
             self._stalled_stop = True
             self._add_status("AI 长时间无响应（>60 秒），已自动停止（卡死兜底）", WARN)
             self._engine.stop()
-        # 线程结束即清理：只要引擎已停止且（转圈残留 或 按钮未恢复）就执行收尾
-        if not running and (self._spinner_row is not None or not self.send_btn.isEnabled()):
+        # 任务结束即清理：只要任务标志开启且线程已退出，就执行收尾
+        # （不依赖 spinner/按钮状态判断，避免切换模式等路径下漏清理）
+        if not running and self._task_active:
+            self._task_active = False
             self.send_btn.setText("发送")
             self.send_btn.setEnabled(True)
             self.stop_btn.setText("停止")

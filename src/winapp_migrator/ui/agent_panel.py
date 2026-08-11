@@ -1667,25 +1667,38 @@ class AgentPanel(QDialog):
         lst = [x for x in self._load_session_list() if x.get("id") != sid]
         self._save_session_list(lst)
 
+    def _confirm_box(self, title: str, text: str) -> bool:
+        """暗色主题确认框（白色字体），点"是"返回 True，点"否"返回 False"""
+        box = QMessageBox(self)
+        box.setWindowTitle(title)
+        box.setText(text)
+        box.setIcon(QMessageBox.Icon.Question)
+        yes = box.addButton("是", QMessageBox.ButtonRole.YesRole)
+        box.addButton("否", QMessageBox.ButtonRole.NoRole)
+        # 默认焦点给"否"，防误触删除
+        no_btn = box.buttons()[1]
+        box.setDefaultButton(no_btn)
+        box.setStyleSheet(
+            f"QMessageBox {{ background: {PANEL}; }}"
+            f"QMessageBox QLabel {{ color: {TEXT}; font-size: 13px; }}"
+            f"QMessageBox QPushButton {{ color: {TEXT}; background: {AI_BG};"
+            f"border: 1px solid {BORDER}; border-radius: 8px; padding: 6px 20px;"
+            "font-size: 13px; font-weight: 600; }}"
+            f"QMessageBox QPushButton:hover {{ background: #16233C; border-color: {ACCENT}; }}")
+        box.exec()
+        return box.clickedButton() is yes
+
     def _clear_chat(self):
         """清空上下文并永久删除当前对话（二次弹窗确认，删除不可恢复）"""
         if not self._session_id:
             return
         # 第一次确认：清空上下文与聊天记录
-        ret1 = QMessageBox.question(
-            self, "清空对话",
-            "确定要清空当前对话吗？\n将清空全部上下文与聊天记录。",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No)
-        if ret1 != QMessageBox.StandardButton.Yes:
+        if not self._confirm_box("清空对话",
+                                 "确定要清空当前对话吗？\n将清空全部上下文与聊天记录。"):
             return
         # 第二次确认：永久删除该对话（不可恢复）
-        ret2 = QMessageBox.question(
-            self, "永久删除对话",
-            "该对话将连同所有记录被永久删除，无法恢复！\n确定继续吗？",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No)
-        if ret2 != QMessageBox.StandardButton.Yes:
+        if not self._confirm_box("永久删除对话",
+                                 "该对话将连同所有记录被永久删除，无法恢复！\n确定继续吗？"):
             return
         # ---- 执行：停止引擎 + 清空上下文与气泡 + tokens 归零 ----
         old_id = self._session_id

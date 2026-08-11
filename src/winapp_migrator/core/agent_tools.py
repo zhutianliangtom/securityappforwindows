@@ -279,7 +279,8 @@ def execute_tool(name: str, args: dict, allow_dangerous: bool = False,
             return {"text": "已截取屏幕", "images": [agent_screen.capture_screen_data_url()]}
         if name == "get_screen_size":
             w, h = agent_screen.screen_size()
-            return {"text": f"屏幕分辨率 {w}x{h}", "images": []}
+            return {"text": f"屏幕分辨率 {w}x{h}",
+                    "images": [agent_screen.capture_screen_data_url()]}
         if name == "find_app":
             return {"text": agent_find.find_app(
                 str(args.get("query", "")),

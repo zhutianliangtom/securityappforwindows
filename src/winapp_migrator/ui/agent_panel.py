@@ -1863,7 +1863,7 @@ class AgentPanel(QDialog):
         self._scroll_bottom()
 
     def _add_image_widget(self, data_url: str, caption: str = "已截屏"):
-        """截图/图片独立容器：'已截屏'标签 + 缩小后的图片框，随窗口自适应，禁止溢出挤压"""
+        """截图/图片卡片：与 AI 气泡同款底色圆角，'已截屏'标签下方缩略图，随窗口自适应，禁止溢出"""
         try:
             b64 = data_url.partition(",")[2]
             img = QImage.fromData(base64.b64decode(b64))
@@ -1871,9 +1871,9 @@ class AgentPanel(QDialog):
                 return
             box = QWidget()
             box.setStyleSheet(
-                f"background: {PANEL}; border: 1px solid {BORDER}; border-radius: 8px;")
+                f"background: {AI_BG}; border: 1px solid {BORDER}; border-radius: 14px;")
             v = QVBoxLayout(box)
-            v.setContentsMargins(6, 6, 6, 6)
+            v.setContentsMargins(10, 8, 10, 8)
             v.setSpacing(4)
             cap = QLabel(caption)
             cap.setStyleSheet(f"color: {TEXT_DIM}; font-size: 11px;")
@@ -1884,7 +1884,7 @@ class AgentPanel(QDialog):
             rec = {"box": box, "lbl": lbl, "img": img}
             self._img_widgets.append(rec)
             self._apply_image_size(rec)
-            # 插入到消息流末尾（stretch 前），独立成行不挤压文字
+            # 插入到消息流末尾（stretch 前），紧跟 AI 气泡左侧对齐，独立成行不挤压文字
             self.msg_lay.insertWidget(self.msg_lay.count() - 1, box,
                                       0, Qt.AlignmentFlag.AlignLeft)
             self._scroll_bottom()

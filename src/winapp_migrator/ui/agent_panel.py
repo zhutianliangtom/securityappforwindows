@@ -1172,7 +1172,11 @@ class AgentPanel(QDialog):
         for b in self._bubble_widgets:
             try:
                 b.setMaximumWidth(mw)
-                b.setMinimumWidth(mn)
+                # 仅 AI 气泡保持半页最小宽度；用户气泡按内容自适应
+                if b.property("align") == "ai":
+                    b.setMinimumWidth(mn)
+                else:
+                    b.setMinimumWidth(0)
                 src = b.property("rich_src")   # 用户富文本气泡（含图片）随全屏放大
                 if src:
                     b.setText(self._scale_user_html(src, s))
@@ -1191,7 +1195,10 @@ class AgentPanel(QDialog):
         bubble.setWordWrap(True)
         bubble.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         bubble.setMaximumWidth(self._bubble_max_width())
-        bubble.setMinimumWidth(self._bubble_min_width())
+        # 仅 AI 气泡设最小宽度（让截图/内容覆盖半页）；用户气泡按内容自适应，避免短句异常拉长
+        if align == "ai":
+            bubble.setMinimumWidth(self._bubble_min_width())
+        bubble.setProperty("align", align)
         self._bubble_widgets.append(bubble)
         if align == "user":
             # 用户消息：默认纯文本；带图片时用富文本渲染缩略图（不显示源文本）

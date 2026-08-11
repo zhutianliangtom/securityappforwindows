@@ -26,6 +26,7 @@ from winapp_migrator.core.orchestrator import MigrationOrchestrator
 from winapp_migrator.core.uninstaller import Uninstaller
 from winapp_migrator.core.memory_optimizer import optimize_memory
 from winapp_migrator.core.security import SecurityScanner
+from winapp_migrator.core.network_defense import NetworkDefender
 
 logger = setup_logging()
 
@@ -229,6 +230,7 @@ class SecurityMonitorWorker(QThread):
         super().__init__(parent)
         self._stop = threading.Event()
         self.scanner = SecurityScanner()
+        self.defender = NetworkDefender()
 
     def stop(self):
         self._stop.set()
@@ -241,8 +243,12 @@ class SecurityMonitorWorker(QThread):
                 summary = self.scanner.sweep(
                     include_network=(tick % 5 == 0),  # 每 ~50 秒检查网络
                 )
+                # 网络攻击检测（ARP 欺骗 / 洪泛），命中即自动防御并通知
+                attacks = self.defender.check()
+                if attacks["arp_spoof"] or (attacks["flood"] and attacks["flood"]["detected"]):
+                    summary["attacks"] = attacks
                 if summary["killed"] or summary["removed"] or summary["failed"] \
-                        or summary["network"]:
+                        or summary["network"] or summary.get("attacks"):
                     self.result.emit(summary)
             except Exception:
                 logger.exception("安全监控异常")
@@ -588,9 +594,23 @@ class MainWindow(QMainWindow):
                 lines.append(f"⚠ 防火墙已关闭：{', '.join(net['firewall_off'])}")
             if net.get("high_risk_listening"):
                 lines.append(f"⚠ 高危端口暴露：{', '.join(str(p) for p in net['high_risk_listening'])}")
+        attacks = summary.get("attacks") or {}
+        spoof = attacks.get("arp_spoof")
+        if spoof:
+            line = (f"🚨 ARP 欺骗: 网关 {spoof['gateway']} MAC 突变\n"
+                    f"   {spoof['old_mac']} → {spoof['new_mac']}")
+            line += "（已发送 ARP 修复包）" if spoof["repaired"] else f"（修复失败: {spoof['reason']}）"
+            lines.append(line)
+        flood = attacks.get("flood")
+        if flood:
+            if flood["syn_sources"]:
+                banned = f"，已封禁 {len(flood['blocked'])} 个来源" if flood["blocked"] else "，封禁失败"
+                lines.append(f"🚨 SYN 洪泛: 来源 {', '.join(flood['syn_sources'])}{banned}")
+            if flood["packet_flood"]:
+                lines.append(f"🚨 TCP 洪泛: 入段速率 {flood['packet_rate']}/秒")
         if not lines:
             return
-        warn = bool(killed or removed or failed)
+        warn = bool(killed or removed or failed or spoof or (flood and flood["detected"]))
         self.toast.show_toast("安全防护报告", "\n".join(lines), warn, 7000)
 
     def _on_tray_activated(self, reason):

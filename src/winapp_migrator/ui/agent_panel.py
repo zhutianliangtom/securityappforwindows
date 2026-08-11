@@ -1580,7 +1580,7 @@ class AgentPanel(QDialog):
             if tname == "screenshot":
                 # 手动截屏：面板直接截图并展示（不依赖 AI 调用工具，保证必定出图）
                 try:
-                    shot = agent_screen.capture_screen_data_url()
+                    shot = agent_screen.capture_screen_data_url(grid=False)   # 展示用干净原图
                     text = "已截取当前屏幕并展示在对话中，请基于截图内容回答或继续执行。"
                 except Exception:
                     shot = None
@@ -1613,7 +1613,8 @@ class AgentPanel(QDialog):
         # 手动截屏：截图段进 AI 气泡（"已截屏"字样下方缩略图，融入主对话气泡）
         send_images = list(images)
         if shot:
-            send_images.append(shot)
+            # 喂给模型时带坐标网格（精确点击定位），展示用干净原图
+            send_images.append(agent_screen.capture_screen_data_url(grid=True))
         self._ai_bubble = None
         self._segments = []
         if shot:

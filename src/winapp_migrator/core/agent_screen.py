@@ -10,7 +10,8 @@ import struct
 import time
 from ctypes import wintypes
 
-from PyQt6.QtCore import QBuffer, QByteArray, QIODevice
+from PyQt6.QtCore import QBuffer, QByteArray, QIODevice, Qt
+from PyQt6.QtGui import QColor, QFont, QImage, QPainter, QPen
 from PyQt6.QtWidgets import QApplication
 
 user32 = ctypes.windll.user32
@@ -63,10 +64,54 @@ def map_to_screen(x: int, y: int) -> tuple:
     return int(x * sx), int(y * sy)
 
 
-def capture_screen_data_url() -> str:
-    """全屏截图 → data URL（OpenAI 兼容 image_url 输入）"""
+def capture_screen_data_url(grid: bool = True) -> str:
+    """全屏截图 → data URL（OpenAI 兼容 image_url 输入）。
+
+    grid=True 时叠加坐标网格与像素刻度：模型直接按刻度读取坐标，
+    返回的坐标就是截图像素坐标（与 _shot_size 同基准），再由 map_to_screen
+    换算到屏幕物理像素，从根本上消除视觉模型目测坐标的系统性偏差。
+    """
     import base64
-    return "data:image/png;base64," + base64.b64encode(capture_screen_png()).decode()
+    png = capture_screen_png()
+    if not grid:
+        return "data:image/png;base64," + base64.b64encode(png).decode()
+    img = QImage.fromData(png)
+    _draw_coord_grid(img)
+    ba = QByteArray()
+    buf = QBuffer(ba)
+    buf.open(QIODevice.OpenModeFlag.WriteOnly)
+    img.save(buf, "PNG")
+    return "data:image/png;base64," + base64.b64encode(bytes(ba)).decode()
+
+
+def _draw_coord_grid(img: QImage, cells: int = 8):
+    """在截图上叠加半透明坐标网格 + 像素刻度，帮助视觉模型精确定位。
+
+    - 网格线：每格 1/cells 屏宽，红色细线
+    - 刻度：网格线两端标注该处的截图像素值（X 轴顶部、Y 轴左侧）
+    - 刻度与 _shot_size 同基准，模型读出的刻度值可直接作为点击坐标
+    """
+    w, h = img.width(), img.height()
+    p = QPainter(img)
+    p.setRenderHint(QPainter.RenderHint.Antialiasing, False)
+    pen = QPen(QColor(255, 60, 60, 130), 1)
+    p.setPen(pen)
+    for i in range(1, cells):
+        x = w * i // cells
+        y = h * i // cells
+        p.drawLine(x, 0, x, h)          # 竖线
+        p.drawLine(0, y, w, y)          # 横线
+    # 刻度文字
+    font = QFont("Consolas", max(8, min(12, w // 200)))
+    p.setFont(font)
+    for i in range(cells + 1):
+        x = w * i // cells
+        y = h * i // cells
+        p.setPen(QColor(255, 230, 0, 230))   # X 轴刻度（顶部黄色）
+        p.drawText(x + 2, font.pointSize(), f"{x}")
+        p.setPen(QColor(0, 255, 170, 230))   # Y 轴刻度（左侧青色）
+        p.drawText(2, y + font.pointSize(), f"{y}")
+    p.end()
 
 
 def screen_size() -> tuple:

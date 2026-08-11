@@ -7,7 +7,7 @@ from typing import List
 
 from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit,
-    QComboBox, QPushButton, QListWidget, QListWidgetItem, QProgressBar,
+    QComboBox, QPushButton, QCheckBox, QListWidget, QListWidgetItem, QProgressBar,
     QTextEdit, QMessageBox, QApplication, QSizePolicy, QSpacerItem,
     QFileDialog, QDialog, QScrollArea, QFrame, QSystemTrayIcon, QMenu
 )
@@ -293,6 +293,8 @@ class MainWindow(QMainWindow):
         self._security_on = False
         self.security_worker = None
         self._settings = QSettings("WinAppMigrator", "WinAppMigrator")
+        # 记忆用户选择：是否显示安全提醒弹窗（默认开启）
+        self._toast_enabled = self._settings.value("security_toast", True, type=bool)
         # 右下角自定义滑出弹窗（拦截结果/状态提示，非系统通知）
         self.toast = ToastNotification(None)
         self._setup_tray()
@@ -517,6 +519,12 @@ class MainWindow(QMainWindow):
         self.security_btn.clicked.connect(self._toggle_security)
         layout.addWidget(self.security_btn)
 
+        self.toast_check = QCheckBox("🔔 安全提醒弹窗")
+        self.toast_check.setToolTip("检测到威胁时是否弹出右下角提醒；关闭后拦截仍生效，仅不弹窗")
+        self.toast_check.setChecked(self._toast_enabled)
+        self.toast_check.toggled.connect(self._on_toast_toggle)
+        layout.addWidget(self.toast_check)
+
         return card
 
     def _populate_drives(self):
@@ -554,6 +562,11 @@ class MainWindow(QMainWindow):
         else:
             self._start_security()
 
+    def _on_toast_toggle(self, checked: bool):
+        """记忆用户对安全提醒弹窗的选择（拦截始终生效，仅控制是否弹窗）"""
+        self._toast_enabled = checked
+        self._settings.setValue("security_toast", checked)
+
     def _start_security(self):
         """开启静默防护（首次立即扫描，之后每 30 秒巡检）"""
         if self._security_on:
@@ -586,7 +599,9 @@ class MainWindow(QMainWindow):
         self.status_label.setText("静默防护已关闭")
 
     def _on_security_result(self, summary: dict):
-        """安全清理/检查完成后右下角自定义弹窗提示结果"""
+        """安全清理/检查完成后右下角自定义弹窗提示结果（用户可关闭此弹窗）"""
+        if not self._toast_enabled:
+            return
         lines = []
         killed = summary.get("killed") or []
         removed = summary.get("removed") or []

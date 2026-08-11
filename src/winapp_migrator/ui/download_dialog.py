@@ -254,7 +254,7 @@ class DownloadDialog(QDialog):
         return dest or None
 
     def _add_task(self):
-        url = self.url_edit.text().strip()
+        url = "".join(self.url_edit.text().split())  # 清理所有空白/换行
         md4 = ""
         display_name = ""
         if url.lower().startswith("ed2k://"):
@@ -262,16 +262,22 @@ class DownloadDialog(QDialog):
             if not info:
                 QMessageBox.warning(self, "提示", "ed2k 链接格式无效，应为：\ned2k://|file|文件名|大小|MD4哈希|/")
                 return
-            mirror, ok = QInputDialog.getMultiLineText(
+            mirror, ok = QInputDialog.getText(
                 self, "ed2k 镜像直链",
                 f"文件：{info['filename']}\n"
                 f"大小：{_fmt_size(info['size'])}\n"
                 f"MD4：{info['md4']}\n\n"
-                "ed2k 是 P2P 协议，无法直接分段加速；\n"
-                "请输入该文件的 HTTP(S) 镜像下载直链（下载完成后将自动校验 MD4 哈希）：")
+                "ed2k 是 P2P 协议，本工具无法直接分段加速，\n"
+                "请粘贴该文件的 HTTP/HTTPS 下载直链（下载完成后自动校验 MD4 哈希）：\n"
+                "提示：可从资源站/镜像站获取直链，没有镜像直链则无法下载 ed2k 资源。")
             if not ok or not mirror.strip():
+                QMessageBox.information(
+                    self, "提示",
+                    "未提供镜像直链，已取消。\n\n"
+                    "ed2k 是 P2P 协议，本工具无法直接下载，\n"
+                    "必须提供该文件的 HTTP/HTTPS 镜像直链才能高速下载。")
                 return
-            url = mirror.strip()
+            url = "".join(mirror.split())  # 去空白/换行，避免粘贴带入 \n 导致 URL 非法
             if not url.lower().startswith(("http://", "https://")):
                 QMessageBox.warning(self, "提示", "镜像直链必须以 http:// 或 https:// 开头")
                 return

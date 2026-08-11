@@ -84,10 +84,12 @@ class LLMClient:
                      "User-Agent": _UA,
                      "Authorization": f"Bearer {self.api_key}"},
             method="POST")
-        # 请求失败自动重试（429 限流 / 5xx / 网络抖动），指数退避
+        # 请求失败自动重试（429 限流 / 5xx / 网络抖动），指数退避；重试全程响应 stop
         resp = None
         last_err = None
         for attempt in range(_MAX_RETRIES):
+            if stop and stop():
+                raise AgentLLMError("已停止")
             try:
                 resp = urllib.request.urlopen(req, timeout=self.timeout)
                 break
@@ -110,8 +112,13 @@ class LLMClient:
         tool_calls: dict = {}   # index -> {id, name, args}
         usage = None
         try:
-            for raw in resp:
+            # 手动 readline 循环：每次迭代前检查 stop，命中立即断开连接，无需等下一行数据
+            while True:
                 if stop and stop():
+                    resp.close()
+                    raise AgentLLMError("已停止")
+                raw = resp.readline()
+                if not raw:
                     break
                 line = raw.decode("utf-8", "replace").strip()
                 if not line.startswith("data:"):

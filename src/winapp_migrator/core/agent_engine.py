@@ -42,6 +42,8 @@ def _call_with_stop(fn, stop_event, timeout: float = 30.0):
             break
         time.sleep(0.1)
     if t.is_alive():
+        if stop_event.is_set():
+            return None   # 用户停止：放弃等待（线程后台自动回收）
         raise TimeoutError("工具执行超时")
     if "e" in box:
         raise box["e"]
@@ -164,7 +166,18 @@ class AgentEngine:
                 return {"text": self.ask_user(args), "images": []}
             return {"text": "[ask_user] 未接入提问面板", "images": []}
         if name in self._builtin_names:
-            return agent_tools.execute_tool(name, args, allow_dangerous=allow_dangerous)
+            # 内置工具（run_command 等）同样可能长时间阻塞 → 用带超时/可中断封装
+            try:
+                res = _call_with_stop(
+                    lambda: agent_tools.execute_tool(name, args, allow_dangerous=allow_dangerous),
+                    self._stop, timeout=40.0)
+                if res is None:   # stop 触发已放弃等待（工具仍在后台线程执行）
+                    return {"text": "[已停止等待] 工具仍在后台执行，本轮已跳过", "images": []}
+                return res
+            except TimeoutError:
+                return {"text": f"[工具超时] {name} 无响应，已放弃（40 秒）", "images": []}
+            except Exception as e:
+                return {"text": f"[工具错误] {name}: {e}", "images": []}
         if self.mcp:
             # MCP 调用无超时可能卡死 → 用带超时/可中断封装
             try:
@@ -272,13 +285,16 @@ class AgentEngine:
                 self.on_status("已达到最大工具轮数，自动结束")
             self.end_state = "max_rounds"
         except agent_llm.AgentLLMError as e:
-            self.end_state = "error"
+            # 用户主动停止（含 LLM 层"已停止"）优先识别为 stopped，而不是 error
+            stopped = self._stop.is_set()
+            self.end_state = "stopped" if stopped else "error"
             if self.on_status:
-                self.on_status(f"错误: {e}")
+                self.on_status("已停止" if stopped else f"错误: {e}")
         except Exception as e:
-            self.end_state = "error"
+            stopped = self._stop.is_set()
+            self.end_state = "stopped" if stopped else "error"
             if self.on_status:
-                self.on_status(f"错误: {e}")
+                self.on_status("已停止" if stopped else f"错误: {e}")
 
     def _accum_usage(self, usage):
         if not usage:

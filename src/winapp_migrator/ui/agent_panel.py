@@ -730,12 +730,12 @@ class AgentPanel(QDialog):
         root.setContentsMargins(16, 14, 16, 14)
         root.setSpacing(10)
 
-        # 顶栏：标题 + Agent/会话/模式 + MCP + tokens + 清空（非全屏下紧凑排布，防止挤压）
+        # 顶栏：标题 + Agent/会话/模式 + MCP + tokens + 清空（随窗口宽度自适应，宽窗完整/窄窗紧凑）
         top = QHBoxLayout()
         top.setSpacing(8)
-        title = QLabel("AI AGENT")
-        title.setStyleSheet(f"color: {ACCENT}; font-size: 16px; font-weight: 800;")
-        top.addWidget(title)
+        self.title = QLabel("AI AGENT")
+        self.title.setStyleSheet(f"color: {ACCENT}; font-size: 16px; font-weight: 800;")
+        top.addWidget(self.title)
 
         # 会话选择：切换对话（上下文隔离）+ 新对话按钮
         self.session_combo = QComboBox()
@@ -744,16 +744,16 @@ class AgentPanel(QDialog):
         self.session_combo.currentIndexChanged.connect(self._on_session_selected)
         top.addWidget(self.session_combo)
 
-        new_btn = QPushButton(_std_icon(QStyle.StandardPixmap.SP_FileDialogNewFolder), "新")
-        new_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        new_btn.setAutoDefault(False)
-        new_btn.setToolTip("新对话")
-        new_btn.setStyleSheet(
+        self.new_btn = QPushButton(_std_icon(QStyle.StandardPixmap.SP_FileDialogNewFolder), "新")
+        self.new_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.new_btn.setAutoDefault(False)
+        self.new_btn.setToolTip("新对话")
+        self.new_btn.setStyleSheet(
             f"QPushButton {{ background: {PANEL}; color: {ACCENT}; border: 1px solid {ACCENT};"
             "border-radius: 8px; padding: 6px 10px; font-size: 12px; font-weight: 600; }}"
             f"QPushButton:hover {{ background: #16233C; }}")
-        new_btn.clicked.connect(self._new_session)
-        top.addWidget(new_btn)
+        self.new_btn.clicked.connect(self._new_session)
+        top.addWidget(self.new_btn)
 
         self.agent_combo = QComboBox()
         for a in self._agents:
@@ -783,15 +783,15 @@ class AgentPanel(QDialog):
         self.mcp_label.setMaximumWidth(120)
         top.addWidget(self.mcp_label)
 
-        mcp_btn = QPushButton(_std_icon(QStyle.StandardPixmap.SP_ComputerIcon), "MCP")
-        mcp_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        mcp_btn.setAutoDefault(False)
-        mcp_btn.setStyleSheet(
+        self.mcp_btn = QPushButton(_std_icon(QStyle.StandardPixmap.SP_ComputerIcon), "MCP")
+        self.mcp_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.mcp_btn.setAutoDefault(False)
+        self.mcp_btn.setStyleSheet(
             f"QPushButton {{ background: {PANEL}; color: {ACCENT}; border: 1px solid {ACCENT};"
             "border-radius: 8px; padding: 6px 12px; font-size: 12px; font-weight: 600; }}"
             f"QPushButton:hover {{ background: #16233C; }}")
-        mcp_btn.clicked.connect(self._open_mcp_manager)
-        top.addWidget(mcp_btn)
+        self.mcp_btn.clicked.connect(self._open_mcp_manager)
+        top.addWidget(self.mcp_btn)
 
         top.addStretch(1)
 
@@ -1164,8 +1164,42 @@ class AgentPanel(QDialog):
         """聊天气泡最小宽度：全屏时至少覆盖半页宽（不超过最大宽度）"""
         return min(self._bubble_max_width(), int(self.width() * 0.5))
 
+    def _topbar_wide(self) -> bool:
+        """窗口足够宽（≥1100px）时顶栏显示完整文案，否则紧凑防挤压"""
+        return self.width() >= 1100
+
+    def _apply_topbar_layout(self):
+        """顶部工具栏随窗口宽度自适应：宽窗口显示完整文字，窄窗口紧凑"""
+        wide = self._topbar_wide()
+        self.new_btn.setText("新对话" if wide else "新")
+        self.mcp_btn.setText("MCP 管理" if wide else "MCP")
+        self.mcp_label.setMaximumWidth(1200 if wide else 120)
+        # MCP 状态：完整或截断（截断逻辑与 _on_mcp_status 保持一致）
+        full = getattr(self, "_mcp_full", "MCP: 连接中…")
+        self.mcp_label.setText(full if wide else (full[:10] + "…" if len(full) > 10 else full))
+        if wide:
+            self.session_combo.setMinimumWidth(180)
+            self.session_combo.setMaximumWidth(260)
+            self.agent_combo.setMinimumWidth(130)
+            self.agent_combo.setMaximumWidth(200)
+            self.mode_combo.setMinimumWidth(190)
+            self.mode_combo.setMaximumWidth(240)
+            self.mode_combo.setItemText(0, "AskBeforeEdit（每步确认）")
+            self.mode_combo.setItemText(1, "YOLO（无确认直行）")
+        else:
+            self.session_combo.setMinimumWidth(110)
+            self.session_combo.setMaximumWidth(180)
+            self.agent_combo.setMinimumWidth(100)
+            self.agent_combo.setMaximumWidth(140)
+            self.mode_combo.setMinimumWidth(110)
+            self.mode_combo.setMaximumWidth(140)
+            self.mode_combo.setItemText(0, "每步确认")
+            self.mode_combo.setItemText(1, "无确认直行")
+        self._refresh_meta()   # token 文本按当前模式重渲染
+
     def resizeEvent(self, e):
         super().resizeEvent(e)
+        self._apply_topbar_layout()
         mw = self._bubble_max_width()
         mn = self._bubble_min_width()
         s = self._font_scale()
@@ -1454,9 +1488,9 @@ class AgentPanel(QDialog):
 
     def _on_mcp_status(self, text: str):
         color = OK if "已连接" in text or "未配置" in text else WARN
-        # 非全屏顶栏空间有限，MCP 状态只保留前 10 个字符，防止挤压
-        self.mcp_label.setText(text[:10] + "…" if len(text) > 10 else text)
+        self._mcp_full = text   # 保存完整文本，由 _apply_topbar_layout 按窗口宽度决定完整/截断
         self.mcp_label.setStyleSheet(f"color: {color}; font-size: 12px;")
+        self._apply_topbar_layout()
 
     def _open_mcp_manager(self):
         """打开 MCP 服务器配置面板；保存后后台重连"""
@@ -1525,7 +1559,8 @@ class AgentPanel(QDialog):
         return "(无参数)"
 
     def _update_cmd_suggestions(self, text: str):
-        if text.startswith("/"):
+        # 空 "/" 时不预测；输入至少一个字符才列出匹配命令（"/c" → /compact 置顶）
+        if text.startswith("/") and len(text) > 1:
             matches = [c for c in self._all_commands() if c.startswith(text)]
             if matches:
                 self.cmd_list.clear()
@@ -1877,8 +1912,12 @@ class AgentPanel(QDialog):
         """轮询刷新 tokens / 按钮反馈状态 / 卡死兜底"""
         if self._engine:
             t = self._engine.tokens
-            self.token_label.setText(
-                f"{t['prompt'] + t['completion']} tk")
+            used = t['prompt'] + t['completion']
+            if self._topbar_wide():
+                self.token_label.setText(
+                    f"已用 {used} tokens（输入 {t['prompt']} / 输出 {t['completion']}）")
+            else:
+                self.token_label.setText(f"{used} tk")
         running = bool(self._engine and self._engine._thread and self._engine._thread.is_alive())
         # 卡死兜底：任务进行中超过 60 秒无任何输出/状态 → 强制停止
         if running and self._last_activity and not self._stalled_stop \

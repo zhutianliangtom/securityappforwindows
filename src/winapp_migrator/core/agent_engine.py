@@ -26,6 +26,12 @@ _SCREEN_CHANGING = {"click", "click_text", "drag", "scroll", "press_key", "type_
 CONTEXT_FILE = agent_skills.CONFIG_DIR / "context.json"
 
 
+def _looks_failed(text: str) -> bool:
+    """工具返回文本是否含失败/异常特征（用于触发纠错提示）"""
+    return bool(text and any(k in text for k in
+                             ("失败", "错误", "未找到", "拒绝", "超时", "[工具", "[沙盒", "[MCP")))
+
+
 def _compress_data_url(data_url: str, max_width: int = 320, quality: int = 80) -> str:
     """把图片 data URL 压缩为小尺寸 JPEG（保存上下文时防止文件过大）"""
     import base64
@@ -174,6 +180,7 @@ class AgentEngine:
     def compress_history(self, keep_recent: int = 2) -> int:
         """启发式压缩上下文：保留最近 keep_recent 条消息完整，更早的文本合并为一条摘要。
 
+        摘要保留最初的任务目标 + 旧消息尾部细节，长任务压缩后不遗忘开头目标。
         返回被合并的消息条数（0 表示无需压缩）。
         """
         if len(self._messages) <= keep_recent + 1:
@@ -181,17 +188,29 @@ class AgentEngine:
         head = self._messages[0]                       # system 提示
         recent = self._messages[-keep_recent:]
         old = self._messages[1:-keep_recent]
-        parts = []
+        parts, first_goal = [], ""
         for m in old:
             c = m.get("content")
+            texts = []
             if isinstance(c, str) and c:
-                parts.append(c)
+                texts.append(c)
             elif isinstance(c, list):
                 for x in c:
                     if isinstance(x, dict) and x.get("type") == "text" and x.get("text"):
-                        parts.append(x["text"])
-        summary = ("（上下文已压缩，以下是此前对话的摘要）\n"
-                   + "\n".join(parts[-2000:]) if parts else "")
+                        texts.append(x["text"])
+            joined = "\n".join(texts)
+            if joined:
+                if not first_goal and m.get("role") == "user":
+                    first_goal = joined[:500]
+                parts.append(joined)
+        summary_parts = []
+        if first_goal:
+            summary_parts.append(f"任务目标：{first_goal}")
+        tail = "\n".join(parts)
+        if tail:
+            summary_parts.append(tail[-1500:])
+        summary = ("（上下文已压缩，以下是此前对话的关键信息）\n"
+                   + "\n".join(summary_parts)) if summary_parts else ""
         self._messages = [head]
         if summary:
             self._messages.append({"role": "user",
@@ -297,7 +316,7 @@ class AgentEngine:
             except Exception:
                 switched = False
         try:
-            for _ in range(30):  # 最多 30 轮工具循环，防死循环
+            for _ in range(50):  # 最多 50 轮工具循环（配合自动压缩支持长任务），防死循环
                 if self._stop.is_set():
                     self.end_state = "stopped"
                     if self.on_status:
@@ -306,6 +325,11 @@ class AgentEngine:
                 if self.on_status:
                     self.on_status("正在思考…")
                 self._prune_images(6)  # 历史截图保留最近 6 张，避免过度压缩模型视觉输入
+                # 自动压缩：上下文过长时合并旧消息（保留任务目标），防止长任务中 AI 遗忘开头
+                if len(self._messages) > 45:
+                    n = self.compress_history(keep_recent=8)
+                    if n and self.on_status:
+                        self.on_status(f"上下文较长，已自动压缩 {n} 条旧消息")
                 # tokens 预计算
                 self.last_estimate = agent_llm.estimate_tokens(
                     "".join(m["content"] for m in self._messages if isinstance(m.get("content"), str)))
@@ -332,6 +356,7 @@ class AgentEngine:
                     "tool_calls": calls,
                 })
                 last_images = []
+                last_failed = False
                 for call in calls:
                     if self._stop.is_set():
                         self.end_state = "stopped"
@@ -367,6 +392,8 @@ class AgentEngine:
                             # 压缩缩略图副本给 UI 展示（原图仍喂给模型视觉验证）
                             self.on_result(name, text,
                                            [_compress_data_url(u, 480) for u in imgs])
+                    if _looks_failed(text):
+                        last_failed = True
                     self._messages.append({
                         "role": "tool", "tool_call_id": call["id"],
                         "content": text,   # 纯字符串更兼容（部分 API 拒绝数组 content）
@@ -374,10 +401,13 @@ class AgentEngine:
                     if imgs:
                         last_images = imgs   # 本轮全部截图喂给下一轮视觉验证，不做裁剪
                 if last_images:
+                    prompt = ("请观察最新屏幕截图，验证上一步操作结果并继续。"
+                              if not last_failed else
+                              "上一步工具调用失败，请结合截图分析原因（目标不在屏幕/坐标偏移/"
+                              "弹窗未展开/参数错误），换方案重试（最多 2 次），仍失败则 ask_user 求助。")
                     self._messages.append({
                         "role": "user",
-                        "content": agent_llm.build_content("请观察最新屏幕截图，验证上一步操作结果并继续。",
-                                                           last_images),
+                        "content": agent_llm.build_content(prompt, last_images),
                     })
             if self.on_status:
                 self.on_status("已达到最大工具轮数，自动结束")

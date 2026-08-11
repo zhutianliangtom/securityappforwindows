@@ -3,7 +3,7 @@
 L1 UIA（Windows UI Automation）：枚举原生控件，取名称+边界框中心，100% 精确。
 L2 OCR（Windows 自带 OCR，Windows.Media.Ocr）：识别屏幕文字与像素坐标，
     像素级精度，覆盖所有含文字的 UI（按钮/菜单/输入框），无外部引擎依赖。
-L3 视觉：由 agent_screen 的网格刻度+zoom 兜底（图标/纯图形元素）。
+L3 视觉：由 agent_screen 的网格刻度+准星对齐兜底（图标/纯图形元素）。
 
 AI 定位目标时按此优先级取坐标，彻底绕开视觉模型"读刻度"的精度上限。
 """
@@ -11,18 +11,31 @@ AI 定位目标时按此优先级取坐标，彻底绕开视觉模型"读刻度"
 import asyncio
 import re
 
+# 无意义词（OCR/UIA 噪声，过滤掉避免干扰匹配）
+_NOISE = {"|", "-", "_", ".", "·", "…", "→", "√", "×", "✓", "✕"}
+
+
+def _meaningful(text: str) -> bool:
+    """文本是否值得作为定位元素：含中文或至少 2 个字母数字"""
+    return bool(re.search(r"[\u4e00-\u9fff]", text)) or \
+        bool(re.search(r"[A-Za-z0-9]{2,}", text))
+
 # ---------- L1：UIA 控件枚举 ----------
 def uia_elements() -> list:
-    """枚举当前桌面各窗口的带文本控件，返回 [{text,x,y,w,h}]（屏幕物理像素）。"""
+    """枚举当前桌面各窗口的带文本控件，返回 [{text,x,y,w,h}]（屏幕物理像素）。
+
+    maxDepth=12 遍历深层控件（复杂页面/多层菜单），并过滤无意义名称。
+    """
     out = []
     try:
         import uiautomation as auto
         root = auto.GetRootControl()
-        for ctrl in auto.WalkControl(root, maxDepth=6):
+        for ctrl in auto.WalkControl(root, maxDepth=12):
             try:
                 name = ctrl.Name
                 rect = ctrl.BoundingRectangle
-                if name and rect and rect.width() > 0 and rect.height() > 0:
+                if name and rect and rect.width() > 0 and rect.height() > 0 \
+                        and _meaningful(name.strip()):
                     out.append({"text": name.strip(),
                                 "x": rect.left + rect.width() // 2,
                                 "y": rect.top + rect.height() // 2,
@@ -82,7 +95,7 @@ async def _ocr_async(png_bytes: bytes, img_w: int, img_h: int) -> list:
         for w in line.words:
             r = w.bounding_rect
             text = w.text.strip()
-            if not text:
+            if not text or not _meaningful(text):
                 continue
             items.append({"text": text,
                           "x": int(r.x * sx + r.width * sx / 2),
@@ -109,22 +122,26 @@ def locate_elements(png_bytes: bytes, img_w: int, img_h: int) -> list:
 def find_element(target: str, elements: list) -> tuple:
     """模糊匹配目标文本，返回其中心坐标 (x, y)；未命中返回 None。
 
-    匹配优先级：完全相等 > 目标含于元素名 > 元素名含于目标。
+    匹配优先级：完全相等 > 目标含于元素名 > 元素名含于目标 > 任一分词命中。
+    分词匹配支持多词目标（如"保存 文件"），提高复杂页面（多个同类按钮）的命中率。
     """
     if not target:
         return None
     t = _norm(target)
+    tokens = [w for w in re.split(r"[^\w\u4e00-\u9fff]+", t) if w]
     best, best_score = None, -1
     for e in elements:
         n = _norm(e.get("text", ""))
         if not n:
             continue
         if n == t:
-            score = 3
+            score = 100
         elif t in n:
-            score = 2
+            score = 60
         elif n in t:
-            score = 1
+            score = 50
+        elif tokens and any(tok and tok in n for tok in tokens):
+            score = 30
         else:
             continue
         if score > best_score:
@@ -132,8 +149,8 @@ def find_element(target: str, elements: list) -> tuple:
     return (best["x"], best["y"]) if best else None
 
 
-def summarize(elements: list, limit: int = 40) -> str:
-    """把定位到的元素压缩成模型可读的文本清单（避免超长）。"""
+def summarize(elements: list, limit: int = 60) -> str:
+    """把定位到的元素压缩成模型可读的文本清单（复杂页面元素多，limit 放宽到 60）。"""
     rows = []
     for e in elements[:limit]:
         rows.append(f"「{e['text']}」@({e['x']},{e['y']})")

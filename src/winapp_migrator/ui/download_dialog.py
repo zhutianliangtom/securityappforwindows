@@ -11,7 +11,7 @@ import time
 from pathlib import Path
 from typing import Dict, List, Optional
 
-from PyQt6.QtCore import Qt, QTimer, QSettings
+from PyQt6.QtCore import Qt, QSize, QTimer, QSettings
 from PyQt6.QtGui import QIcon
 from PyQt6.QtWidgets import (
     QDialog, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit,
@@ -84,7 +84,8 @@ class _TaskRow(QWidget):
         if status == "downloading":
             self.cancel_btn.setVisible(True)
             self.cancel_btn.setText("取消")
-            info = f"⏳ 下载中 · {_fmt_size(done)} / {_fmt_size(total)}"
+            mode_txt = "16 线程分段" if snap.get("mode") == "multi" else "单线程"
+            info = f"⏳ 下载中 · {_fmt_size(done)} / {_fmt_size(total)} · {mode_txt}"
             if speed > 0:
                 info += f" · {_fmt_size(int(speed))}/s"
         elif status == "done":
@@ -196,7 +197,7 @@ class DownloadDialog(QDialog):
 
         item = QListWidgetItem(self.task_list)
         row = _TaskRow(task, self._cancel_task)
-        item.setSizeHint(row.sizeHint())
+        item.setSizeHint(QSize(0, 92))  # 固定行高，避免行内控件重叠
         self.task_list.addItem(item)
         self.task_list.setItemWidget(item, row)
         self._rows[id(task)] = row

@@ -17,7 +17,7 @@ from typing import Optional
 DEFAULT_SEGMENTS = 16
 MIN_SEGMENT_BYTES = 1024 * 1024   # 小于 1MB 不分段（分片开销大于收益）
 SEGMENT_RETRY = 2                 # 每段失败重试次数
-READ_CHUNK = 256 * 1024
+READ_CHUNK = 1024 * 1024          # 1MB 读缓冲，减少锁竞争与 IO 次数
 _TIMEOUT = 60
 _UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
        "(KHTML, like Gecko) Chrome/120.0 Safari/537.36")
@@ -54,6 +54,7 @@ class DownloadTask:
         self.done = 0                 # 已下载字节
         self.status = "pending"       # pending/downloading/done/error/canceled
         self.error = ""
+        self.mode = "single"          # multi=分段并行 / single=单线程（探测后更新）
         self._segments = segments
         self._cancel = threading.Event()
         self._lock = threading.Lock()
@@ -85,6 +86,7 @@ class DownloadTask:
             return {
                 "status": self.status, "total": self.total, "done": self.done,
                 "filename": self.filename, "path": self.path, "error": self.error,
+                "mode": self.mode,
             }
 
     @property
@@ -130,8 +132,10 @@ class DownloadTask:
             self._set_status("downloading")
             range_ok = self._probe_head() or self._probe_range()
             if not range_ok or self.total <= MIN_SEGMENT_BYTES:
+                self.mode = "single"
                 self._download_single()
             else:
+                self.mode = "multi"
                 self._download_multi()
         except urllib.error.HTTPError as e:
             self._set_status("error", f"HTTP {e.code} {e.reason}")

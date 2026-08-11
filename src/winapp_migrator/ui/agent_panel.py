@@ -1148,11 +1148,16 @@ class AgentPanel(QDialog):
     def resizeEvent(self, e):
         super().resizeEvent(e)
         mw = self._bubble_max_width()
+        s = self._font_scale()
         for b in self._bubble_widgets:
             try:
                 b.setMaximumWidth(mw)
+                src = b.property("rich_src")   # 用户富文本气泡（含图片）随全屏放大
+                if src:
+                    b.setText(self._scale_user_html(src, s))
             except RuntimeError:
                 pass
+        self._refresh_ai_html()   # AI 气泡字体/图片随全屏缩放系数重渲染
 
     def showEvent(self, e):
         super().showEvent(e)
@@ -1277,20 +1282,32 @@ class AgentPanel(QDialog):
         except RuntimeError:
             return False
 
+    def _font_scale(self) -> float:
+        """全屏时排版自适应：气泡最大宽度相对基准 560 的缩放系数（1.0 ~ 1.6）"""
+        return min(1.6, max(1.0, self._bubble_max_width() / 560.0))
+
+    def _scale_user_html(self, src: str, s: float) -> str:
+        """把用户气泡原始富文本按缩放系数放大（字号 14px、图片 200px）"""
+        return src.replace("font-size:14px", f"font-size:{int(14 * s)}px") \
+                  .replace('width="200"', f'width="{int(200 * s)}"')
+
     def _refresh_ai_html(self):
         if self._ai_bubble is None:
             return
+        s = self._font_scale()
+        f_main, f_dim, f_sm, f_op = int(14 * s), int(12 * s), int(11 * s), int(13 * s)
+        img_w = int(240 * s)
         parts = []
         for seg in self._segments:
             t = seg["type"]
             if t == "think":
-                parts.append(f'<div style="color:{TEXT_DIM};font-size:12px;font-style:italic;">'
+                parts.append(f'<div style="color:{TEXT_DIM};font-size:{f_sm}px;font-style:italic;">'
                              f'{seg["html"]}</div>')
             elif t == "op":
-                parts.append(f'<div style="color:{ACCENT};font-size:13px;'
+                parts.append(f'<div style="color:{ACCENT};font-size:{f_op}px;'
                              f'font-family:Consolas;">{seg["html"]}</div>')
             elif t == "result":
-                parts.append(f'<div style="color:{TEXT_DIM};font-size:13px;font-family:Consolas;'
+                parts.append(f'<div style="color:{TEXT_DIM};font-size:{f_op}px;font-family:Consolas;'
                              f'border-left:3px solid {BORDER};padding:2px 10px;margin:2px 0 4px 14px;">'
                              f'{seg["html"]}</div>')
             elif t == "image":
@@ -1298,14 +1315,14 @@ class AgentPanel(QDialog):
                 url = seg.get("url", "")
                 cap = seg.get("caption", "已截屏")
                 parts.append(
-                    f'<div style="color:{TEXT_DIM};font-size:11px;margin-top:6px;">{_esc(cap)}</div>'
-                    f'<img src="{url}" width="240" style="border-radius:8px;display:block;'
-                    'margin:4px 0 2px 0;">')
+                    f'<div style="color:{TEXT_DIM};font-size:{f_sm}px;margin-top:6px;">{_esc(cap)}</div>'
+                    f'<img src="{url}" width="{img_w}" style="border-radius:8px;display:block;'
+                    'margin:12px 0 12px 0;">')
             elif t == "text":
-                parts.append(f'<div style="color:{TEXT};font-size:14px;">'
+                parts.append(f'<div style="color:{TEXT};font-size:{f_main}px;">'
                              f'{_render_text(seg["raw"])}</div>')
             elif t == "mark":
-                parts.append(f'<div style="color:{TEXT_DIM};font-size:12px;">{seg["html"]}</div>')
+                parts.append(f'<div style="color:{TEXT_DIM};font-size:{f_sm}px;">{seg["html"]}</div>')
         try:
             self._ai_bubble.setText("".join(parts))
         except RuntimeError:
@@ -1328,7 +1345,7 @@ class AgentPanel(QDialog):
 
         self._reasoning_lbl = QLabel("")
         self._reasoning_lbl.setWordWrap(True)
-        self._reasoning_lbl.setMaximumWidth(560)
+        self._reasoning_lbl.setMaximumWidth(self._bubble_max_width())
         self._reasoning_lbl.setStyleSheet(
             "color: rgba(138, 155, 184, 170); font-size: 11px;"  # 半透明小字体
             "padding-left: 26px;")
@@ -1569,11 +1586,14 @@ class AgentPanel(QDialog):
 
         # 用户气泡：文字与拖拽图片一并渲染进同一气泡（图片缩小缩略图、独立成块，不挤压不窜位）
         if images:
-            parts = ([f'<div style="font-size:14px;">{_esc(text).replace(chr(10), "<br/>")}</div>']
-                     if text else [])
-            parts += [f'<img src="{u}" width="200" style="border-radius:8px;display:block;'
-                      'margin:12px 0 12px 0;">' for u in images]
-            self._add_bubble("<br/>".join(parts), "user", rich=True)
+            src = ("<br/>".join(
+                ([f'<div style="font-size:14px;">{_esc(text).replace(chr(10), "<br/>")}</div>']
+                 if text else []) +
+                [f'<img src="{u}" width="200" style="border-radius:8px;display:block;'
+                 'margin:12px 0 12px 0;">' for u in images]))
+            b = self._add_bubble(self._scale_user_html(src, self._font_scale()),
+                                 "user", rich=True)
+            b.setProperty("rich_src", src)   # 存未缩放原文，窗口全屏时按缩放系数重渲染
         else:
             self._add_bubble(text, "user")
         # 手动截屏：截图段进 AI 气泡（"已截屏"字样下方缩略图，融入主对话气泡）

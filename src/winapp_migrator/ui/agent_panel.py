@@ -1324,7 +1324,7 @@ class AgentPanel(QDialog):
                 parts.append(
                     f'<div style="color:{TEXT_DIM};font-size:{f_sm}px;margin-top:6px;">{_esc(cap)}</div>'
                     f'<img src="{url}" width="{img_w}" style="border-radius:8px;display:block;'
-                    'margin:12px 0 12px 14px;">')
+                    'margin:12px 0 12px 30px;">')
             elif t == "text":
                 parts.append(f'<div style="color:{TEXT};font-size:{f_main}px;">'
                              f'{_render_text(seg["raw"])}</div>')

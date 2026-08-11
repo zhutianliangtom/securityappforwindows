@@ -181,11 +181,15 @@ def _blocked(text: str) -> dict:
     return {"text": text, "images": []}
 
 
-def execute_tool(name: str, args: dict) -> dict:
-    """执行工具，返回 {"text", "images"}。危险操作硬拒绝（沙盒兜底）"""
+def execute_tool(name: str, args: dict, allow_dangerous: bool = False) -> dict:
+    """执行工具，返回 {"text", "images"}。
+
+    allow_dangerous=True 时放行危险操作（AskBeforeEdit 模式下用户显式确认后的授权）；
+    False 时危险操作硬拒绝（YOLO 自动放行场景的安全底线）。
+    """
     args = args or {}
     level, reason = agent_sandbox.assess_tool(name, args)
-    if level == "dangerous":
+    if level == "dangerous" and not allow_dangerous:
         return _blocked(f"[沙盒拒绝] {reason}")
 
     try:

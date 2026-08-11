@@ -31,8 +31,7 @@ BORDER = "#1E2A44"        # 边框
 TEXT = "#E6EDF7"          # 主文本
 TEXT_DIM = "#8A9BB8"      # 次要文本
 ACCENT = "#22D3EE"        # 强调（青）
-USER_BG = ("qlineargradient(x1:0, y1:0, x2:1, y2:1, "
-           "stop:0 #2563EB, stop:1 #0EA5E9)")   # 用户气泡渐变
+USER_BG = "#0EA5E9"       # 用户气泡/发送按钮底色（纯色，Qt QSS 渐变解析不稳定已弃用）
 AI_BG = "#1A2540"         # AI 气泡底色
 OK = "#34D399"
 WARN = "#FBBF24"
@@ -65,7 +64,7 @@ class _ConfirmDialog(QDialog):
         lay.setSpacing(12)
 
         risk_color = {"safe": OK, "risky": WARN, "dangerous": ERR}
-        risk_txt = {"safe": "安全（白名单）", "risky": "需谨慎", "dangerous": "危险（将被沙盒拒绝）"}
+        risk_txt = {"safe": "安全（白名单）", "risky": "需谨慎", "dangerous": "危险（确认后将执行）"}
         head = QLabel(f"AI 想执行：<b>{name}</b>　风险：<span style='color:{risk_color.get(risk, TEXT)}'>"
                       f"{risk_txt.get(risk, risk)}</span>")
         head.setStyleSheet("font-size: 14px;")
@@ -171,8 +170,7 @@ class AgentPanel(QDialog):
         top = QHBoxLayout()
         top.setSpacing(10)
         title = QLabel("⚡ AI AGENT")
-        title.setStyleSheet(f"color: {ACCENT}; font-size: 16px; font-weight: 800;"
-                            "letter-spacing: 1px;")
+        title.setStyleSheet(f"color: {ACCENT}; font-size: 16px; font-weight: 800;")
         top.addWidget(title)
 
         self.agent_combo = QComboBox()
@@ -253,6 +251,7 @@ class AgentPanel(QDialog):
 
         self.send_btn = QPushButton("🚀 发送")
         self.send_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.send_btn.setAutoDefault(False)
         self.send_btn.setMinimumHeight(42)
         self.send_btn.setMinimumWidth(96)
         self.send_btn.setStyleSheet(
@@ -265,6 +264,7 @@ class AgentPanel(QDialog):
 
         self.stop_btn = QPushButton("⏹ 停止")
         self.stop_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.stop_btn.setAutoDefault(False)
         self.stop_btn.setMinimumHeight(42)
         self.stop_btn.setMinimumWidth(88)
         self.stop_btn.setEnabled(False)
@@ -277,8 +277,8 @@ class AgentPanel(QDialog):
         bottom.addWidget(self.stop_btn)
         root.addLayout(bottom)
 
-        tip = QLabel("提示：每步屏幕操作前都会弹窗由您确认；危险命令（删除/格式化/关机等）会被沙盒拒绝。"
-                     "skills/agents/MCP 配置见 ~/.winapp_migrator/agent/")
+        tip = QLabel("提示：AskBeforeEdit 模式每步操作弹窗确认，确认后危险命令（关机/删除等）也会执行；"
+                     "YOLO 模式不弹窗，危险命令一律拒绝。skills/agents/MCP 配置见 ~/.winapp_migrator/agent/")
         tip.setStyleSheet(f"color: {TEXT_DIM}; font-size: 11px;")
         root.addWidget(tip)
 
@@ -546,9 +546,10 @@ class AgentPanel(QDialog):
 
     # ---------- 每步确认（engine 线程调用 → 信号 → 主线程弹窗） ----------
     def _confirm_tool(self, name: str, args: dict) -> bool:
-        if self._mode == "yolo":
-            return True   # YOLO 模式：无确认直行（危险命令仍由沙盒硬拒绝）
         level, reason = agent_sandbox.assess_tool(name, args)
+        if self._mode == "yolo":
+            # YOLO 无人工确认，危险命令（删除/关机等）一律拒绝，保证安全底线
+            return level != "dangerous"
         self._confirm_evt.clear()
         self.confirm_signal.emit(name, json.dumps(args, ensure_ascii=False), level)
         self._confirm_evt.wait(timeout=600)

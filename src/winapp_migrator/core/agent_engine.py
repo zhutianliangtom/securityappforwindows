@@ -118,10 +118,10 @@ class AgentEngine:
             tools.extend(self.mcp.tool_schemas())
         return tools
 
-    def _execute(self, name: str, args: dict) -> dict:
+    def _execute(self, name: str, args: dict, allow_dangerous: bool = False) -> dict:
         """执行内置或 MCP 工具，返回 {"text", "images"}"""
         if name in self._builtin_names:
-            return agent_tools.execute_tool(name, args)
+            return agent_tools.execute_tool(name, args, allow_dangerous=allow_dangerous)
         if self.mcp:
             return {"text": self.mcp.call_tool(name, args), "images": []}
         return {"text": f"[未知工具] {name}", "images": []}
@@ -180,7 +180,7 @@ class AgentEngine:
                         args = {}
                     if self.on_status:
                         self.on_status(f"待执行工具: {name}")
-                    # 每步确认（沙盒危险操作在 execute 中硬拒绝）
+                    # 每步确认：用户显式确认（AskBeforeEdit）后放行危险操作；YOLO 下危险命令在 confirm 中拒绝
                     approved = self.confirm(name, args) if self.confirm else True
                     if not approved:
                         text = "[用户拒绝执行此操作]"
@@ -188,7 +188,7 @@ class AgentEngine:
                     else:
                         if self.on_status:
                             self.on_status(f"正在执行: {name}")
-                        res = self._execute(name, args)
+                        res = self._execute(name, args, allow_dangerous=approved)
                         text, imgs = res["text"], res["images"]
                         # 操作类工具无截图时自动截屏验证（截图验证闭环）
                         if not imgs and name in _SCREEN_CHANGING:

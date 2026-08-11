@@ -36,7 +36,7 @@ AF_INET = 2
 TCP_TABLE_OWNER_PID_ALL = 5
 MIB_TCP_STATE_SYN_RCVD = 2
 MIB_TCP_STATE_SYN_SENT = 3
-MIB_IPNET_TYPE_DYNAMIC = 4
+MIB_IPNET_TYPE_DYNAMIC = 3   # Windows SDK: DYNAMIC=3, STATIC=4（写 4 会把动态网关条目全过滤导致检测失效）
 
 iphlpapi = ctypes.WinDLL("iphlpapi", use_last_error=True)
 iphlpapi.GetIpNetTable.argtypes = [ctypes.c_void_p, ctypes.POINTER(wintypes.DWORD), wintypes.BOOL]

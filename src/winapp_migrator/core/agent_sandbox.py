@@ -1,19 +1,21 @@
 """Agent 沙盒与白名单：工具调用/命令执行前的安全评估
 
-- 命令白名单：只读/诊断类命令默认放行
-- 危险黑名单：删除/格式化/关机/注册表/服务/权限等高风险命令直接拒绝
-- 路径限制：文件类操作仅允许用户目录（桌面/下载/文档/临时）
+- 命令白名单：只读/诊断类命令与普通文件操作（新建/复制/移动/删除）默认放行
+- 危险黑名单：递归/强制删除、格式化/关机/注册表/服务/权限等高风险操作直接拒绝
+- 路径限制：文件类操作拒绝系统关键目录（Windows/Program Files 等），其余路径放行
 - 评估结果分级：safe（放行）/ risky（需用户确认）/ dangerous（拒绝）
 """
 
 import os
 from pathlib import Path
 
-# 白名单：只读/诊断类命令（默认放行）
+# 白名单：只读/诊断类命令 + 普通文件操作（默认放行）
 SAFE_COMMANDS = {
     "ping", "ipconfig", "tasklist", "netstat", "systeminfo", "whoami", "ver",
     "dir", "type", "echo", "hostname", "tree", "where", "findstr", "path",
     "set", "route", "arp", "nslookup", "tracert", "getmac",
+    # 普通文件操作：新建/复制/移动/重命名/删除单文件或空目录
+    "mkdir", "md", "copy", "move", "ren", "rename", "del", "erase", "rd", "rmdir",
 }
 
 # 危险关键词（拒绝）
@@ -21,19 +23,23 @@ DANGEROUS_KW = [
     "format", "diskpart", "bcdedit", "shutdown", "restart", "taskkill /f",
     "reg delete", "reg add", "sc delete", "net user", "net localgroup",
     "takeown", "icacls", "cacls", "attrib /s /d", "rd /s", "rmdir /s",
-    "del /s", "del /f", "move /y", "xcopy", "robocopy /e /purge",
+    "del /s", "del /f", "del /q", "rd /q", "rmdir /q",
+    "move /y", "xcopy", "robocopy /e /purge",
     "powershell -enc", "powershell -e", "certutil -urlcache", "bitsadmin",
     "mshta", "wscript", "cscript", "vssadmin delete", "wmic process",
 ]
 
-# 允许访问的目录（用户数据目录），其余拒绝
-def _user_dirs() -> list:
-    home = Path.home()
-    dirs = {home, home / "Desktop", home / "Downloads", home / "Documents",
-            home / "桌面", home / "下载", home / "文档"}
-    tmp = os.environ.get("TEMP") or "/tmp"
-    dirs.add(Path(tmp))
-    return [d for d in dirs if d.exists()]
+# 系统关键目录：禁止写入/修改，防止破坏系统
+def _system_dirs() -> list:
+    drive = os.environ.get("SystemDrive", "C:")
+    root = Path(drive + "\\")   # 盘符根（C:\），避免 "C:xxx" 相对路径
+    windir = os.environ.get("WINDIR") or str(root / "Windows")
+    cands = [
+        root / "Windows", root / "Program Files", root / "Program Files (x86)",
+        root / "ProgramData", root / "PerfLogs", root / "System Volume Information",
+        Path(windir), Path(windir) / "System32",
+    ]
+    return [d for d in cands if d.exists()]
 
 
 def to_int(v) -> int:
@@ -72,19 +78,18 @@ def assess_command(cmd: str) -> tuple:
 
 
 def assess_path(path: str) -> tuple:
-    """评估文件路径。返回 (level, reason)"""
+    """评估文件路径：拒绝系统关键目录，其余路径放行。返回 (level, reason)"""
     try:
         p = Path(os.path.abspath(os.path.expandvars(os.path.expanduser(path))))
     except Exception:
         return "dangerous", "路径解析失败"
-    allowed = _user_dirs()
-    for d in allowed:
+    for d in _system_dirs():
         try:
             p.relative_to(d)
-            return "safe", ""
+            return "dangerous", f"系统关键目录禁止操作: {d}"
         except ValueError:
             continue
-    return "dangerous", f"路径不在允许目录内: {path}"
+    return "safe", ""
 
 
 def assess_tool(name: str, args: dict) -> tuple:

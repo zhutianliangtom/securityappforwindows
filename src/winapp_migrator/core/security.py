@@ -16,11 +16,12 @@ import ctypes.wintypes as wintypes
 import json
 import os
 import socket
+import threading
 import time
 import winreg
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from typing import List
+from typing import List, Optional
 
 from winapp_migrator.utils.helpers import setup_logging
 
@@ -293,6 +294,84 @@ def _process_still_matches(pid: int) -> bool:
     return name in _MALICIOUS_PROCESS_NAMES
 
 
+def _has_valid_signature(path: str, timeout: float = 3.0) -> Optional[bool]:
+    """WinVerifyTrust 校验文件 Authenticode 签名有效性。
+
+    返回三态：True=有效签名；False=无有效签名；None=无法验证（超时/异常）。
+    有效签名或无法验证的正常程序都不自动处置（仅提示），避免误杀；
+    仅当确认无有效签名时才继续终止。验证放入守护线程并设超时：
+    CryptoAPI 在网络/文件受限时可能阻塞，超时视为"无法验证"保守跳过。
+    """
+    if not path:
+        return None
+    result = {}
+
+    def _verify():
+        result["ok"] = _verify_signature_sync(path)
+
+    t = threading.Thread(target=_verify, daemon=True)
+    t.start()
+    t.join(timeout)
+    if t.is_alive():
+        return None  # 验证超时 → 无法确认 → 保守跳过，不自动处置
+    return result.get("ok", False)
+
+
+def _verify_signature_sync(path: str) -> bool:
+    """同步调用 WinVerifyTrust（需在带超时的线程中运行）"""
+    try:
+        wintrust = ctypes.WinDLL("wintrust", use_last_error=True)
+
+        class WINTRUST_FILE_INFO(ctypes.Structure):
+            _fields_ = [
+                ("cbStruct", wintypes.DWORD),
+                ("pcwszFilePath", wintypes.LPCWSTR),
+                ("hFile", wintypes.HANDLE),
+                ("pgKnownSubject", ctypes.c_void_p),
+            ]
+
+        class GUID(ctypes.Structure):
+            _fields_ = [
+                ("Data1", wintypes.DWORD), ("Data2", wintypes.WORD),
+                ("Data3", wintypes.WORD), ("Data4", ctypes.c_ubyte * 8),
+            ]
+
+        class WINTRUST_DATA(ctypes.Structure):
+            _fields_ = [
+                ("cbStruct", wintypes.DWORD),
+                ("pPolicyCallbackData", ctypes.c_void_p),
+                ("pSIPClientData", ctypes.c_void_p),
+                ("dwUIChoice", wintypes.DWORD),
+                ("fdwRevocationChecks", wintypes.DWORD),
+                ("dwUnionChoice", wintypes.DWORD),
+                ("pFile", ctypes.c_void_p),
+                ("dwStateAction", wintypes.DWORD),
+                ("hWVTStateData", ctypes.c_void_p),
+                ("pwszURLReference", wintypes.LPCWSTR),
+                ("dwProvFlags", wintypes.DWORD),
+                ("dwUIContext", wintypes.DWORD),
+                ("pSignatureSettings", ctypes.c_void_p),
+            ]
+
+        WINTRUST_ACTION_GENERIC_VERIFY_V2 = GUID(
+            0x00AAC56B, 0xCD44, 0x11D0, (0x8C, 0xC2, 0x00, 0xC0, 0x4F, 0xC2, 0x95, 0xEE))
+        wintrust.WinVerifyTrust.argtypes = [wintypes.HANDLE, ctypes.POINTER(GUID), ctypes.c_void_p]
+        wintrust.WinVerifyTrust.restype = ctypes.c_long
+
+        file_info = WINTRUST_FILE_INFO(ctypes.sizeof(WINTRUST_FILE_INFO), path, None, None)
+        data = WINTRUST_DATA()
+        data.cbStruct = ctypes.sizeof(WINTRUST_DATA)
+        data.dwUnionChoice = 1          # WTD_CHOICE_FILE
+        data.pFile = ctypes.cast(ctypes.pointer(file_info), ctypes.c_void_p)
+        data.dwStateAction = 0          # WTD_STATEACTION_IGNORE
+        # 离线校验：禁用吊销联网检查 + 仅用缓存 URL，避免卡在网络请求上
+        data.dwProvFlags = 0x00000010 | 0x00000800  # WTD_REVOCATION_CHECK_NONE | WTD_CACHE_ONLY_URL_RETRIEVAL
+        return wintrust.WinVerifyTrust(None, ctypes.byref(WINTRUST_ACTION_GENERIC_VERIFY_V2),
+                                       ctypes.byref(data)) == 0
+    except Exception:
+        return False
+
+
 def _process_path(pid: int) -> str:
     """获取进程显示路径：优先读目标进程 PEB.ImagePathName（含伪装值，
     恶意软件常篡改 PEB 使显示路径/命令行暴露特征名），失败回退真实路径。
@@ -423,6 +502,7 @@ class SecurityScanner:
 
         进程名（Name）与可执行路径文件名（ExecutablePath）任一命中特征库即告警：
         恶意软件常伪装进程名（PEB 篡改），但可执行路径往往暴露矿机/木马文件名。
+        名称命中的条目必须补查真实路径：路径为空或位于系统目录时不处置，避免误杀系统组件。
         """
         all_procs = _enum_processes()
         if not all_procs:
@@ -433,7 +513,9 @@ class SecurityScanner:
         for p in all_procs:
             name = (p["name"] or "").lower()
             if self._is_malicious_name(name):
-                out.append({"pid": p["pid"], "name": p["name"], "path": ""})
+                real = _real_process_path(p["pid"])
+                if real and self._not_system(real):  # 路径为空或系统目录内 → 跳过
+                    out.append({"pid": p["pid"], "name": p["name"], "path": real})
             else:
                 pending.append(p)
 
@@ -441,10 +523,10 @@ class SecurityScanner:
         if pending:
             with ThreadPoolExecutor(max_workers=8) as pool:
                 for p, path in zip(pending, pool.map(_process_path, [q["pid"] for q in pending])):
-                    if self._malicious_path(path):
+                    if self._malicious_path(path) and self._not_system(path):
                         out.append({"pid": p["pid"], "name": p["name"], "path": path})
 
-        return [e for e in out if self._not_system(e["path"] or e["name"])]
+        return out
 
     @staticmethod
     def _is_malicious_name(name: str) -> bool:
@@ -613,6 +695,7 @@ class SecurityScanner:
             "killed": [],      # 已结束的恶意进程
             "removed": [],     # 已删除的恶意启动项
             "failed": [],      # 检测到但清理失败（仍需通知用户）
+            "signed": [],      # 签名有效的同名进程（仅提示不处置）
             "network": None,
             "risk": False,
         }
@@ -621,6 +704,13 @@ class SecurityScanner:
         for p in self.scan_processes():
             if not _process_still_matches(p["pid"]):
                 continue  # 进程已退出或 PID 被复用，放弃处置避免误杀
+            # 签名校验：有效签名或无法验证（超时/受限）均不自动处置，仅提示
+            real = _real_process_path(p["pid"])
+            sig = _has_valid_signature(real) if real else None
+            if sig is not False:
+                tag = "签名有效" if sig is True else "签名验证超时"
+                summary["signed"].append(f"{p['name']} (PID {p['pid']})（{tag}，跳过）")
+                continue
             self._record_process(p)
             if _terminate_process(p["pid"]):
                 summary["killed"].append(f"{p['name']} (PID {p['pid']})")

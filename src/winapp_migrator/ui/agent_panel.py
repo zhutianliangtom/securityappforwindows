@@ -27,7 +27,7 @@ from PyQt6.QtWidgets import (
     QVBoxLayout, QHBoxLayout, QMessageBox, QFormLayout, QWidget,
     QApplication, QStyle, QListWidget, QGraphicsOpacityEffect,
     QCompleter, QRadioButton, QCheckBox, QFileIconProvider, QListWidgetItem,
-    QStackedWidget,
+    QStackedWidget, QMenu,
 )
 
 from winapp_migrator.core import agent_llm, agent_engine, agent_skills, agent_sandbox, agent_tools, agent_screen
@@ -749,6 +749,9 @@ class AgentPanel(QDialog):
         self.session_combo.setMinimumWidth(110)
         self.session_combo.setMaximumWidth(180)
         self.session_combo.currentIndexChanged.connect(self._on_session_selected)
+        # 下拉列表右键菜单：删除对话
+        self.session_combo.view().setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.session_combo.view().customContextMenuRequested.connect(self._on_session_context_menu)
         top.addWidget(self.session_combo)
 
         self.new_btn = QPushButton(_std_icon(QStyle.StandardPixmap.SP_FileDialogNewFolder), "新")
@@ -1776,6 +1779,59 @@ class AgentPanel(QDialog):
                 pass
         lst = [x for x in self._load_session_list() if x.get("id") != sid]
         self._save_session_list(lst)
+
+    def _on_session_context_menu(self, pos):
+        """对话下拉列表右键菜单：提供删除对话入口"""
+        view = self.session_combo.view()
+        idx = view.indexAt(pos)
+        if not idx.isValid():
+            return
+        sid = self.session_combo.itemData(idx.row())
+        if not sid:
+            return
+        name = self.session_combo.itemText(idx.row())
+        menu = QMenu(self)
+        del_act = menu.addAction(f"删除对话「{name}」")
+        if menu.exec(view.viewport().mapToGlobal(pos)) == del_act:
+            self._remove_session(sid, name)
+
+    def _remove_session(self, sid: str, name: str):
+        """右键删除对话：确认后删除文件；若删除的是当前对话则清理并切到最近对话/新建"""
+        if not self._confirm_box("永久删除对话",
+                                 f"确定永久删除对话「{name}」吗？\n所有记录将无法恢复！"):
+            return
+        self._delete_session(sid)
+        if sid == self._session_id:
+            # 删除当前对话：停止引擎并清理内存（_session_id 先置空，防止切会话时复活文件）
+            if self._engine:
+                self._engine.clear_history()
+                self._engine.clear_context()
+                if self._engine._thread and self._engine._thread.is_alive():
+                    self._engine.stop()
+            self._session_id = None
+            self._segments = []
+            self._user_msgs = []
+            self._ai_bubble = None
+            self._bubble_widgets = []
+            self._hide_spinner()
+            self._stop_button_anim()
+            self._task_active = False
+            self._user_stopped = False
+            self._end_badge_shown = False
+            self._clear_attachments()
+            self.cmd_list.hide()
+            while self.msg_lay.count() > 1:
+                item = self.msg_lay.takeAt(0)
+                self._free_layout_item(item)
+            lst = self._load_session_list()
+            if lst:
+                lst.sort(key=lambda s: s.get("updated", 0))
+                self._switch_to(lst[-1]["id"])
+            else:
+                self._new_session()
+        else:
+            self._refresh_session_combo()
+        self._add_status(f"已删除对话「{name}」", TEXT_DIM)
 
     def _confirm_box(self, title: str, text: str) -> bool:
         """暗色主题确认框（白色字体），点"是"返回 True，点"否"返回 False"""

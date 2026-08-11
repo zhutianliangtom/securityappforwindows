@@ -36,6 +36,21 @@ def _user_dirs() -> list:
     return [d for d in dirs if d.exists()]
 
 
+def to_int(v) -> int:
+    """健壮数值转换：容忍 LLM 返回的 '16, 980' 等字符串，取第一个数字"""
+    if isinstance(v, bool):
+        return int(v)
+    if isinstance(v, (int, float)):
+        return int(v)
+    s = str(v).strip().replace(",", " ").replace("，", " ").replace("px", "")
+    for tok in s.split():
+        try:
+            return int(float(tok))
+        except ValueError:
+            continue
+    return 0
+
+
 def assess_command(cmd: str) -> tuple:
     """评估命令。返回 (level, reason)，level ∈ safe/risky/dangerous"""
     cmd = (cmd or "").strip()
@@ -86,6 +101,6 @@ def assess_tool(name: str, args: dict) -> tuple:
         for x, y in coords:
             if x is None or y is None:
                 return "risky", "缺少坐标参数"
-            if not (0 <= int(x) < w and 0 <= int(y) < h):
+            if not (0 <= to_int(x) < w and 0 <= to_int(y) < h):
                 return "risky", f"坐标越界 ({x},{y})，屏幕 {w}x{h}"
     return "safe", ""

@@ -137,23 +137,27 @@ def execute_tool(name: str, args: dict) -> dict:
             w, h = agent_screen.screen_size()
             return {"text": f"屏幕分辨率 {w}x{h}"}
         if name == "move_mouse":
-            agent_screen.move_mouse(int(args["x"]), int(args["y"]))
-            return {"text": f"鼠标已移动到 ({args['x']}, {args['y']})", "images": []}
+            agent_screen.move_mouse(agent_sandbox.to_int(args.get("x")),
+                                    agent_sandbox.to_int(args.get("y")))
+            return {"text": f"鼠标已移动到 ({args.get('x')}, {args.get('y')})", "images": []}
         if name == "click":
-            agent_screen.click(int(args["x"]), int(args["y"]),
+            agent_screen.click(agent_sandbox.to_int(args.get("x")),
+                               agent_sandbox.to_int(args.get("y")),
                                str(args.get("button", "left")),
-                               int(args.get("clicks", 1)))
-            return {"text": f"已点击 ({args['x']}, {args['y']}) "
+                               agent_sandbox.to_int(args.get("clicks", 1)))
+            return {"text": f"已点击 ({args.get('x')}, {args.get('y')}) "
                             f"{args.get('button', 'left')} 键 x{args.get('clicks', 1)}",
                     "images": []}
         if name == "drag":
-            agent_screen.drag(int(args["x1"]), int(args["y1"]),
-                              int(args["x2"]), int(args["y2"]))
-            return {"text": f"已从 ({args['x1']},{args['y1']}) 拖到 ({args['x2']},{args['y2']})",
+            agent_screen.drag(agent_sandbox.to_int(args.get("x1")),
+                              agent_sandbox.to_int(args.get("y1")),
+                              agent_sandbox.to_int(args.get("x2")),
+                              agent_sandbox.to_int(args.get("y2")))
+            return {"text": f"已从 ({args.get('x1')},{args.get('y1')}) 拖到 ({args.get('x2')},{args.get('y2')})",
                     "images": []}
         if name == "scroll":
-            agent_screen.scroll(int(args["delta"]))
-            return {"text": f"已滚动 {args['delta']}", "images": []}
+            agent_screen.scroll(agent_sandbox.to_int(args.get("delta")))
+            return {"text": f"已滚动 {args.get('delta')}", "images": []}
         if name == "press_key":
             agent_screen.key_press(str(args["key"]))
             return {"text": f"已按键 {args['key']}", "images": []}

@@ -10,10 +10,13 @@
 特征库采用保守白名单式规则，排除系统目录，避免误杀正常软件。
 """
 
+import base64
 import ctypes
 import ctypes.wintypes as wintypes
+import json
 import os
 import socket
+import time
 import winreg
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -87,6 +90,17 @@ _FW_POLICY_KEYS = {
     "公用": r"SYSTEM\CurrentControlSet\Services\SharedAccess\Parameters\FirewallPolicy\PublicProfile",
     "域": r"SYSTEM\CurrentControlSet\Services\SharedAccess\Parameters\FirewallPolicy\DomainProfile",
 }
+
+# 隔离区（清理前备份，保证误判可恢复）
+_QUARANTINE_ROOT = Path(os.environ.get("ProgramData", os.environ.get("TEMP", "."))) / "WinAppMigrator" / "Quarantine"
+_QUARANTINE_REG = _QUARANTINE_ROOT / "startup"    # 注册表启动项备份（JSON）
+_QUARANTINE_LNK = _QUARANTINE_ROOT / "lnk"        # 启动文件夹快捷方式备份
+_QUARANTINE_LOG = _QUARANTINE_ROOT / "process"    # 被终止进程审计记录（JSON）
+
+
+def quarantine_dir() -> Path:
+    """隔离区目录（清理前的备份所在，可调用 SecurityScanner.restore_quarantine 恢复）"""
+    return _QUARANTINE_ROOT
 
 # ------------------------------------------------------------
 # Win32 API 绑定
@@ -404,27 +418,30 @@ class SecurityScanner:
 
     # ---------- 恶意启动项 ----------
     def scan_startup(self) -> List[dict]:
-        """扫描注册表 Run/RunOnce 与启动文件夹，返回 [{'where','name','command'}]"""
+        """扫描注册表 Run/RunOnce 与启动文件夹，返回 [{'where','name','command','hive','vtype'}]"""
         found: List[dict] = []
 
-        def _check_command(where: str, name: str, command: str):
+        def _check_command(where: str, name: str, command: str,
+                           hive: str = None, vtype: int = None):
             if not command:
                 return
             cmd_lower = command.lower()
             if any(m in cmd_lower for m in _MALICIOUS_STARTUP_MARKERS):
-                found.append({"where": where, "name": name, "command": command})
+                found.append({"where": where, "name": name, "command": command,
+                              "hive": hive, "vtype": vtype})
 
         for hive, key_path in _STARTUP_REG_KEYS:
+            hive_label = "HKLM" if hive == winreg.HKEY_LOCAL_MACHINE else "HKCU"
             try:
                 with winreg.OpenKey(hive, key_path) as k:
                     i = 0
                     while True:
                         try:
-                            name, value, _ = winreg.EnumValue(k, i)
+                            name, value, vtype = winreg.EnumValue(k, i)
                         except OSError:
                             break
                         i += 1
-                        _check_command(key_path, name, value)
+                        _check_command(key_path, name, value, hive_label, vtype)
             except OSError:
                 continue
 
@@ -432,30 +449,99 @@ class SecurityScanner:
             startup = base / "AppData" / "Roaming" / "Microsoft" / "Windows" / "Start Menu" / "Programs" / "Startup"
             if startup.is_dir():
                 for lnk in startup.glob("*.lnk"):
-                    _check_command(str(startup), lnk.stem, lnk.stem)
+                    _check_command(str(startup), lnk.stem, lnk.stem, "folder")
         return found
 
+    def _quarantine_startup(self, entry: dict) -> bool:
+        """删除前备份：快捷方式移动到隔离目录；注册表值写入隔离 JSON。备份失败返回 False"""
+        try:
+            if entry.get("hive") == "folder":
+                src = Path(entry["where"]) / f"{entry['name']}.lnk"
+                if not src.exists():
+                    return False
+                _QUARANTINE_LNK.mkdir(parents=True, exist_ok=True)
+                src.rename(_QUARANTINE_LNK / f"{entry['name']}_{int(time.time() * 1000)}.lnk")
+                return True
+
+            if entry.get("hive") not in ("HKLM", "HKCU"):
+                return False
+            hive = winreg.HKEY_LOCAL_MACHINE if entry["hive"] == "HKLM" else winreg.HKEY_CURRENT_USER
+            with winreg.OpenKey(hive, entry["where"], 0, winreg.KEY_QUERY_VALUE) as k:
+                data, vtype = winreg.QueryValueEx(k, entry["name"])
+            if isinstance(data, bytes):
+                data = {"kind": "bytes", "value": base64.b64encode(data).decode()}
+            else:
+                data = {"kind": "str", "value": str(data)}
+            _QUARANTINE_REG.mkdir(parents=True, exist_ok=True)
+            record = {
+                "hive": entry["hive"], "key": entry["where"], "name": entry["name"],
+                "type": vtype, "data": data,
+                "time": time.strftime("%Y-%m-%d %H:%M:%S"),
+            }
+            name_safe = entry["name"].replace("\\", "_").replace("/", "_")
+            (_QUARANTINE_REG / f"startup_{int(time.time() * 1000)}_{name_safe}.json").write_text(
+                json.dumps(record, ensure_ascii=False, indent=2), encoding="utf-8")
+            return True
+        except OSError:
+            return False
+
     def _remove_startup(self, entry: dict) -> bool:
-        """删除恶意启动项（注册表值 / 快捷方式）"""
-        for hive, key_path in _STARTUP_REG_KEYS:
+        """删除恶意启动项：先备份到隔离区（备份失败则不删，保证可恢复），再按扫描到的精确位置删除"""
+        if not self._quarantine_startup(entry):
+            return False
+        if entry.get("hive") == "folder":
+            return True  # 快捷方式已移动到隔离目录，原位置即已清除
+        if entry.get("hive") not in ("HKLM", "HKCU"):
+            return False
+        hive = winreg.HKEY_LOCAL_MACHINE if entry["hive"] == "HKLM" else winreg.HKEY_CURRENT_USER
+        try:
+            with winreg.OpenKey(hive, entry["where"], 0, winreg.KEY_SET_VALUE) as k:
+                winreg.DeleteValue(k, entry["name"])
+                return True
+        except OSError:
+            return False
+
+    def _record_process(self, proc: dict) -> None:
+        """终止进程前写入审计记录（隔离日志，误杀可追溯）"""
+        try:
+            _QUARANTINE_LOG.mkdir(parents=True, exist_ok=True)
+            record = {
+                "pid": proc["pid"], "name": proc.get("name"), "path": proc.get("path"),
+                "time": time.strftime("%Y-%m-%d %H:%M:%S"),
+            }
+            (_QUARANTINE_LOG / f"process_{proc['pid']}_{int(time.time() * 1000)}.json").write_text(
+                json.dumps(record, ensure_ascii=False, indent=2), encoding="utf-8")
+        except OSError:
+            pass
+
+    def restore_quarantine(self) -> int:
+        """从隔离区恢复被清理的启动项（进程已终止仅记录，无法恢复），返回恢复数量"""
+        restored = 0
+        for f in sorted(_QUARANTINE_REG.glob("*.json")):
             try:
-                with winreg.OpenKey(hive, key_path, 0, winreg.KEY_SET_VALUE) as k:
-                    try:
-                        winreg.DeleteValue(k, entry["name"])
-                        return True
-                    except OSError:
-                        continue
+                rec = json.loads(f.read_text(encoding="utf-8"))
+                hive = winreg.HKEY_LOCAL_MACHINE if rec.get("hive") == "HKLM" else winreg.HKEY_CURRENT_USER
+                with winreg.OpenKey(hive, rec["key"], 0, winreg.KEY_SET_VALUE) as k:
+                    data = rec["data"]
+                    value = base64.b64decode(data["value"]) if data.get("kind") == "bytes" else data["value"]
+                    winreg.SetValueEx(k, rec["name"], 0, rec.get("type", winreg.REG_SZ), value)
+                f.unlink()
+                restored += 1
+            except (OSError, KeyError, ValueError):
+                continue
+        for f in _QUARANTINE_LNK.glob("*.lnk"):
+            try:
+                name = f.stem.rsplit("_", 1)[0] + ".lnk"
+                for base in (Path.home(), Path(r"C:\Users\Public")):
+                    dst = base / "AppData" / "Roaming" / "Microsoft" / "Windows" / "Start Menu" / "Programs" / "Startup" / name
+                    if not dst.exists():
+                        dst.parent.mkdir(parents=True, exist_ok=True)
+                        f.rename(dst)
+                        restored += 1
+                        break
             except OSError:
                 continue
-        for base in (Path.home(), Path(r"C:\Users\Public")):
-            p = base / "AppData" / "Roaming" / "Microsoft" / "Windows" / "Start Menu" / "Programs" / "Startup" / f"{entry['name']}.lnk"
-            if p.exists():
-                try:
-                    p.unlink()
-                    return True
-                except OSError:
-                    continue
-        return False
+        return restored
 
     # ---------- 网络防护检查 ----------
     def check_network(self) -> dict:
@@ -481,6 +567,7 @@ class SecurityScanner:
         _enable_debug_privilege()
 
         for p in self.scan_processes():
+            self._record_process(p)
             if _terminate_process(p["pid"]):
                 summary["killed"].append(f"{p['name']} (PID {p['pid']})")
             else:

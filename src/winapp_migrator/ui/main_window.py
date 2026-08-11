@@ -25,7 +25,7 @@ from winapp_migrator.core.data_dirs import detect_data_dirs
 from winapp_migrator.core.orchestrator import MigrationOrchestrator
 from winapp_migrator.core.uninstaller import Uninstaller
 from winapp_migrator.core.memory_optimizer import optimize_memory
-from winapp_migrator.core.security import SecurityScanner
+from winapp_migrator.core.security import SecurityScanner, quarantine_dir
 from winapp_migrator.core.network_defense import NetworkDefender
 from winapp_migrator.core.execution_guard import ExecutionGuard
 
@@ -593,7 +593,7 @@ class MainWindow(QMainWindow):
         if killed:
             lines.append(f"🔴 已拦截恶意进程 {len(killed)} 个：{', '.join(killed[:3])}")
         if removed:
-            lines.append(f"🧹 已删除恶意启动项 {len(removed)} 个")
+            lines.append(f"🧹 已删除恶意启动项 {len(removed)} 个\n🗂 原值已备份隔离区：{quarantine_dir()}")
         if failed:
             lines.append(f"⚠ 检测到威胁但清理失败 {len(failed)} 项")
         net = summary.get("network")

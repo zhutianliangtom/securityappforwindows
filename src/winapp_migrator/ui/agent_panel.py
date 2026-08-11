@@ -700,6 +700,8 @@ class AgentPanel(QDialog):
         self._session_name = "新对话"  # 当前会话名称
         self._user_msgs: list = []     # 当前会话的用户消息文本（用于切换时重绘）
         self._scroll_pending = False   # 滚动调度去重标志
+        self._bubble_widgets: list = []  # 所有气泡 QLabel（窗口缩放时同步宽度）
+        self._maximized_once = False   # 首次显示即最大化（默认最大化展示）
 
         # 发送/停止按钮转圈动画
         self._send_anim_angle = 0
@@ -920,7 +922,7 @@ class AgentPanel(QDialog):
         card = QWidget()
         card.setMaximumWidth(520)
         card.setStyleSheet(
-            f"background: {PANEL}; border: 1px solid {BORDER}; border-radius: 12px;")
+            f"background: {PANEL}; border: none; border-radius: 12px;")
         cl = QVBoxLayout(card)
         cl.setContentsMargins(28, 24, 28, 24)
         cl.setSpacing(10)
@@ -1047,6 +1049,7 @@ class AgentPanel(QDialog):
         while self.msg_lay.count() > 1:  # 清空消息流（保留末尾 stretch）
             item = self.msg_lay.takeAt(0)
             self._free_layout_item(item)
+        self._bubble_widgets = []
         d = self._sessions_dir()
         eng = self._ensure_engine()
         eng.load_context(d / f"{sid}.json")
@@ -1089,6 +1092,7 @@ class AgentPanel(QDialog):
         while self.msg_lay.count() > 1:
             item = self.msg_lay.takeAt(0)
             self._free_layout_item(item)
+        self._bubble_widgets = []
         self._refresh_session_combo()
         self._update_welcome()
         self._add_status("已开启新对话，上下文与旧对话隔离", ACCENT)
@@ -1139,11 +1143,31 @@ class AgentPanel(QDialog):
         anim.setEndValue(1.0)
         anim.start(QPropertyAnimation.DeletionPolicy.DeleteWhenStopped)
 
+    def _bubble_max_width(self) -> int:
+        """聊天气泡最大宽度：随窗口自适应（至少 560，最大化时放大）"""
+        return max(560, int(self.width() * 0.72))
+
+    def resizeEvent(self, e):
+        super().resizeEvent(e)
+        mw = self._bubble_max_width()
+        for b in self._bubble_widgets:
+            try:
+                b.setMaximumWidth(mw)
+            except RuntimeError:
+                pass
+
+    def showEvent(self, e):
+        super().showEvent(e)
+        if not self._maximized_once:   # 默认最大化展示
+            self._maximized_once = True
+            QTimer.singleShot(0, self.showMaximized)
+
     def _add_bubble(self, text: str, align: str, rich: bool = False) -> QLabel:
         bubble = QLabel(text)
         bubble.setWordWrap(True)
         bubble.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-        bubble.setMaximumWidth(560)
+        bubble.setMaximumWidth(self._bubble_max_width())
+        self._bubble_widgets.append(bubble)
         if align == "user":
             # 用户消息：默认纯文本；带图片时用富文本渲染缩略图（不显示源文本）
             bubble.setTextFormat(Qt.TextFormat.RichText if rich else Qt.TextFormat.PlainText)
@@ -1639,6 +1663,7 @@ class AgentPanel(QDialog):
         while self.msg_lay.count() > 1:  # 保留末尾 stretch
             item = self.msg_lay.takeAt(0)
             self._free_layout_item(item)
+        self._bubble_widgets = []   # 清空气泡引用，避免 resizeEvent 处理已删除对象
         self.token_label.setText("tokens: 0")
         self._add_status("已清空上下文，开启新对话", TEXT_DIM)
         self._persist_current()   # 清空后同步持久化（会话内容为空）

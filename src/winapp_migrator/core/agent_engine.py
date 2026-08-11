@@ -20,7 +20,7 @@ from winapp_migrator.core.agent_screen import capture_screen_data_url
 
 # 会改变屏幕、需要执行后自动截图验证的工具
 _SCREEN_CHANGING = {"click", "drag", "scroll", "press_key", "type_text",
-                    "move_mouse", "run_command"}
+                    "move_mouse", "run_command", "virtual_desktop"}
 
 # 对话上下文持久化路径
 CONTEXT_FILE = agent_skills.CONFIG_DIR / "context.json"

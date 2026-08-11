@@ -1063,6 +1063,9 @@ class AgentPanel(QDialog):
         if segs:
             self._ensure_ai_bubble()
             self._refresh_ai_html()
+            for seg in segs:                # 截图段独立渲染为图片框
+                if seg.get("type") == "image":
+                    self._add_image_widget(seg.get("url", ""))
         self._end_badge_shown = False
         self._refresh_session_combo()
         self._update_welcome()
@@ -1268,11 +1271,7 @@ class AgentPanel(QDialog):
                 parts.append(f'<div style="color:{TEXT_DIM};font-size:13px;font-family:Consolas;'
                              f'border-left:3px solid {BORDER};padding:2px 10px;margin:2px 0 4px 14px;">'
                              f'{seg["html"]}</div>')
-            elif t == "image":
-                # 截图缩略图：位于操作输出（如"已截取屏幕"）下方，与 result 同缩进
-                parts.append(f'<img src="{seg["url"]}" width="320"'
-                             f' style="border-radius:8px;display:block;'
-                             f'margin:2px 0 6px 14px;border:1px solid {BORDER};">')
+            # image 段不渲染进气泡富文本（由 _add_image_widget 独立 QLabel 展示，避免与文字混排）
             elif t == "text":
                 parts.append(f'<div style="color:{TEXT};font-size:14px;">'
                              f'{_render_text(seg["raw"])}</div>')
@@ -1784,7 +1783,7 @@ class AgentPanel(QDialog):
         self._scroll_bottom()
 
     def _on_result(self, name: str, text: str, images: list = None):
-        """工具执行完成：操作行下方换行显示执行输出；截图工具/验证截图在其下方显示缩略图"""
+        """工具执行完成：操作行下方换行显示执行输出；截图以独立 QLabel 缩略图显示（不与文字混排）"""
         self._last_activity = time.time()
         self._ensure_ai_bubble()
         shown = (text or "").strip()
@@ -1792,11 +1791,34 @@ class AgentPanel(QDialog):
             shown = shown[:2000] + " …（输出过长已截断显示，完整内容已返回模型）"
         shown = _esc(shown).replace("\n", "<br/>")
         self._segments.append({"type": "result", "html": shown})
-        # 截图（screenshot 工具或点击等操作后的自动验证截图）以缩略图显示在操作输出下方
+        # 截图（screenshot 工具或点击等操作后的自动验证截图）用独立图片框显示在操作输出下方
         for u in images or []:
             self._segments.append({"type": "image", "url": u})
+            self._add_image_widget(u)
         self._refresh_ai_html()
         self._scroll_bottom()
+
+    def _add_image_widget(self, data_url: str):
+        """把截图渲染为独立 QLabel（QPixmap 缩略图），避免与气泡文字重叠/挤压"""
+        try:
+            b64 = data_url.partition(",")[2]
+            img = QImage.fromData(base64.b64decode(b64))
+            if img.isNull():
+                return
+            pix = QPixmap.fromImage(img).scaled(
+                320, 320, Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation)
+            lbl = QLabel()
+            lbl.setPixmap(pix)
+            lbl.setStyleSheet(
+                f"border: 1px solid {BORDER}; border-radius: 8px; padding: 2px;")
+            lbl.setMaximumWidth(400)
+            # 插入到消息流末尾（stretch 前），紧跟 AI 气泡，独立成行不挤压文字
+            self.msg_lay.insertWidget(self.msg_lay.count() - 1, lbl,
+                                      0, Qt.AlignmentFlag.AlignLeft)
+            self._scroll_bottom()
+        except Exception:
+            pass
 
     def _on_status(self, s: str):
         self._last_activity = time.time()

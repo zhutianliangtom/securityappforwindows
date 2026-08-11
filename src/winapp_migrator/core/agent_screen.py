@@ -51,6 +51,24 @@ def screen_size() -> tuple:
     return user32.GetSystemMetrics(0), user32.GetSystemMetrics(1)
 
 
+# ---- 虚拟桌面（多桌面） ----
+def virtual_desktop(action: str = "new"):
+    """Windows 虚拟桌面：模拟 Win+Ctrl 组合键，创建/切换独立工作桌面。
+    new: 新建桌面并切换过去（不影响其他桌面内容）；next/prev: 切换到下一个/上一个桌面。
+    """
+    seq = {"new": (0x5B, 0x11, 0x44),     # Win + Ctrl + D
+           "next": (0x5B, 0x11, 0x27),    # Win + Ctrl + Right
+           "prev": (0x5B, 0x11, 0x25)}    # Win + Ctrl + Left
+    keys = seq.get(action, seq["new"])
+    for vk in keys:                        # 依次按下
+        user32.keybd_event(vk, 0, 0, 0)
+        time.sleep(0.02)
+    for vk in reversed(keys):              # 逆序释放
+        user32.keybd_event(vk, 0, 0x0002, 0)
+        time.sleep(0.02)
+    time.sleep(0.5)                        # 等待桌面切换动画完成
+
+
 # ---- 鼠标 ----
 def move_mouse(x: int, y: int):
     user32.SetCursorPos(int(x), int(y))

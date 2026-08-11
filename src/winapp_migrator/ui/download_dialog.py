@@ -104,26 +104,35 @@ class _TaskRow(QWidget):
     def update_view(self, snap: dict, speed: float):
         """按任务快照刷新显示"""
         name = snap.get("display_name") or snap["filename"] \
-            or os.path.basename(snap["path"]) or self.task.url.split("/")[-1]
+            or os.path.basename(snap["path"]) \
+            or getattr(self.task, "url", "").split("/")[-1]
         self.name_label.setText(name)
         status = snap["status"]
         total, done = snap["total"], snap["done"]
         pct = int(done * 100 / total) if total > 0 else 0
         self.progress.setRange(0, 100)
         self.progress.setValue(pct)
+        is_ed2k = snap.get("mode") == "ed2k"
 
         if status == "downloading":
-            self.pause_btn.setVisible(True)
-            self.pause_btn.setEnabled(True)
-            self.pause_btn.setText("暂停")
+            if is_ed2k:
+                self.pause_btn.setVisible(False)
+                segs = int(snap.get("segments") or 1)
+                info = f"⏳ P2P 直连下载中 · {_fmt_size(done)} / {_fmt_size(total)} · {segs} 个源"
+                if speed > 0:
+                    info += f" · {_fmt_size(int(speed))}/s"
+            else:
+                self.pause_btn.setVisible(True)
+                self.pause_btn.setEnabled(True)
+                self.pause_btn.setText("暂停")
+                segs = int(snap.get("segments") or 16)
+                mode_txt = f"{segs} 线程分段" if snap.get("mode") == "multi" else "单线程"
+                info = f"⏳ 下载中 · {_fmt_size(done)} / {_fmt_size(total)} · {mode_txt}"
+                if speed > 0:
+                    info += f" · {_fmt_size(int(speed))}/s"
             self.cancel_btn.setVisible(True)
             self.cancel_btn.setEnabled(True)
             self.cancel_btn.setText("取消")
-            segs = int(snap.get("segments") or 16)
-            mode_txt = f"{segs} 线程分段" if snap.get("mode") == "multi" else "单线程"
-            info = f"⏳ 下载中 · {_fmt_size(done)} / {_fmt_size(total)} · {mode_txt}"
-            if speed > 0:
-                info += f" · {_fmt_size(int(speed))}/s"
         elif status == "paused":
             self.pause_btn.setVisible(True)
             self.pause_btn.setEnabled(True)
@@ -148,7 +157,7 @@ class _TaskRow(QWidget):
             self.cancel_btn.setVisible(False)
             info = "⏹ 已取消"
         else:  # pending
-            self.pause_btn.setVisible(True)
+            self.pause_btn.setVisible(not is_ed2k)
             self.pause_btn.setEnabled(True)
             self.pause_btn.setText("暂停")
             self.cancel_btn.setVisible(True)
@@ -237,8 +246,8 @@ class DownloadDialog(QDialog):
         )
         lay.addWidget(self.task_list, 1)
 
-        hint = QLabel("提示：支持 http/https 直链；ed2k:// 链接需填 HTTP(S) 镜像直链，下载后自动校验 MD4 哈希。"
-                      "多线程加速需服务器支持 Range，否则自动单线程")
+        hint = QLabel("提示：支持 http/https 直链；ed2k:// 链接内嵌源地址（sources）时自动 P2P 直连下载，"
+                      "否则需填 HTTP(S) 镜像直链并校验 MD4 哈希。多线程加速需服务器支持 Range，否则自动单线程")
         hint.setStyleSheet(f"font-size: 12px; color: {PALETTE['text_secondary']};")
         lay.addWidget(hint)
 
@@ -257,32 +266,41 @@ class DownloadDialog(QDialog):
         url = "".join(self.url_edit.text().split())  # 清理所有空白/换行
         md4 = ""
         display_name = ""
+        ed2k_link = ""  # 非空表示走内置 ED2K 直连
         if url.lower().startswith("ed2k://"):
             info = parse_ed2k(url)
             if not info:
                 QMessageBox.warning(self, "提示", "ed2k 链接格式无效，应为：\ned2k://|file|文件名|大小|MD4哈希|/")
                 return
-            mirror, ok = QInputDialog.getText(
-                self, "ed2k 镜像直链",
-                f"文件：{info['filename']}\n"
-                f"大小：{_fmt_size(info['size'])}\n"
-                f"MD4：{info['md4']}\n\n"
-                "ed2k 是 P2P 协议，本工具无法直接分段加速，\n"
-                "请粘贴该文件的 HTTP/HTTPS 下载直链（下载完成后自动校验 MD4 哈希）：\n"
-                "提示：可从资源站/镜像站获取直链，没有镜像直链则无法下载 ed2k 资源。")
-            if not ok or not mirror.strip():
-                QMessageBox.information(
-                    self, "提示",
-                    "未提供镜像直链，已取消。\n\n"
-                    "ed2k 是 P2P 协议，本工具无法直接下载，\n"
-                    "必须提供该文件的 HTTP/HTTPS 镜像直链才能高速下载。")
-                return
-            url = "".join(mirror.split())  # 去空白/换行，避免粘贴带入 \n 导致 URL 非法
-            if not url.lower().startswith(("http://", "https://")):
-                QMessageBox.warning(self, "提示", "镜像直链必须以 http:// 或 https:// 开头")
-                return
-            md4 = info["md4"]
-            display_name = info["filename"]
+            full = parse_ed2k_full(url)
+            if full and full["sources"]:
+                # 链接内嵌源地址（sources）→ 内置 ED2K 直连下载（P2P）
+                md4 = info["md4"]
+                display_name = info["filename"]
+                ed2k_link = url
+            else:
+                # 无源地址 → 走 HTTP 镜像直链
+                mirror, ok = QInputDialog.getText(
+                    self, "ed2k 镜像直链",
+                    f"文件：{info['filename']}\n"
+                    f"大小：{_fmt_size(info['size'])}\n"
+                    f"MD4：{info['md4']}\n\n"
+                    "该 ed2k 链接未内嵌源地址（sources），本工具无法直连下载，\n"
+                    "请粘贴该文件的 HTTP/HTTPS 下载直链（下载完成后自动校验 MD4 哈希）：\n"
+                    "提示：可从资源站/镜像站获取直链，或使用本机迅雷/eMule 下载。")
+                if not ok or not mirror.strip():
+                    QMessageBox.information(
+                        self, "提示",
+                        "未提供镜像直链，已取消。\n\n"
+                        "ed2k 是 P2P 协议，直连需要链接内嵌源地址（sources），\n"
+                        "该链接无源地址，可提供 HTTP 镜像直链，或使用本机迅雷/eMule 下载。")
+                    return
+                url = "".join(mirror.split())  # 去空白/换行，避免粘贴带入 \n 导致 URL 非法
+                if not url.lower().startswith(("http://", "https://")):
+                    QMessageBox.warning(self, "提示", "镜像直链必须以 http:// 或 https:// 开头")
+                    return
+                md4 = info["md4"]
+                display_name = info["filename"]
         elif not url.lower().startswith(("http://", "https://")):
             QMessageBox.warning(self, "提示", "请输入以 http://、https:// 或 ed2k:// 开头的下载地址")
             return
@@ -292,7 +310,10 @@ class DownloadDialog(QDialog):
 
         segments = int(self.seg_combo.currentData())
         self._settings.setValue("download_segments", segments)
-        task = DownloadTask(url, dest, segments=segments, md4=md4, display_name=display_name)
+        if ed2k_link:
+            task = Ed2kTask(ed2k_link, dest)
+        else:
+            task = DownloadTask(url, dest, segments=segments, md4=md4, display_name=display_name)
         task.start()
         self._tasks.append(task)
 

@@ -117,7 +117,7 @@ class _MD4:
 
 
 def _md4_file(path: str) -> str:
-    """流式计算文件 MD4 哈希"""
+    """流式计算文件 MD4 哈希（整文件单次 MD4，仅内部使用）"""
     h = _MD4()
     with open(path, "rb") as f:
         while True:
@@ -125,6 +125,26 @@ def _md4_file(path: str) -> str:
             if not chunk:
                 break
             h.update(chunk)
+    return h.hexdigest()
+
+
+ED2K_PART_SIZE = 9_728_000  # ED2K 分块标准：9.28 MiB
+
+
+def _ed2k_file_hash(path: str) -> str:
+    """ED2K 文件哈希（RFC 1320 MD4 Merkle）：每 9.28MB 分块单独 MD4，
+    所有分块哈希拼接后整体再 MD4。ed2k 链接中的 MD4 即此算法结果。"""
+    part_digests = bytearray()
+    with open(path, "rb") as f:
+        while True:
+            chunk = f.read(ED2K_PART_SIZE)
+            if not chunk:
+                break
+            ph = _MD4()
+            ph.update(chunk)
+            part_digests += bytes.fromhex(ph.hexdigest())
+    h = _MD4()
+    h.update(bytes(part_digests))
     return h.hexdigest()
 
 
@@ -279,9 +299,9 @@ class DownloadTask:
             self._set_status("error", str(e))
 
     def _verify_done(self):
-        """ed2k 场景：下载完成后用 MD4 哈希校验文件完整性（校验失败保留文件并提示）"""
+        """ed2k 场景：下载完成后用 ED2K 文件哈希（MD4 Merkle）校验完整性（失败保留文件并提示）"""
         try:
-            h = _md4_file(self.path)
+            h = _ed2k_file_hash(self.path)
         except OSError as e:
             self._set_status("error", f"哈希校验失败 {e}")
             return

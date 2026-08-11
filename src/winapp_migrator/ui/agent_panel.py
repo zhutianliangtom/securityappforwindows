@@ -62,9 +62,73 @@ def _esc(s: str) -> str:
 
 
 # ---------- 轻量 Markdown → HTML 渲染 ----------
+# 数学公式（轻量 LaTeX → Unicode/HTML，零额外依赖）
+_GREEK = {
+    "alpha": "α", "beta": "β", "gamma": "γ", "delta": "δ", "epsilon": "ε",
+    "zeta": "ζ", "eta": "η", "theta": "θ", "iota": "ι", "kappa": "κ",
+    "lambda": "λ", "mu": "μ", "nu": "ν", "xi": "ξ", "pi": "π", "rho": "ρ",
+    "sigma": "σ", "tau": "τ", "upsilon": "υ", "phi": "φ", "chi": "χ",
+    "psi": "ψ", "omega": "ω",
+    "Gamma": "Γ", "Delta": "Δ", "Theta": "Θ", "Lambda": "Λ", "Xi": "Ξ",
+    "Pi": "Π", "Sigma": "Σ", "Upsilon": "Υ", "Phi": "Φ", "Psi": "Ψ",
+    "Omega": "Ω",
+}
+_MATH_SYMBOLS = {
+    "times": "×", "div": "÷", "pm": "±", "cdot": "·", "le": "≤", "leq": "≤",
+    "ge": "≥", "geq": "≥", "neq": "≠", "approx": "≈", "equiv": "≡",
+    "rightarrow": "→", "leftarrow": "←", "leftrightarrow": "↔", "infty": "∞",
+    "sum": "∑", "int": "∫", "prod": "∏", "partial": "∂", "forall": "∀",
+    "exists": "∃", "in": "∈", "notin": "∉", "subset": "⊂", "subseteq": "⊆",
+    "cup": "∪", "cap": "∩", "emptyset": "∅", "nabla": "∇", "dots": "…",
+    "cdots": "⋯", "ldots": "…", "to": "→", "ast": "∗", "propto": "∝",
+    "angle": "∠", "perp": "⊥", "parallel": "∥", "therefore": "∴",
+    "because": "∵", "mod": " mod ", "circ": "∘", "deg": "°",
+}
+
+
+def _formula_to_html(s: str) -> str:
+    """轻量 LaTeX 公式 → HTML：希腊字母/符号/分数/根号/上下标"""
+    s = s.strip()
+    # 去掉排版命令（\left \right \displaystyle \quad 等）
+    s = re.sub(r"\\(?:left|right|displaystyle|textstyle|quad|qquad|,|;|!|:)\b", "", s)
+    # 分数 → (分子)/(分母)（参数可为含花括号的表达式，非贪婪逐层处理）
+    while True:
+        m = re.search(r"\\frac\{(.+?)\}\{(.+?)\}", s)
+        if not m:
+            break
+        s = s[:m.start()] + f"({m.group(1)})/({m.group(2)})" + s[m.end():]
+    # 根号：\sqrt[n]{x} → n√(x)；\sqrt{x} → √(x)
+    s = re.sub(r"\\sqrt\[([^{}]*)\]\{(.+?)\}",
+               lambda m: f"{m.group(1)}√({m.group(2)})", s)
+    s = re.sub(r"\\sqrt\{(.+?)\}", r"√(\1)", s)
+    # 上下标：^{...} _{...} ^x _x
+    s = re.sub(r"\^\{([^{}]*)\}", r"<sup>\1</sup>", s)
+    s = re.sub(r"_\{([^{}]*)\}", r"<sub>\1</sub>", s)
+    s = re.sub(r"\^([a-zA-Z0-9])", r"<sup>\1</sup>", s)
+    s = re.sub(r"_([a-zA-Z0-9])", r"<sub>\1</sub>", s)
+    # 命名符号：\pi → π、\times → ×、\text{...} → 原文
+    s = re.sub(r"\\text\{([^{}]*)\}", r"\1", s)
+
+    def _sym(m):
+        name = m.group(1)
+        return _GREEK.get(name) or _MATH_SYMBOLS.get(name) or m.group(0)
+    s = re.sub(r"\\([a-zA-Z]+)", _sym, s)
+    return s
+
+
 def _inline_md(s: str) -> str:
-    """行内样式：`code`、**bold**、[text](url)"""
+    """行内样式：数学公式 $...$、`code`、**bold**、[text](url)"""
+    # 先提取行内公式为占位符，避免被转义/加粗等逻辑破坏
+    formulas = {}
+
+    def _cap(m):
+        idx = f"\x00F{len(formulas)}\x00"
+        formulas[idx] = _formula_to_html(m.group(1))
+        return idx
+    s = re.sub(r"\$([^$\n]+)\$", _cap, s)
     s = _esc(s)
+    for idx, html in formulas.items():
+        s = s.replace(idx, html)
     s = re.sub(r"`([^`]+)`",
                r"<code style='background:#0B1220;color:#22D3EE;padding:1px 5px;"
                r"border-radius:4px;font-family:Consolas;'>\1</code>", s)
@@ -100,6 +164,16 @@ def _md_to_html(raw: str) -> str:
             if in_list:
                 out.append("</ul>")
                 in_list = False
+            continue
+        # 块级数学公式 $$...$$（单行）→ 居中展示
+        m = re.match(r"^\$\$(.+)\$\$\s*$", s)
+        if m:
+            if in_list:
+                out.append("</ul>")
+                in_list = False
+            out.append(f"<div style='text-align:center;margin:8px 0;"
+                       f"font-family:Georgia,'Times New Roman',serif;font-size:16px;"
+                       f"color:{TEXT};'>{_formula_to_html(m.group(1))}</div>")
             continue
         m = re.match(r"^(#{1,6})\s+(.*)", s)
         if m:
@@ -565,6 +639,11 @@ class AgentPanel(QDialog):
         self.setWindowTitle("AI Agent 工具面板")
         self.setWindowIcon(QIcon(_app_icon_path()))
         self.setAcceptDrops(True)   # 支持把图片/文件拖入对话框
+        # 窗口可自由调整大小，标题栏带最小化/最大化按钮
+        self.setWindowFlags(self.windowFlags()
+                            | Qt.WindowType.WindowMinMaxButtonsHint
+                            | Qt.WindowType.WindowMaximizeButtonHint
+                            | Qt.WindowType.WindowMinimizeButtonHint)
         self.setMinimumSize(760, 600)
         self.resize(900, 660)
         self.setFont(QFont("Microsoft YaHei UI", 10))

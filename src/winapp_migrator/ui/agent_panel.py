@@ -1145,13 +1145,19 @@ class AgentPanel(QDialog):
         """聊天气泡最大宽度：随窗口自适应（至少 560，最大化时放大）"""
         return max(560, int(self.width() * 0.72))
 
+    def _bubble_min_width(self) -> int:
+        """聊天气泡最小宽度：全屏时至少覆盖半页宽（不超过最大宽度）"""
+        return min(self._bubble_max_width(), int(self.width() * 0.5))
+
     def resizeEvent(self, e):
         super().resizeEvent(e)
         mw = self._bubble_max_width()
+        mn = self._bubble_min_width()
         s = self._font_scale()
         for b in self._bubble_widgets:
             try:
                 b.setMaximumWidth(mw)
+                b.setMinimumWidth(mn)
                 src = b.property("rich_src")   # 用户富文本气泡（含图片）随全屏放大
                 if src:
                     b.setText(self._scale_user_html(src, s))
@@ -1170,6 +1176,7 @@ class AgentPanel(QDialog):
         bubble.setWordWrap(True)
         bubble.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         bubble.setMaximumWidth(self._bubble_max_width())
+        bubble.setMinimumWidth(self._bubble_min_width())
         self._bubble_widgets.append(bubble)
         if align == "user":
             # 用户消息：默认纯文本；带图片时用富文本渲染缩略图（不显示源文本）
@@ -1296,7 +1303,7 @@ class AgentPanel(QDialog):
             return
         s = self._font_scale()
         f_main, f_dim, f_sm, f_op = int(14 * s), int(12 * s), int(11 * s), int(13 * s)
-        img_w = int(240 * s)
+        img_w = max(200, int(self._bubble_max_width() * 0.4))   # 截图缩略图随气泡宽度放大（约占内容区半宽）
         parts = []
         for seg in self._segments:
             t = seg["type"]
@@ -1317,7 +1324,7 @@ class AgentPanel(QDialog):
                 parts.append(
                     f'<div style="color:{TEXT_DIM};font-size:{f_sm}px;margin-top:6px;">{_esc(cap)}</div>'
                     f'<img src="{url}" width="{img_w}" style="border-radius:8px;display:block;'
-                    'margin:12px 0 12px 0;">')
+                    'margin:12px 0 12px 14px;">')
             elif t == "text":
                 parts.append(f'<div style="color:{TEXT};font-size:{f_main}px;">'
                              f'{_render_text(seg["raw"])}</div>')

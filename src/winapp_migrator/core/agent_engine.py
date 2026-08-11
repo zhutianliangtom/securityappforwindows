@@ -40,6 +40,7 @@ class AgentEngine:
         self._messages: list = []
         self.tokens = {"prompt": 0, "completion": 0}
         self.last_estimate = 0       # 最近一次请求前的预计算（输入 tokens）
+        self.end_state = ""          # 本轮结束状态: done|stopped|error|max_rounds
         self._stop = threading.Event()
         self._thread: threading.Thread = None
         self._builtin_names = {t["function"]["name"] for t in agent_tools.TOOLS}
@@ -138,6 +139,7 @@ class AgentEngine:
 
     # ---------- 主循环 ----------
     def run(self, user_input: str, agent_name: str = ""):
+        self.end_state = ""
         system = agent_skills.build_system_prompt(agent_name)
         if not self._messages or self._messages[0].get("role") != "system":
             self._messages.insert(0, {"role": "system", "content": system})
@@ -148,6 +150,7 @@ class AgentEngine:
         try:
             for _ in range(30):  # 最多 30 轮工具循环，防死循环
                 if self._stop.is_set():
+                    self.end_state = "stopped"
                     if self.on_status:
                         self.on_status("已停止")
                     return
@@ -165,6 +168,7 @@ class AgentEngine:
 
                 calls = result["tool_calls"]
                 if not calls:
+                    self.end_state = "done"
                     self._messages.append({"role": "assistant",
                                            "content": result["text"] or "(完成)"})
                     if self.on_status:
@@ -180,6 +184,7 @@ class AgentEngine:
                 last_images = []
                 for call in calls:
                     if self._stop.is_set():
+                        self.end_state = "stopped"
                         return
                     name = call["function"]["name"]
                     try:
@@ -224,10 +229,13 @@ class AgentEngine:
                     })
             if self.on_status:
                 self.on_status("已达到最大工具轮数，自动结束")
+            self.end_state = "max_rounds"
         except agent_llm.AgentLLMError as e:
+            self.end_state = "error"
             if self.on_status:
                 self.on_status(f"错误: {e}")
         except Exception as e:
+            self.end_state = "error"
             if self.on_status:
                 self.on_status(f"错误: {e}")
 

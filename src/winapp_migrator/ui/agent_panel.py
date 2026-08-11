@@ -591,6 +591,10 @@ class AgentPanel(QDialog):
         self._spinner = None
         self._spinner_lbl = None
 
+        # 任务结束徽章状态
+        self._user_stopped = False     # 用户手动点击停止
+        self._end_badge_shown = False  # 防止重复显示结束徽章
+
         self._build_ui()
         self._connect_signals()
 
@@ -822,6 +826,19 @@ class AgentPanel(QDialog):
         self.msg_lay.insertLayout(self.msg_lay.count() - 1, row)
         self._scroll_bottom()
 
+    def _add_badge(self, text: str, color: str):
+        """AI 气泡外的任务结束徽章（Stop by user / Successfully / Error）"""
+        lbl = QLabel(text)
+        lbl.setStyleSheet(
+            f"color: {color}; border: 1px solid {color}; border-radius: 10px;"
+            "padding: 2px 12px; font-size: 12px; font-weight: 700;")
+        row = QHBoxLayout()
+        row.setContentsMargins(0, 0, 0, 0)
+        row.addWidget(lbl)
+        row.addStretch(1)
+        self.msg_lay.insertLayout(self.msg_lay.count() - 1, row)
+        self._scroll_bottom()
+
     def _scroll_bottom(self):
         # 延迟到布局更新后再滚动，否则 maximum 还是旧值导致滚不到底
         QTimer.singleShot(0, self._do_scroll_bottom)
@@ -998,6 +1015,8 @@ class AgentPanel(QDialog):
         self._add_bubble(text, "user")
         self._ai_bubble = None
         self._segments = []
+        self._user_stopped = False
+        self._end_badge_shown = False
         self.input.clear()
         self.input.setFocus()
 
@@ -1015,6 +1034,7 @@ class AgentPanel(QDialog):
     def _stop(self):
         if self._engine:
             self._engine.stop()
+        self._user_stopped = True
         self.stop_btn.setText("停止中…")
         self.stop_btn.setEnabled(False)
 
@@ -1040,6 +1060,8 @@ class AgentPanel(QDialog):
         self._segments = []
         self._hide_spinner()
         self.cmd_list.hide()
+        self._user_stopped = False
+        self._end_badge_shown = False
         while self.msg_lay.count() > 1:  # 保留末尾 stretch
             item = self.msg_lay.takeAt(0)
             self._free_layout_item(item)
@@ -1068,6 +1090,19 @@ class AgentPanel(QDialog):
             self.stop_btn.setText("停止")
             self.stop_btn.setEnabled(False)
             self._hide_spinner()
+            if not self._end_badge_shown:
+                self._end_badge_shown = True
+                self._show_end_badge()
+
+    def _show_end_badge(self):
+        """任务结束后在 AI 气泡外显示结果徽章"""
+        state = getattr(self._engine, "end_state", "") if self._engine else ""
+        if self._user_stopped or state == "stopped":
+            self._add_badge("Stop by user", WARN)
+        elif state == "done":
+            self._add_badge("Successfully", OK)
+        else:   # error / max_rounds 视为异常
+            self._add_badge("Error", ERR)
 
     # ---------- 引擎回调（信号槽，主线程） ----------
     def _ensure_text_segment(self):

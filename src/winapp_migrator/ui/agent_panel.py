@@ -838,7 +838,7 @@ class AgentPanel(QDialog):
             f"QListWidget {{ background: {PANEL}; color: {ACCENT};"
             f"border: 1px solid {BORDER}; border-radius: 8px;"
             "font-size: 13px; padding: 4px; }}"
-            f"QListWidget::item {{ padding: 4px 12px; border-radius: 6px; }}"
+            f"QListWidget::item {{ padding: 2px 12px 4px 12px; border-radius: 6px; }}"
             f"QListWidget::item:hover {{ background: #16233C; }}"
             f"QListWidget::item:selected {{ background: {ACCENT}; color: #06281B; }}")
         self.cmd_list.hide()
@@ -1558,11 +1558,12 @@ class AgentPanel(QDialog):
         return "(无参数)"
 
     def _update_cmd_suggestions(self, text: str):
-        # 空 "/" 显示全部技能/命令；否则按前缀过滤匹配（"/c" → /compact 置顶）
+        # 空 "/" 只显示全部技能（不含 /compact 等系统命令）；否则按前缀过滤所有命令（"/c" → /compact 置顶）
         if text.startswith("/"):
-            all_cmds = self._all_commands()
-            matches = all_cmds if text == "/" else \
-                [c for c in all_cmds if c.startswith(text)]
+            if text == "/":
+                matches = [f"/{s.get('name')}" for s in agent_skills.load_skills() if s.get("name")]
+            else:
+                matches = [c for c in self._all_commands() if c.startswith(text)]
             if matches:
                 self.cmd_list.clear()
                 for c in matches:
@@ -1581,7 +1582,7 @@ class AgentPanel(QDialog):
         count = self.cmd_list.count()
         row_h = self.cmd_list.sizeHintForRow(0)
         if row_h <= 0:
-            row_h = 30   # 兜底：13px 字体 + 内边距
+            row_h = 26   # 兜底：13px 字体 + item 内边距
         self.cmd_list.setFixedHeight(min(count, 5) * row_h)
 
     def _on_cmd_selected(self, item):

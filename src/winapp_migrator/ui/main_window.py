@@ -521,6 +521,16 @@ class MainWindow(QMainWindow):
         self.download_btn.clicked.connect(self._open_download_dialog)
         layout.addWidget(self.download_btn)
 
+        self.agent_btn = QPushButton("🤖 AI Agent")
+        self.agent_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.agent_btn.setMinimumHeight(40)
+        self.agent_btn.setStyleSheet(
+            f"background-color: {PALETTE['primary']}; color: white; font-weight: 700; "
+            "border: none; border-radius: 10px; padding: 10px 24px;"
+        )
+        self.agent_btn.clicked.connect(self._open_agent_panel)
+        layout.addWidget(self.agent_btn)
+
         self.security_btn = QPushButton("🛡 开启静默防护")
         self.security_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.security_btn.setMinimumHeight(40)

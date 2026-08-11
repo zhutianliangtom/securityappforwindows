@@ -22,6 +22,7 @@ a = Analysis(
         'winapp_migrator.core.memory_optimizer',
         'winapp_migrator.core.security',
         'winapp_migrator.core.network_defense',
+        'winapp_migrator.core.execution_guard',
         'winapp_migrator.ui.main_window',
         'winapp_migrator.ui.styles',
         'winapp_migrator.ui.widgets',

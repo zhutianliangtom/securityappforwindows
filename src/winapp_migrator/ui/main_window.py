@@ -27,6 +27,7 @@ from winapp_migrator.core.uninstaller import Uninstaller
 from winapp_migrator.core.memory_optimizer import optimize_memory
 from winapp_migrator.core.security import SecurityScanner
 from winapp_migrator.core.network_defense import NetworkDefender
+from winapp_migrator.core.execution_guard import ExecutionGuard
 
 logger = setup_logging()
 
@@ -231,12 +232,14 @@ class SecurityMonitorWorker(QThread):
         self._stop = threading.Event()
         self.scanner = SecurityScanner()
         self.defender = NetworkDefender()
+        self.guard = ExecutionGuard()
 
     def stop(self):
         self._stop.set()
 
     def run(self):
         tick = 0
+        self.guard.start()  # 记录基线：防护开启前已运行的进程视为可信
         while True:
             tick += 1
             try:
@@ -247,8 +250,13 @@ class SecurityMonitorWorker(QThread):
                 attacks = self.defender.check()
                 if attacks["arp_spoof"] or (attacks["flood"] and attacks["flood"]["detected"]):
                     summary["attacks"] = attacks
+                # 执行防护：新启动进程的提权/格机/无文件攻击检测
+                exec_res = self.guard.check()
+                if exec_res["blocked"] or exec_res["warned"]:
+                    summary["exec_guard"] = exec_res
                 if summary["killed"] or summary["removed"] or summary["failed"] \
-                        or summary["network"] or summary.get("attacks"):
+                        or summary["network"] or summary.get("attacks") \
+                        or summary.get("exec_guard"):
                     self.result.emit(summary)
             except Exception:
                 logger.exception("安全监控异常")
@@ -608,9 +616,16 @@ class MainWindow(QMainWindow):
                 lines.append(f"🚨 SYN 洪泛: 来源 {', '.join(flood['syn_sources'])}{banned}")
             if flood["packet_flood"]:
                 lines.append(f"🚨 TCP 洪泛: 入段速率 {flood['packet_rate']}/秒")
+        exec_res = summary.get("exec_guard") or {}
+        for b in exec_res.get("blocked") or []:
+            state = "已终止" if b.get("killed") else "终止失败"
+            lines.append(f"⛔ 执行防护已拦截 {b['name']}（{b['reason']}，{state}）")
+        for w in exec_res.get("warned") or []:
+            lines.append(f"⚠ {w['name']}：{w['reason']}")
         if not lines:
             return
-        warn = bool(killed or removed or failed or spoof or (flood and flood["detected"]))
+        warn = bool(killed or removed or failed or spoof or (flood and flood["detected"])
+                    or exec_res.get("blocked"))
         self.toast.show_toast("安全防护报告", "\n".join(lines), warn, 7000)
 
     def _on_tray_activated(self, reason):

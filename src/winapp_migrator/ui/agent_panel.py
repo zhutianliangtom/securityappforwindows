@@ -25,10 +25,10 @@ from PyQt6.QtWidgets import (
     QDialog, QLabel, QLineEdit, QPushButton, QComboBox, QScrollArea,
     QVBoxLayout, QHBoxLayout, QMessageBox, QFormLayout, QWidget,
     QApplication, QStyle, QListWidget, QGraphicsOpacityEffect,
-    QCompleter, QRadioButton, QCheckBox, QFileIconProvider,
+    QCompleter, QRadioButton, QCheckBox, QFileIconProvider, QListWidgetItem,
 )
 
-from winapp_migrator.core import agent_llm, agent_engine, agent_skills, agent_sandbox
+from winapp_migrator.core import agent_llm, agent_engine, agent_skills, agent_sandbox, agent_tools
 from winapp_migrator.core.agent_mcp import McpManager
 from winapp_migrator.core.agent_screen import capture_screen_data_url
 
@@ -1152,9 +1152,24 @@ class AgentPanel(QDialog):
     def _reconnect_mcp(self):
         threading.Thread(target=self._init_mcp, daemon=True).start()
 
-    # ---------- 命令补全（/ 展示命令 + 内联预测，不预测技能） ----------
+    # ---------- 命令补全（/ 展示全部命令 + 内联预测） ----------
     def _all_commands(self) -> list:
-        return ["/compact", "/clear"]
+        """所有可斜杠调用项：系统命令 + 全部技能 + 全部内置工具"""
+        cmds = ["/compact", "/clear"]
+        cmds += [f"/{s.get('name')}" for s in agent_skills.load_skills() if s.get("name")]
+        cmds += [f"/{t['function']['name']}" for t in agent_tools.TOOLS]
+        return cmds
+
+    def _cmd_desc(self, cmd: str) -> str:
+        """命令描述（用于命令条 tooltip）"""
+        name = cmd.lstrip("/")
+        for s in agent_skills.load_skills():
+            if s.get("name", "").strip().lower() == name.lower():
+                return s.get("description", "")
+        for t in agent_tools.TOOLS:
+            if t["function"]["name"] == name:
+                return t["function"].get("description", "")
+        return ""
 
     def _match_skill(self, text: str):
         """按名称匹配内置技能（/技能名 手动调用），未匹配返回 None"""
@@ -1164,13 +1179,44 @@ class AgentPanel(QDialog):
                 return s
         return None
 
+    def _match_tool(self, text: str):
+        """/工具名 [参数] → (name, args_text)；未匹配返回 None"""
+        body = text.lstrip("/").strip()
+        parts = body.split(None, 1)
+        if not parts:
+            return None
+        name = parts[0].strip().lower()
+        names = {t["function"]["name"] for t in agent_tools.TOOLS}
+        if name not in names:
+            return None
+        return name, (parts[1].strip() if len(parts) > 1 else "")
+
+    @staticmethod
+    def _tool_params_hint(name: str) -> str:
+        """工具参数说明（供 AI 解析斜杠参数并转为 JSON）"""
+        for t in agent_tools.TOOLS:
+            if t["function"]["name"] == name:
+                p = t["function"].get("parameters") or {}
+                props = p.get("properties") or {}
+                req = set(p.get("required") or [])
+                if not props:
+                    return "(无参数)"
+                return ", ".join(
+                    f"{k}({v.get('type', 'any')}{'必填' if k in req else '可选'})"
+                    for k, v in props.items())
+        return "(无参数)"
+
     def _update_cmd_suggestions(self, text: str):
         if text.startswith("/"):
             matches = [c for c in self._all_commands() if c.startswith(text)]
             if matches:
                 self.cmd_list.clear()
                 for c in matches:
-                    self.cmd_list.addItem(c)
+                    item = QListWidgetItem(c)
+                    desc = self._cmd_desc(c)
+                    if desc:
+                        item.setToolTip(desc)
+                    self.cmd_list.addItem(item)
                 self.cmd_list.show()
                 return
         self.cmd_list.hide()
@@ -1226,6 +1272,14 @@ class AgentPanel(QDialog):
             self._add_status(f"已调用技能「{skill.get('name')}」", ACCENT)
             text = (f"请使用技能「{skill.get('name')}」，严格按其流程执行。\n\n"
                     f"技能说明：\n{skill.get('instruction', '')}")
+        # 手动指定工具：/工具名 [参数] → 转成指令由 AI 调用对应工具
+        tool = self._match_tool(text)
+        if tool:
+            tname, targs = tool
+            self._add_status(f"已指定工具「{tname}」", ACCENT)
+            text = (f"请调用工具「{tname}」完成以下任务，参数必须按 JSON 传入。\n"
+                    f"工具参数说明：{self._tool_params_hint(tname)}\n"
+                    f"参数原始文本：{targs or '(无，可自行确定合理参数，不确定时先 ask_user 澄清)'}")
         # 非图片附件：把路径文本附加给 AI（不显示源内容），AI 可按需 read_file
         if files:
             note = "以下为拖入的附件文件，请按需读取内容：\n" + \

@@ -1013,8 +1013,13 @@ class AgentPanel(QDialog):
         if self._engine:
             self._engine.save_context(d / f"{self._session_id}.json")
         try:
+            # 持久化前过滤“已停止”提示小字，保持会话数据干净
+            clean_segments = [
+                seg for seg in self._segments
+                if not (seg.get("type") == "mark" and seg.get("html") == "已停止")
+            ]
             with open(d / f"{self._session_id}.ui.json", "w", encoding="utf-8") as f:
-                json.dump({"segments": self._segments, "user_msgs": self._user_msgs},
+                json.dump({"segments": clean_segments, "user_msgs": self._user_msgs},
                           f, ensure_ascii=False)
         except Exception:
             pass
@@ -1066,7 +1071,12 @@ class AgentPanel(QDialog):
             segs, ums = data.get("segments") or [], data.get("user_msgs") or []
         except Exception:
             pass
-        self._segments, self._user_msgs = segs, ums
+        self._user_msgs = ums
+        # 加载时过滤掉旧版本中持久化的“已停止”提示小字，避免重启后仍显示
+        self._segments = [
+            seg for seg in (segs or [])
+            if not (seg.get("type") == "mark" and seg.get("html") == "已停止")
+        ]
         for u in ums:                       # 重绘用户气泡与 AI 气泡
             self._add_bubble(u, "user")
         if segs:
@@ -1965,8 +1975,8 @@ class AgentPanel(QDialog):
             self._segments.append({"type": "mark", "html": _esc(s)})
             self._refresh_ai_html()
             self._scroll_bottom()
-        elif s == "已停止":
-            self._hide_spinner()   # 用户手动停止仅隐藏转圈，不额外输出“已停止”小字
+        elif s == "已停止" or "已停止" in s:
+            self._hide_spinner()   # 用户手动停止/包含“已停止”字样的状态均不输出小字
 
     # ---------- 每步确认（engine 线程调用 → 信号 → 主线程弹窗） ----------
     def _confirm_tool(self, name: str, args: dict) -> bool:

@@ -9,7 +9,7 @@ from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit,
     QComboBox, QPushButton, QListWidget, QListWidgetItem, QProgressBar,
     QTextEdit, QMessageBox, QApplication, QSizePolicy, QSpacerItem,
-    QFileDialog, QDialog, QScrollArea, QFrame
+    QFileDialog, QDialog, QScrollArea, QFrame, QSystemTrayIcon, QMenu
 )
 from PyQt6.QtCore import Qt, QSize, QThread, pyqtSignal, QPropertyAnimation, QEasingCurve
 from PyQt6.QtGui import QIcon, QFont, QFontDatabase
@@ -22,6 +22,7 @@ from winapp_migrator.core.data_dirs import detect_data_dirs
 from winapp_migrator.core.orchestrator import MigrationOrchestrator
 from winapp_migrator.core.uninstaller import Uninstaller
 from winapp_migrator.core.memory_optimizer import optimize_memory
+from winapp_migrator.core.security import SecurityScanner
 
 logger = setup_logging()
 
@@ -217,6 +218,40 @@ class MemoryWorker(QThread):
             self.finished.emit({"success": False, "message": str(e)})
 
 
+class SecurityMonitorWorker(QThread):
+    """常驻安全监控：定期巡检恶意进程/启动项/网络风险，自动清理后发送结果通知"""
+    result = pyqtSignal(dict)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._stop = threading.Event()
+        self.scanner = SecurityScanner()
+
+    def stop(self):
+        self._stop.set()
+
+    def run(self):
+        tick = 0
+        while not self._stop.wait(45):
+            try:
+                tick += 1
+                summary = self.scanner.sweep(
+                    include_network=(tick % 5 == 0),    # 每 ~4 分钟检查网络
+                    include_defender=(tick % 15 == 0),  # 每 ~11 分钟 Defender 快速扫描
+                )
+                if summary["killed"] or summary["removed"] or summary["network"] or summary["defender"]:
+                    self.result.emit(summary)
+            except Exception:
+                logger.exception("安全监控异常")
+
+
+def _app_icon_path() -> str:
+    """应用图标路径（打包后取 _MEIPASS/assets，开发模式取项目 assets）"""
+    if getattr(sys, "frozen", False):
+        return os.path.join(getattr(sys, "_MEIPASS", "."), "assets", "icon.ico")
+    return str(Path(__file__).resolve().parents[3] / "assets" / "icon.ico")
+
+
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -234,6 +269,9 @@ class MainWindow(QMainWindow):
         self.progress_anim = QPropertyAnimation(self.progress, b"value", self)
         self.progress_anim.setDuration(350)
         self.progress_anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+        self._security_on = False
+        self.security_worker = None
+        self._setup_tray()
         self._check_admin()
         self._start_scan()
 
@@ -442,6 +480,16 @@ class MainWindow(QMainWindow):
         self.memory_btn.clicked.connect(self._start_memory_optimize)
         layout.addWidget(self.memory_btn)
 
+        self.security_btn = QPushButton("🛡 开启静默防护")
+        self.security_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.security_btn.setMinimumHeight(40)
+        self.security_btn.setStyleSheet(
+            f"background-color: {PALETTE['primary']}; color: white; font-weight: 700; "
+            "border: none; border-radius: 10px; padding: 10px 24px;"
+        )
+        self.security_btn.clicked.connect(self._toggle_security)
+        layout.addWidget(self.security_btn)
+
         return card
 
     def _populate_drives(self):
@@ -458,6 +506,90 @@ class MainWindow(QMainWindow):
             self.drive_combo.addItem(f"{d}\\", d)
         if self.drive_combo.count() == 0:
             self.drive_combo.addItem("C:\\", "C:")
+
+    def _setup_tray(self):
+        """系统托盘：防护开启时显示图标，右键菜单可还原/退出，清理结果右下角弹窗"""
+        self.tray = QSystemTrayIcon(QIcon(_app_icon_path()), self)
+        self.tray.setToolTip("WinAppMigrator · 静默安全防护")
+        menu = QMenu(self)
+        act_show = menu.addAction("显示主窗口")
+        act_show.triggered.connect(self._restore_from_tray)
+        act_quit = menu.addAction("退出程序")
+        act_quit.triggered.connect(self.close)
+        self.tray.setContextMenu(menu)
+        self.tray.activated.connect(self._on_tray_activated)
+        self.tray.hide()
+
+    def _toggle_security(self):
+        """开启/关闭静默防护"""
+        if self._security_on:
+            if self.security_worker and self.security_worker.isRunning():
+                self.security_worker.stop()
+                self.security_worker.wait(3000)
+            self._security_on = False
+            self.security_btn.setText("🛡 开启静默防护")
+            self.tray.hide()
+            self.status_label.setText("静默防护已关闭")
+            return
+        if not is_admin():
+            QMessageBox.warning(self, "权限不足", "静默防护需要管理员权限。")
+            return
+        self.security_worker = SecurityMonitorWorker(self)
+        self.security_worker.result.connect(self._on_security_result)
+        self.security_worker.start()
+        self._security_on = True
+        self.security_btn.setText("🛡 静默防护运行中")
+        self.status_label.setText("静默防护运行中，正在后台监控…")
+        self.tray.show()
+        self.tray.showMessage(
+            "WinAppMigrator",
+            "🛡 静默防护已开启\n后台监控恶意进程、启动项与网络风险，清理后自动通知。",
+            QSystemTrayIcon.MessageIcon.Information, 4000,
+        )
+
+    def _on_security_result(self, summary: dict):
+        """安全清理/检查完成后右下角弹窗提示结果"""
+        lines = []
+        killed = summary.get("killed") or []
+        removed = summary.get("removed") or []
+        if killed:
+            lines.append(f"🔴 已结束恶意进程 {len(killed)} 个：{', '.join(killed[:3])}")
+        if removed:
+            lines.append(f"🧹 已删除恶意启动项 {len(removed)} 个")
+        net = summary.get("network")
+        if net:
+            if net.get("firewall_off"):
+                lines.append(f"⚠ 防火墙已关闭：{', '.join(net['firewall_off'])}")
+            if net.get("high_risk_listening"):
+                lines.append(f"⚠ 高危端口暴露：{', '.join(str(p) for p in net['high_risk_listening'])}")
+        defender = summary.get("defender")
+        if defender and defender.get("threats"):
+            lines.append(f"🦠 Windows Defender：{defender['message']}")
+        if not lines:
+            return
+        self.tray.showMessage(
+            "安全防护报告", "\n".join(lines),
+            QSystemTrayIcon.MessageIcon.Warning if (killed or removed) else QSystemTrayIcon.MessageIcon.Information,
+            6000,
+        )
+
+    def _on_tray_activated(self, reason):
+        if reason == QSystemTrayIcon.ActivationReason.Trigger:
+            self._restore_from_tray()
+
+    def _restore_from_tray(self):
+        self.showNormal()
+        self.raise_()
+        self.activateWindow()
+
+    def closeEvent(self, event):
+        if self.security_worker and self.security_worker.isRunning():
+            self.security_worker.stop()
+            if not self.security_worker.wait(3000):
+                self.security_worker.terminate()
+        if hasattr(self, "tray"):
+            self.tray.hide()
+        super().closeEvent(event)
 
     def _check_admin(self):
         if is_admin():

@@ -20,6 +20,7 @@ a = Analysis(
         'winapp_migrator.core.shortcut',
         'winapp_migrator.core.uninstaller',
         'winapp_migrator.core.memory_optimizer',
+        'winapp_migrator.core.security',
         'winapp_migrator.ui.main_window',
         'winapp_migrator.ui.styles',
         'winapp_migrator.ui.widgets',

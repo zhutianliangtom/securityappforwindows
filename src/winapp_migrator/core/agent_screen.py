@@ -29,16 +29,38 @@ VK = {"enter": 0x0D, "return": 0x0D, "tab": 0x09, "escape": 0x1B, "esc": 0x1B,
 
 
 # ---- 截屏 ----
+_shot_size = None   # 最近一次截图尺寸 (w, h)，供"截图像素 → 屏幕物理像素"坐标换算
+
+
 def capture_screen_png() -> bytes:
-    """全屏截图，返回 PNG 字节"""
+    """全屏截图，返回 PNG 字节；同时记录截图尺寸供坐标换算"""
+    global _shot_size
     screen = QApplication.primaryScreen()
     pix = screen.grabWindow(0)
     img = pix.toImage()
+    _shot_size = (img.width(), img.height())
     ba = QByteArray()
     buf = QBuffer(ba)
     buf.open(QIODevice.OpenModeFlag.WriteOnly)
     img.save(buf, "PNG")
     return bytes(ba)
+
+
+def screen_scale() -> tuple:
+    """截图像素 → 屏幕物理像素 的换算比例 (sx, sy)。
+
+    模型基于截图给出像素坐标；若截图分辨率与屏幕物理分辨率不一致
+    （如系统 DPI 缩放 125%/150%），点击必须按比例换算，否则系统性偏移。
+    """
+    w, h = screen_size()
+    sw, sh = _shot_size or (w, h)
+    return (w / sw if sw else 1.0), (h / sh if sh else 1.0)
+
+
+def map_to_screen(x: int, y: int) -> tuple:
+    """把模型基于最近截图给出的坐标，换算为屏幕物理像素坐标"""
+    sx, sy = screen_scale()
+    return int(x * sx), int(y * sy)
 
 
 def capture_screen_data_url() -> str:
@@ -73,10 +95,12 @@ def virtual_desktop(action: str = "new"):
 
 # ---- 鼠标 ----
 def move_mouse(x: int, y: int):
+    x, y = map_to_screen(x, y)   # 截图像素 → 屏幕物理像素（防 DPI 缩放偏移）
     user32.SetCursorPos(int(x), int(y))
 
 
 def click(x: int, y: int, button: str = "left", clicks: int = 1, interval: float = 0.1):
+    x, y = map_to_screen(x, y)
     move_mouse(x, y)
     down = {"left": _MOUSE_LEFTDOWN, "right": _MOUSE_RIGHTDOWN,
             "middle": _MOUSE_MIDDLEDOWN}[button]
@@ -90,6 +114,8 @@ def click(x: int, y: int, button: str = "left", clicks: int = 1, interval: float
 
 
 def drag(x1: int, y1: int, x2: int, y2: int, duration: float = 0.4):
+    x1, y1 = map_to_screen(x1, y1)
+    x2, y2 = map_to_screen(x2, y2)
     move_mouse(x1, y1)
     user32.mouse_event(_MOUSE_LEFTDOWN, 0, 0, 0, 0)
     time.sleep(0.05)

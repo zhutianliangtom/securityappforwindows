@@ -1891,8 +1891,16 @@ class AgentPanel(QDialog):
         if not self._segments or self._segments[-1]["type"] != "text":
             self._segments.append({"type": "text", "raw": ""})
 
+    def _stop_send_spin(self):
+        """AI 开始响应/执行后停止发送按钮转圈（任务中保持禁用，不再一直转圈误导）"""
+        if self._send_anim.isActive():
+            self._send_anim.stop()
+            self.send_btn.setIcon(_std_icon(QStyle.StandardPixmap.SP_ArrowUp))
+            self.send_btn.setText("发送")
+
     def _on_delta(self, s: str):
         self._finish_thinking()   # 开始输出正文即视为思考完成
+        self._stop_send_spin()
         self._last_activity = time.time()
         self._ensure_ai_bubble()
         self._ensure_text_segment()
@@ -1902,6 +1910,7 @@ class AgentPanel(QDialog):
 
     def _on_result(self, name: str, text: str, images: list = None):
         """工具执行完成：输出文本与截图一并渲染进 AI 气泡（截图在'已截屏'字样下方，缩略图不挤压）"""
+        self._stop_send_spin()
         self._last_activity = time.time()
         self._ensure_ai_bubble()
         shown = (text or "").strip()
@@ -1916,6 +1925,7 @@ class AgentPanel(QDialog):
         self._scroll_bottom()
 
     def _on_status(self, s: str):
+        self._stop_send_spin()
         self._last_activity = time.time()
         if s == "正在思考…":
             self._start_think()

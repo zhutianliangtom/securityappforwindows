@@ -21,6 +21,7 @@ from winapp_migrator.ui.widgets import (
     UninstallConfirmDialog, ToastNotification, SwitchButton
 )
 from winapp_migrator.ui.download_dialog import DownloadDialog
+from winapp_migrator.ui.agent_panel import AgentPanel
 from winapp_migrator.core.app_scanner import AppScanner, AppInfo
 from winapp_migrator.core.data_dirs import detect_data_dirs
 from winapp_migrator.core.orchestrator import MigrationOrchestrator
@@ -1077,6 +1078,14 @@ class MainWindow(QMainWindow):
         self._download_dialog.show()
         self._download_dialog.raise_()
         self._download_dialog.activateWindow()
+
+    def _open_agent_panel(self):
+        """打开 AI Agent 面板（单例，可同时保持打开）"""
+        if not hasattr(self, "_agent_panel") or self._agent_panel is None:
+            self._agent_panel = AgentPanel(self)
+        self._agent_panel.show()
+        self._agent_panel.raise_()
+        self._agent_panel.activateWindow()
 
     def _start_memory_optimize(self):
         """一键优化内存"""

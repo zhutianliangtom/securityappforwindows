@@ -628,7 +628,7 @@ class _AskUserDialog(QDialog):
 class AgentPanel(QDialog):
     delta_signal = pyqtSignal(str)
     status_signal = pyqtSignal(str)
-    result_signal = pyqtSignal(str, str)   # 工具名, 执行输出
+    result_signal = pyqtSignal(str, str, object)   # 工具名, 执行输出, 截图缩略图列表
     reasoning_signal = pyqtSignal(str)     # 流式思考过程增量
     confirm_signal = pyqtSignal(str, str, str)  # name, args_json, risk
     ask_signal = pyqtSignal(str)           # ask_user 提问（args_json）
@@ -1034,6 +1034,11 @@ class AgentPanel(QDialog):
                 parts.append(f'<div style="color:{TEXT_DIM};font-size:13px;font-family:Consolas;'
                              f'border-left:3px solid {BORDER};padding:2px 10px;margin:2px 0 4px 14px;">'
                              f'{seg["html"]}</div>')
+            elif t == "image":
+                # 截图缩略图：位于操作输出（如"已截取屏幕"）下方，与 result 同缩进
+                parts.append(f'<img src="{seg["url"]}" width="320"'
+                             f' style="border-radius:8px;display:block;'
+                             f'margin:2px 0 6px 14px;border:1px solid {BORDER};">')
             elif t == "text":
                 parts.append(f'<div style="color:{TEXT};font-size:14px;">'
                              f'{_render_text(seg["raw"])}</div>')
@@ -1244,7 +1249,7 @@ class AgentPanel(QDialog):
                 mcp_manager=self._mcp,
                 on_delta=lambda s: self.delta_signal.emit(s),
                 on_status=lambda s: self.status_signal.emit(s),
-                on_result=lambda n, t: self.result_signal.emit(n, t),
+                on_result=lambda n, t, im: self.result_signal.emit(n, t, im),
                 on_reasoning=lambda s: self.reasoning_signal.emit(s),
                 confirm=self._confirm_tool,
                 ask_user=self._ask_user_tool)
@@ -1534,8 +1539,8 @@ class AgentPanel(QDialog):
         self._refresh_ai_html()
         self._scroll_bottom()
 
-    def _on_result(self, name: str, text: str):
-        """工具执行完成：操作行下方换行显示执行输出"""
+    def _on_result(self, name: str, text: str, images: list = None):
+        """工具执行完成：操作行下方换行显示执行输出；截图工具/验证截图在其下方显示缩略图"""
         self._last_activity = time.time()
         self._ensure_ai_bubble()
         shown = (text or "").strip()
@@ -1543,6 +1548,9 @@ class AgentPanel(QDialog):
             shown = shown[:2000] + " …（输出过长已截断显示，完整内容已返回模型）"
         shown = _esc(shown).replace("\n", "<br/>")
         self._segments.append({"type": "result", "html": shown})
+        # 截图（screenshot 工具或点击等操作后的自动验证截图）以缩略图显示在操作输出下方
+        for u in images or []:
+            self._segments.append({"type": "image", "url": u})
         self._refresh_ai_html()
         self._scroll_bottom()
 

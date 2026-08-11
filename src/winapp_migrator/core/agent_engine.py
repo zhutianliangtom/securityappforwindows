@@ -338,14 +338,16 @@ class AgentEngine:
                             self.on_status(f"正在执行: {name}")
                         res = self._execute(name, args, allow_dangerous=approved)
                         text, imgs = res["text"], res["images"]
-                        if self.on_result:
-                            self.on_result(name, text)
-                        # 操作类工具无截图时自动截屏验证（截图验证闭环）
+                        # 操作类工具（点击/输入等）无截图时自动截屏验证（点击完成后必须截图验证闭环）
                         if not imgs and name in _SCREEN_CHANGING:
                             try:
                                 imgs = [capture_screen_data_url()]
                             except Exception:
                                 imgs = []
+                        if self.on_result:
+                            # 压缩缩略图副本给 UI 展示（原图仍喂给模型视觉验证）
+                            self.on_result(name, text,
+                                           [_compress_data_url(u, 480) for u in imgs])
                     self._messages.append({
                         "role": "tool", "tool_call_id": call["id"],
                         "content": text,   # 纯字符串更兼容（部分 API 拒绝数组 content）

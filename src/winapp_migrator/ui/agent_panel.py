@@ -23,6 +23,7 @@ from PyQt6.QtWidgets import (
     QDialog, QLabel, QLineEdit, QPushButton, QComboBox, QScrollArea,
     QVBoxLayout, QHBoxLayout, QMessageBox, QFormLayout, QWidget,
     QApplication, QStyle, QListWidget, QGraphicsOpacityEffect,
+    QCompleter, QRadioButton, QCheckBox,
 )
 
 from winapp_migrator.core import agent_llm, agent_engine, agent_skills, agent_sandbox
@@ -480,11 +481,80 @@ class _McpManagerDialog(QDialog):
             QMessageBox.warning(self, "错误", "保存 MCP 配置失败（无写入权限）")
 
 
+class _AskUserDialog(QDialog):
+    """AI 提问弹窗（TRAE 风格）：单选/多选选项或自由回答"""
+
+    def __init__(self, question: str, options: list, multi_select: bool, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("AI 询问")
+        self.setMinimumWidth(460)
+        self._answer = ""
+        self.setStyleSheet(
+            f"QDialog {{ background: {PANEL}; }}"
+            f"QLabel {{ color: {TEXT}; font-size: 13px; }}"
+            f"QRadioButton, QCheckBox {{ color: {TEXT}; font-size: 13px; spacing: 10px; }}"
+            f"QLineEdit {{ background: {BG}; color: {TEXT}; border: 1px solid {BORDER};"
+            "border-radius: 8px; padding: 8px 12px; font-size: 13px; }}"
+            f"QPushButton {{ border: none; border-radius: 8px; padding: 8px 22px;"
+            "font-weight: 700; font-size: 13px; }}")
+
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(20, 18, 20, 18)
+        lay.setSpacing(12)
+
+        q_lbl = QLabel(question)
+        q_lbl.setWordWrap(True)
+        q_lbl.setStyleSheet(f"font-size: 15px; font-weight: 700; color: {TEXT};")
+        lay.addWidget(q_lbl)
+
+        self._choice_btns = []
+        if options:
+            for opt in options:
+                b = QCheckBox(str(opt)) if multi_select else QRadioButton(str(opt))
+                b.setAutoExclusive(not multi_select)
+                self._choice_btns.append(b)
+                lay.addWidget(b)
+            self._free_input = None
+        else:
+            self._free_input = QLineEdit()
+            self._free_input.setPlaceholderText("输入你的回答…")
+            lay.addWidget(self._free_input)
+
+        btns = QHBoxLayout()
+        ok = QPushButton(_std_icon(QStyle.StandardPixmap.SP_DialogYesButton), "确定")
+        ok.setStyleSheet(f"background: {OK}; color: #06281B;")
+        ok.clicked.connect(self._accept_clicked)
+        cancel = QPushButton("取消")
+        cancel.setStyleSheet(f"background: {PANEL}; color: {TEXT};"
+                             f"border: 1px solid {BORDER};")
+        cancel.clicked.connect(self.reject)
+        for b in (ok, cancel):
+            b.setAutoDefault(False)
+        btns.addStretch(1)
+        btns.addWidget(ok)
+        btns.addWidget(cancel)
+        lay.addLayout(btns)
+
+    def _accept_clicked(self):
+        sel = [b.text() for b in self._choice_btns if b.isChecked()]
+        if sel:
+            self._answer = " / ".join(sel)
+        elif self._free_input is not None:
+            self._answer = self._free_input.text().strip()
+        if not self._answer:
+            self._answer = "（用户未作答）"
+        self.accept()
+
+    def answer(self) -> str:
+        return self._answer or "（用户取消回答）"
+
+
 class AgentPanel(QDialog):
     delta_signal = pyqtSignal(str)
     status_signal = pyqtSignal(str)
     result_signal = pyqtSignal(str, str)   # 工具名, 执行输出
     confirm_signal = pyqtSignal(str, str, str)  # name, args_json, risk
+    ask_signal = pyqtSignal(str)           # ask_user 提问（args_json）
     mcp_signal = pyqtSignal(str)
 
     def __init__(self, parent=None):
@@ -507,6 +577,8 @@ class AgentPanel(QDialog):
         self._engine: agent_engine.AgentEngine = None
         self._confirm_evt = threading.Event()
         self._confirm_result = False
+        self._ask_evt = threading.Event()
+        self._ask_result = ""
         self._mcp = McpManager()
         self._agents = agent_skills.load_agents()
 
@@ -608,17 +680,37 @@ class AgentPanel(QDialog):
         self.msg_area.setWidget(container)
         root.addWidget(self.msg_area, 1)
 
+        # 命令提示条：输入 / 时展示可用 skill/命令
+        self.cmd_list = QListWidget()
+        self.cmd_list.setMaximumHeight(112)
+        self.cmd_list.setStyleSheet(
+            f"QListWidget {{ background: {PANEL}; color: {ACCENT};"
+            f"border: 1px solid {BORDER}; border-radius: 8px;"
+            "font-size: 13px; padding: 4px; }}"
+            f"QListWidget::item {{ padding: 4px 12px; border-radius: 6px; }}"
+            f"QListWidget::item:hover {{ background: #16233C; }}"
+            f"QListWidget::item:selected {{ background: {ACCENT}; color: #06281B; }}")
+        self.cmd_list.hide()
+        self.cmd_list.itemClicked.connect(self._on_cmd_selected)
+        root.addWidget(self.cmd_list)
+
         # 输入栏
         bottom = QHBoxLayout()
         bottom.setSpacing(10)
         self.input = QLineEdit()
-        self.input.setPlaceholderText("描述任务，例如：打开记事本，输入一段文字，再截图给我看")
+        self.input.setPlaceholderText("描述任务，例如：打开记事本，输入一段文字，再截图给我看（输入 / 查看命令）")
         self.input.setMinimumHeight(42)
         self.input.setStyleSheet(
             f"QLineEdit {{ background: {PANEL}; color: {TEXT}; border: 1px solid {BORDER};"
             "border-radius: 10px; padding: 0 14px; font-size: 14px; }}"
             f"QLineEdit:focus {{ border: 1px solid #4B6BD6; }}")
         self.input.returnPressed.connect(self._send)
+        self.input.textChanged.connect(self._update_cmd_suggestions)
+        # 内联预测：输入 /com 时半透明显示 /compact 完成部分
+        self._completer = QCompleter(self._all_commands(), self)
+        self._completer.setCompletionMode(QCompleter.CompletionMode.InlineCompletion)
+        self._completer.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
+        self.input.setCompleter(self._completer)
         bottom.addWidget(self.input, 1)
 
         self.send_btn = QPushButton(_std_icon(QStyle.StandardPixmap.SP_ArrowUp), "发送")
@@ -660,6 +752,7 @@ class AgentPanel(QDialog):
         self.status_signal.connect(self._on_status)
         self.result_signal.connect(self._on_result)
         self.confirm_signal.connect(self._on_confirm)
+        self.ask_signal.connect(self._on_ask)
         self.mcp_signal.connect(self._on_mcp_status)
 
     # ---------- 执行模式 ----------
@@ -842,6 +935,31 @@ class AgentPanel(QDialog):
     def _reconnect_mcp(self):
         threading.Thread(target=self._init_mcp, daemon=True).start()
 
+    # ---------- 命令补全（/ 展示 skill/命令 + 内联预测） ----------
+    def _all_commands(self) -> list:
+        cmds = ["/compact", "/clear"]
+        for s in agent_skills.load_skills():
+            n = f"/{s.get('name', '')}".strip()
+            if n != "/":
+                cmds.append(n)
+        return cmds
+
+    def _update_cmd_suggestions(self, text: str):
+        if text.startswith("/"):
+            matches = [c for c in self._all_commands() if c.startswith(text)]
+            if matches:
+                self.cmd_list.clear()
+                for c in matches:
+                    self.cmd_list.addItem(c)
+                self.cmd_list.show()
+                return
+        self.cmd_list.hide()
+
+    def _on_cmd_selected(self, item):
+        self.input.setText(item.text())
+        self.input.setFocus()
+        self.cmd_list.hide()
+
     # ---------- 发送 / 停止 ----------
     def _llm_config(self) -> dict:
         # 模型、接口与 API Key 全部写死为 Agnes 2.5，禁止用户自定义
@@ -861,7 +979,8 @@ class AgentPanel(QDialog):
                 on_delta=lambda s: self.delta_signal.emit(s),
                 on_status=lambda s: self.status_signal.emit(s),
                 on_result=lambda n, t: self.result_signal.emit(n, t),
-                confirm=self._confirm_tool)
+                confirm=self._confirm_tool,
+                ask_user=self._ask_user_tool)
         return self._engine
 
     def _send(self):
@@ -870,6 +989,9 @@ class AgentPanel(QDialog):
             return
         if text.lower().startswith("/compact"):
             self._do_compact()
+            return
+        if text.lower().startswith("/clear"):
+            self._clear_chat()
             return
         engine = self._ensure_engine()
 
@@ -917,6 +1039,7 @@ class AgentPanel(QDialog):
         self._ai_bubble = None
         self._segments = []
         self._hide_spinner()
+        self.cmd_list.hide()
         while self.msg_lay.count() > 1:  # 保留末尾 stretch
             item = self.msg_lay.takeAt(0)
             self._free_layout_item(item)
@@ -1017,6 +1140,26 @@ class AgentPanel(QDialog):
         dlg.exec()
         self._confirm_result = dlg.result_ok
         self._confirm_evt.set()
+
+    # ---------- ask_user 提问（engine 线程 → 信号 → 主线程弹窗） ----------
+    def _ask_user_tool(self, args: dict) -> str:
+        """阻塞式提问：engine 线程等待主线程弹窗选择结果"""
+        self._ask_evt.clear()
+        self.ask_signal.emit(json.dumps(args, ensure_ascii=False))
+        self._ask_evt.wait(timeout=600)
+        return self._ask_result
+
+    def _on_ask(self, args_json: str):
+        try:
+            args = json.loads(args_json)
+        except json.JSONDecodeError:
+            args = {}
+        dlg = _AskUserDialog(str(args.get("question", "")),
+                             list(args.get("options") or []),
+                             bool(args.get("multi_select", False)), self)
+        dlg.exec()
+        self._ask_result = dlg.answer()
+        self._ask_evt.set()
 
     # ---------- 设置 ----------
     # 模型/接口/API Key 已写死，无需设置对话框

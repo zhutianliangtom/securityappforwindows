@@ -21,12 +21,14 @@ _SCREEN_CHANGING = {"click", "drag", "scroll", "press_key", "type_text",
 class AgentEngine:
     def __init__(self, llm: agent_llm.LLMClient,
                  mcp_manager=None,
-                 on_delta=None, on_status=None, on_result=None, confirm=None):
+                 on_delta=None, on_status=None, on_result=None, confirm=None,
+                 ask_user=None):
         """
         on_delta: Callable[[str], None]      流式文本增量
         on_status: Callable[[str], None]     步骤状态（如"正在思考/执行工具 click"）
         on_result: Callable[[str, str], None] 工具执行结果（工具名, 输出文本）
         confirm: Callable[[str, dict], bool] 工具执行前确认；None 表示自动放行（测试用）
+        ask_user: Callable[[dict], str]      ask_user 提问回调（阻塞式，返回用户回答）
         """
         self.llm = llm
         self.mcp = mcp_manager
@@ -34,6 +36,7 @@ class AgentEngine:
         self.on_status = on_status
         self.on_result = on_result
         self.confirm = confirm
+        self.ask_user = ask_user
         self._messages: list = []
         self.tokens = {"prompt": 0, "completion": 0}
         self.last_estimate = 0       # 最近一次请求前的预计算（输入 tokens）
@@ -122,6 +125,11 @@ class AgentEngine:
 
     def _execute(self, name: str, args: dict, allow_dangerous: bool = False) -> dict:
         """执行内置或 MCP 工具，返回 {"text", "images"}"""
+        if name == "ask_user":
+            # 提问工具：不经沙盒/确认，直接向用户提问
+            if self.ask_user:
+                return {"text": self.ask_user(args), "images": []}
+            return {"text": "[ask_user] 未接入提问面板", "images": []}
         if name in self._builtin_names:
             return agent_tools.execute_tool(name, args, allow_dangerous=allow_dangerous)
         if self.mcp:
@@ -182,8 +190,10 @@ class AgentEngine:
                         args = {}
                     if self.on_status:
                         self.on_status(f"待执行工具: {name}")
-                    # 每步确认：用户显式确认（AskBeforeEdit）后放行危险操作；YOLO 下危险命令在 confirm 中拒绝
-                    approved = self.confirm(name, args) if self.confirm else True
+                    # 每步确认：用户显式确认（AskBeforeEdit）后放行危险操作；YOLO 下危险命令在 confirm 中拒绝。
+                    # ask_user 提问工具本身无需"允许执行"确认（弹窗即用户交互）。
+                    approved = True if name == "ask_user" \
+                        else (self.confirm(name, args) if self.confirm else True)
                     if not approved:
                         text = "[用户拒绝执行此操作]"
                         imgs = []

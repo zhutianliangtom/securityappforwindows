@@ -30,6 +30,8 @@ DEFAULT_AGENTS = [
          "3. 坐标必须基于最近一次截图与 get_screen_size 的分辨率计算。",
          "4. 完成目标后总结结果，不要做多余操作。",
          "5. 读取/写入文件前必须先确认路径在用户目录内。",
+         "6. 用户需求不明确、缺少关键信息（目标文件/目标对象/期望结果）时，"
+         "必须先调用 ask_user 提问，严禁猜测执行。",
      ],
      "tool_instructions": {
          "run_command": {
@@ -159,10 +161,13 @@ def build_system_prompt(agent_name: str = "") -> str:
         if inst:
             prompt += "\n\n" + inst
     prompt += ("\n\n可用内置工具：screenshot(截屏观察)、get_screen_size(分辨率)、"
+               "ask_user(需求不明确时向用户提问)、"
                "move_mouse/click/drag/scroll(鼠标)、press_key/type_text(键盘)、"
                "run_command(白名单命令)、read_file/write_file/edit_file(读写编辑文件)、"
                "list_directory(列目录)、save_memory/load_memory(本地长期记忆)。"
                "若连接了 MCP 服务器，其工具同样可用。")
+    prompt += ("\n\n提问机制：当用户需求不明确、缺少关键信息时，必须先调用 ask_user 向用户提问"
+               "（可给出建议选项），获得明确回答后再继续执行；严禁在信息不足时猜测执行。")
     prompt += ("\n\n记忆：你有本地长期记忆文件 memory.md。遇到用户偏好、重要结论、约定、常用路径等"
                "值得长期记住的信息时，调用 save_memory 保存；新任务开始或需要回忆过往信息时，"
                "自行决定是否调用 load_memory 查看。")

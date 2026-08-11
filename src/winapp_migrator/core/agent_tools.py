@@ -39,6 +39,22 @@ TOOLS = [
     {
         "type": "function",
         "function": {
+            "name": "ask_user",
+            "description": "当用户需求不明确、缺少关键信息（如目标文件路径、目标对象、期望结果）时，"
+                           "用此工具向用户提问并等待回答。禁止在信息不足时猜测执行，必须先提问。",
+            "parameters": {"type": "object",
+                           "properties": {
+                               "question": {"type": "string", "description": "要问用户的问题（简洁明确）"},
+                               "options": {"type": "array", "items": {"type": "string"},
+                                           "description": "建议选项，用户可直接选择（可为空数组表示自由回答）"},
+                               "multi_select": {"type": "boolean",
+                                                "description": "是否允许多选，默认 false"}},
+                           "required": ["question"]},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "move_mouse",
             "description": "移动鼠标到指定像素坐标（不点击）。",
             "parameters": {"type": "object",
@@ -181,13 +197,35 @@ def _blocked(text: str) -> dict:
     return {"text": text, "images": []}
 
 
-def execute_tool(name: str, args: dict, allow_dangerous: bool = False) -> dict:
+def _ask_user(args: dict, ask_user_cb) -> dict:
+    """向用户提问（需求不明确时强制提问，禁止猜测执行）"""
+    question = str(args.get("question", "")).strip()
+    if not question:
+        return _blocked("[ask_user] 缺少问题")
+    if not ask_user_cb:
+        return _blocked("[ask_user] 未接入提问面板，请基于已有信息继续")
+    try:
+        answer = ask_user_cb({
+            "question": question,
+            "options": args.get("options") or [],
+            "multi_select": bool(args.get("multi_select", False)),
+        })
+        return {"text": f"用户回答：{answer}", "images": []}
+    except Exception as e:
+        return _blocked(f"[ask_user] 提问失败: {e}")
+
+
+def execute_tool(name: str, args: dict, allow_dangerous: bool = False,
+                 ask_user_cb=None) -> dict:
     """执行工具，返回 {"text", "images"}。
 
     allow_dangerous=True 时放行危险操作（AskBeforeEdit 模式下用户显式确认后的授权）；
     False 时危险操作硬拒绝（YOLO 自动放行场景的安全底线）。
+    ask_user_cb: Callable[[dict], str] 提问回调（阻塞式，返回用户回答文本）。
     """
     args = args or {}
+    if name == "ask_user":
+        return _ask_user(args, ask_user_cb)
     level, reason = agent_sandbox.assess_tool(name, args)
     if level == "dangerous" and not allow_dangerous:
         return _blocked(f"[沙盒拒绝] {reason}")
@@ -197,7 +235,7 @@ def execute_tool(name: str, args: dict, allow_dangerous: bool = False) -> dict:
             return {"text": "已截取屏幕", "images": [agent_screen.capture_screen_data_url()]}
         if name == "get_screen_size":
             w, h = agent_screen.screen_size()
-            return {"text": f"屏幕分辨率 {w}x{h}"}
+            return {"text": f"屏幕分辨率 {w}x{h}", "images": []}
         if name == "move_mouse":
             agent_screen.move_mouse(agent_sandbox.to_int(args.get("x")),
                                     agent_sandbox.to_int(args.get("y")))

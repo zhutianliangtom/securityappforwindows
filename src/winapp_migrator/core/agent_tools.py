@@ -292,9 +292,9 @@ def _run_command(command: str) -> dict:
                               creationflags=0x08000000)  # CREATE_NO_WINDOW
         out = (proc.stdout or "").strip()
         err = (proc.stderr or "").strip()
-        text = out[:4000]
+        text = out[:30000]
         if err:
-            text += f"\n[stderr] {err[:1000]}"
+            text += f"\n[stderr] {err[:8000]}"
         if not text:
             text = f"（命令完成，退出码 {proc.returncode}）"
         return {"text": text, "images": []}
@@ -313,7 +313,7 @@ def _read_file(path: str) -> dict:
         if size > 200 * 1024:
             return _blocked(f"[沙盒] 文件过大（{size} 字节 > 200KB）")
         with open(path, "r", encoding="utf-8", errors="replace") as f:
-            return {"text": f.read()[:4000], "images": []}
+            return {"text": f.read()[:30000], "images": []}
     except Exception as e:
         return _blocked(f"[沙盒] 读取失败: {e}")
 

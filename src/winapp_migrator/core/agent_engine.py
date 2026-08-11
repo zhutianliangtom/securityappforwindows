@@ -22,13 +22,14 @@ class AgentEngine:
     def __init__(self, llm: agent_llm.LLMClient,
                  mcp_manager=None,
                  on_delta=None, on_status=None, on_result=None, confirm=None,
-                 ask_user=None):
+                 ask_user=None, on_reasoning=None):
         """
         on_delta: Callable[[str], None]      流式文本增量
         on_status: Callable[[str], None]     步骤状态（如"正在思考/执行工具 click"）
         on_result: Callable[[str, str], None] 工具执行结果（工具名, 输出文本）
         confirm: Callable[[str, dict], bool] 工具执行前确认；None 表示自动放行（测试用）
         ask_user: Callable[[dict], str]      ask_user 提问回调（阻塞式，返回用户回答）
+        on_reasoning: Callable[[str], None]  流式思考过程增量
         """
         self.llm = llm
         self.mcp = mcp_manager
@@ -37,6 +38,7 @@ class AgentEngine:
         self.on_result = on_result
         self.confirm = confirm
         self.ask_user = ask_user
+        self.on_reasoning = on_reasoning
         self._messages: list = []
         self.tokens = {"prompt": 0, "completion": 0}
         self.last_estimate = 0       # 最近一次请求前的预计算（输入 tokens）
@@ -156,13 +158,14 @@ class AgentEngine:
                     return
                 if self.on_status:
                     self.on_status("正在思考…")
-                self._prune_images(2)  # 截图只保留最近 2 张，控制上下文体积
+                self._prune_images(6)  # 历史截图保留最近 6 张，避免过度压缩模型视觉输入
                 # tokens 预计算
                 self.last_estimate = agent_llm.estimate_tokens(
                     "".join(m["content"] for m in self._messages if isinstance(m.get("content"), str)))
                 result = self.llm.chat_stream(
                     self._messages, tools=self._all_tools(), tool_choice="auto",
                     on_delta=self.on_delta,
+                    on_reasoning=self.on_reasoning,
                     stop=lambda: self._stop.is_set())
                 self._accum_usage(result["usage"])
 
@@ -220,7 +223,7 @@ class AgentEngine:
                         "content": text,   # 纯字符串更兼容（部分 API 拒绝数组 content）
                     })
                     if imgs:
-                        last_images = [imgs[-1]]
+                        last_images = imgs   # 本轮全部截图喂给下一轮视觉验证，不做裁剪
                 if last_images:
                     self._messages.append({
                         "role": "user",

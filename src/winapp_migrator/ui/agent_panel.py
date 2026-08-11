@@ -15,6 +15,7 @@ import os
 import re
 import sys
 import threading
+import time
 from pathlib import Path
 
 from PyQt6.QtCore import Qt, QTimer, QSettings, QPropertyAnimation, pyqtSignal
@@ -553,6 +554,7 @@ class AgentPanel(QDialog):
     delta_signal = pyqtSignal(str)
     status_signal = pyqtSignal(str)
     result_signal = pyqtSignal(str, str)   # 工具名, 执行输出
+    reasoning_signal = pyqtSignal(str)     # 流式思考过程增量
     confirm_signal = pyqtSignal(str, str, str)  # name, args_json, risk
     ask_signal = pyqtSignal(str)           # ask_user 提问（args_json）
     mcp_signal = pyqtSignal(str)
@@ -590,10 +592,16 @@ class AgentPanel(QDialog):
         self._spinner_row = None
         self._spinner = None
         self._spinner_lbl = None
+        self._reasoning_lbl = None
 
         # 任务结束徽章状态
         self._user_stopped = False     # 用户手动点击停止
         self._end_badge_shown = False  # 防止重复显示结束徽章
+
+        # 流式思考过程状态
+        self._think_start = 0.0        # 本轮思考开始时间（time.time）
+        self._think_done = False       # 思考是否已完成（已输出"已思考 x 秒"）
+        self._reasoning_buf = ""       # 思考过程文本缓冲
 
         self._build_ui()
         self._connect_signals()
@@ -755,6 +763,7 @@ class AgentPanel(QDialog):
         self.delta_signal.connect(self._on_delta)
         self.status_signal.connect(self._on_status)
         self.result_signal.connect(self._on_result)
+        self.reasoning_signal.connect(self._on_reasoning)
         self.confirm_signal.connect(self._on_confirm)
         self.ask_signal.connect(self._on_ask)
         self.mcp_signal.connect(self._on_mcp_status)
@@ -887,20 +896,33 @@ class AgentPanel(QDialog):
         except RuntimeError:
             self._ai_bubble = None
 
-    # ---------- 转圈动画（AI 任务进行中） ----------
+    # ---------- 转圈动画 + 流式思考过程（AI 任务进行中） ----------
     def _ensure_spinner(self):
-        """在消息流顶部创建/显示转圈动画行（转圈 + 'AI 思考中…'）"""
+        """创建/显示转圈行：第一行[转圈+状态]，下方半透明小字流式思考过程"""
         if self._spinner_row is not None:
             return
         self._spinner = _Spinner()
         self._spinner_lbl = QLabel("AI 思考中…")
         self._spinner_lbl.setStyleSheet(f"color: {TEXT_DIM}; font-size: 12px;")
-        self._spinner_row = QHBoxLayout()
+        top = QHBoxLayout()
+        top.setContentsMargins(0, 0, 0, 0)
+        top.setSpacing(8)
+        top.addWidget(self._spinner)
+        top.addWidget(self._spinner_lbl)
+        top.addStretch(1)
+
+        self._reasoning_lbl = QLabel("")
+        self._reasoning_lbl.setWordWrap(True)
+        self._reasoning_lbl.setMaximumWidth(560)
+        self._reasoning_lbl.setStyleSheet(
+            "color: rgba(138, 155, 184, 170); font-size: 11px;"  # 半透明小字体
+            "padding-left: 26px;")
+
+        self._spinner_row = QVBoxLayout()
         self._spinner_row.setContentsMargins(0, 0, 0, 0)
-        self._spinner_row.setSpacing(8)
-        self._spinner_row.addWidget(self._spinner)
-        self._spinner_row.addWidget(self._spinner_lbl)
-        self._spinner_row.addStretch(1)
+        self._spinner_row.setSpacing(2)
+        self._spinner_row.addLayout(top)
+        self._spinner_row.addWidget(self._reasoning_lbl)
         self.msg_lay.insertLayout(self.msg_lay.count() - 1, self._spinner_row)
         self._scroll_bottom()
 
@@ -914,11 +936,40 @@ class AgentPanel(QDialog):
                 break
         self._spinner = None
         self._spinner_lbl = None
+        self._reasoning_lbl = None
         self._spinner_row = None
 
     def _start_think(self):
-        """任务进行中：显示转圈动画（持续到任务结束）"""
+        """任务进行中：显示转圈；首轮思考重置计时与思考文本"""
+        if not self._think_done:
+            self._think_start = time.time()
+            self._reasoning_buf = ""
+            if self._spinner_lbl is not None:
+                self._spinner_lbl.setText("AI 思考中…")
+            if self._reasoning_lbl is not None:
+                self._reasoning_lbl.setText("")
         self._ensure_spinner()
+
+    def _finish_thinking(self):
+        """思考完成（开始输出正文/工具调用）：状态改为'已思考 x 秒'"""
+        if self._think_done:
+            return
+        self._think_done = True
+        if self._spinner_lbl is not None and self._think_start:
+            el = int(time.time() - self._think_start)
+            self._spinner_lbl.setText(f"已思考 {el} 秒")
+
+    def _on_reasoning(self, s: str):
+        """流式思考过程：半透明小字追加显示在'思考中'下方"""
+        if self._think_done:
+            return
+        self._ensure_spinner()
+        self._reasoning_buf += s
+        shown = self._reasoning_buf
+        if len(shown) > 800:
+            shown = "…" + shown[-800:]
+        self._reasoning_lbl.setText(shown)
+        self._scroll_bottom()
 
     # ---------- MCP 初始化 ----------
     def _init_mcp(self):
@@ -952,14 +1003,9 @@ class AgentPanel(QDialog):
     def _reconnect_mcp(self):
         threading.Thread(target=self._init_mcp, daemon=True).start()
 
-    # ---------- 命令补全（/ 展示 skill/命令 + 内联预测） ----------
+    # ---------- 命令补全（/ 展示命令 + 内联预测，不预测技能） ----------
     def _all_commands(self) -> list:
-        cmds = ["/compact", "/clear"]
-        for s in agent_skills.load_skills():
-            n = f"/{s.get('name', '')}".strip()
-            if n != "/":
-                cmds.append(n)
-        return cmds
+        return ["/compact", "/clear"]
 
     def _update_cmd_suggestions(self, text: str):
         if text.startswith("/"):
@@ -996,6 +1042,7 @@ class AgentPanel(QDialog):
                 on_delta=lambda s: self.delta_signal.emit(s),
                 on_status=lambda s: self.status_signal.emit(s),
                 on_result=lambda n, t: self.result_signal.emit(n, t),
+                on_reasoning=lambda s: self.reasoning_signal.emit(s),
                 confirm=self._confirm_tool,
                 ask_user=self._ask_user_tool)
         return self._engine
@@ -1017,6 +1064,9 @@ class AgentPanel(QDialog):
         self._segments = []
         self._user_stopped = False
         self._end_badge_shown = False
+        self._think_done = False
+        self._reasoning_buf = ""
+        self._think_start = 0.0
         self.input.clear()
         self.input.setFocus()
 
@@ -1062,6 +1112,9 @@ class AgentPanel(QDialog):
         self.cmd_list.hide()
         self._user_stopped = False
         self._end_badge_shown = False
+        self._think_done = False
+        self._reasoning_buf = ""
+        self._think_start = 0.0
         while self.msg_lay.count() > 1:  # 保留末尾 stretch
             item = self.msg_lay.takeAt(0)
             self._free_layout_item(item)
@@ -1111,6 +1164,7 @@ class AgentPanel(QDialog):
             self._segments.append({"type": "text", "raw": ""})
 
     def _on_delta(self, s: str):
+        self._finish_thinking()   # 开始输出正文即视为思考完成
         self._ensure_ai_bubble()
         self._ensure_text_segment()
         self._segments[-1]["raw"] += s
@@ -1121,8 +1175,8 @@ class AgentPanel(QDialog):
         """工具执行完成：操作行下方换行显示执行输出"""
         self._ensure_ai_bubble()
         shown = (text or "").strip()
-        if len(shown) > 400:
-            shown = shown[:400] + " …（输出过长已截断）"
+        if len(shown) > 2000:
+            shown = shown[:2000] + " …（输出过长已截断显示，完整内容已返回模型）"
         shown = _esc(shown).replace("\n", "<br/>")
         self._segments.append({"type": "result", "html": shown})
         self._refresh_ai_html()

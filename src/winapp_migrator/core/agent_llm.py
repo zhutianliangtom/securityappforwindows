@@ -60,11 +60,13 @@ class LLMClient:
                     tools: Optional[list] = None,
                     tool_choice="auto",
                     on_delta: Optional[Callable[[str], None]] = None,
+                    on_reasoning: Optional[Callable[[str], None]] = None,
                     stop: Optional[Callable[[], bool]] = None) -> dict:
         """流式对话。返回 {text, tool_calls, usage}。
 
         tool_calls: [{"id","type":"function","function":{"name","arguments"}}]
         usage: {"prompt_tokens","completion_tokens","total_tokens"} 或 None
+        on_reasoning: 思考过程增量（delta.reasoning_content / thinking），不保证所有模型返回
         """
         payload = {
             "model": self.model,
@@ -125,6 +127,11 @@ class LLMClient:
                     usage = obj["usage"]
                 for ch in obj.get("choices") or []:
                     delta = ch.get("delta") or {}
+                    # 思考过程（reasoning_content / thinking），逐段流式回调
+                    rc = delta.get("reasoning_content") or delta.get("thinking")
+                    if rc:
+                        if on_reasoning:
+                            on_reasoning(rc)
                     content = delta.get("content")
                     if content:
                         text_parts.append(content)

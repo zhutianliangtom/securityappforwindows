@@ -198,7 +198,7 @@ class AgentEngine:
                                 imgs = []
                     self._messages.append({
                         "role": "tool", "tool_call_id": call["id"],
-                        "content": agent_llm.build_content(text),
+                        "content": text,   # 纯字符串更兼容（部分 API 拒绝数组 content）
                     })
                     if imgs:
                         last_images = [imgs[-1]]

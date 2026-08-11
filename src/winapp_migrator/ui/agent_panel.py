@@ -348,6 +348,11 @@ class AgentPanel(QDialog):
 
     # ---------- "思考中"动画 ----------
     def _start_think(self):
+        if self._think_lbl is not None:
+            try:
+                self._think_lbl.setText("")
+            except RuntimeError:
+                self._think_lbl = None   # 已被删除，重建
         if self._think_lbl is None:
             self._think_lbl = QLabel()
             self._think_lbl.setStyleSheet(f"color: {ACCENT}; font-size: 12px; padding: 2px 4px;")
@@ -361,13 +366,21 @@ class AgentPanel(QDialog):
         self._think_timer.start(350)
 
     def _tick_think(self):
-        self._think_idx = (self._think_idx + 1) % len(self._think_frames)
-        self._think_lbl.setText(self._think_frames[self._think_idx])
+        if self._think_lbl is None:
+            return
+        try:
+            self._think_idx = (self._think_idx + 1) % len(self._think_frames)
+            self._think_lbl.setText(self._think_frames[self._think_idx])
+        except RuntimeError:
+            self._think_lbl = None
 
     def _stop_think(self):
         self._think_timer.stop()
         if self._think_lbl is not None:
-            self._think_lbl.setText("")
+            try:
+                self._think_lbl.setText("")
+            except RuntimeError:
+                self._think_lbl = None
 
     # ---------- MCP 初始化 ----------
     def _init_mcp(self):
@@ -470,6 +483,7 @@ class AgentPanel(QDialog):
             self._free_layout_item(item)
         self.token_label.setText("tokens: 0")
         self._ai_bubble = None
+        self._think_lbl = None   # 气泡已全部删除，引用必须重置防悬空
         self._add_status("🧹 已清空上下文，开启新对话", TEXT_DIM)
 
     def _free_layout_item(self, item):
@@ -498,10 +512,22 @@ class AgentPanel(QDialog):
     # ---------- 引擎回调（信号槽，主线程） ----------
     def _on_delta(self, s: str):
         self._stop_think()
-        if self._ai_bubble is None:
+        if self._ai_bubble is None or not self._bubble_alive(self._ai_bubble):
             self._ai_bubble = self._add_bubble("", "ai")
-        self._ai_bubble.setText(self._ai_bubble.text() + s)
+        try:
+            self._ai_bubble.setText(self._ai_bubble.text() + s)
+        except RuntimeError:
+            self._ai_bubble = self._add_bubble("", "ai")
+            self._ai_bubble.setText(s)
         self._scroll_bottom()
+
+    @staticmethod
+    def _bubble_alive(lbl: QLabel) -> bool:
+        try:
+            lbl.text()
+            return True
+        except RuntimeError:
+            return False
 
     def _on_status(self, s: str):
         self._stop_think()

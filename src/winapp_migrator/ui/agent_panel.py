@@ -19,7 +19,7 @@ import time
 from pathlib import Path
 
 from PyQt6.QtCore import Qt, QTimer, QSettings, QPropertyAnimation, pyqtSignal
-from PyQt6.QtGui import QIcon, QFont, QPainter, QPen, QColor
+from PyQt6.QtGui import QIcon, QFont, QPainter, QPen, QColor, QPixmap
 from PyQt6.QtWidgets import (
     QDialog, QLabel, QLineEdit, QPushButton, QComboBox, QScrollArea,
     QVBoxLayout, QHBoxLayout, QMessageBox, QFormLayout, QWidget,
@@ -607,12 +607,23 @@ class AgentPanel(QDialog):
         self._last_activity = 0.0      # 最近一次有输出/状态的时间戳
         self._stalled_stop = False     # 是否因卡死自动停止
 
+        # 发送/停止按钮转圈动画
+        self._send_anim_angle = 0
+        self._stop_anim_angle = 0
+
         self._build_ui()
         self._connect_signals()
 
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._refresh_meta)
         self._timer.start(400)
+
+        self._send_anim = QTimer(self)
+        self._send_anim.timeout.connect(self._tick_send_anim)
+        self._send_anim.setInterval(80)
+        self._stop_anim = QTimer(self)
+        self._stop_anim.timeout.connect(self._tick_stop_anim)
+        self._stop_anim.setInterval(80)
 
         threading.Thread(target=self._init_mcp, daemon=True).start()
 
@@ -851,6 +862,43 @@ class AgentPanel(QDialog):
         row.addStretch(1)
         self.msg_lay.insertLayout(self.msg_lay.count() - 1, row)
         self._scroll_bottom()
+
+    # ---------- 发送/停止按钮转圈动画 ----------
+    @staticmethod
+    def _spinner_icon(angle: int, color: str, size: int = 16) -> QIcon:
+        pm = QPixmap(size, size)
+        pm.fill(Qt.GlobalColor.transparent)
+        p = QPainter(pm)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        pen = QPen(QColor(color), 2.2)
+        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+        p.setPen(pen)
+        p.drawArc(1, 1, size - 2, size - 2, -(angle % 360) * 16, 270 * 16)
+        p.end()
+        return QIcon(pm)
+
+    def _start_send_anim(self):
+        self._send_anim_angle = 0
+        self._send_anim.start()
+
+    def _tick_send_anim(self):
+        self._send_anim_angle += 30
+        self.send_btn.setIcon(self._spinner_icon(self._send_anim_angle, "#FFFFFF"))
+
+    def _start_stop_anim(self):
+        self._stop_anim_angle = 0
+        self._stop_anim.start()
+
+    def _tick_stop_anim(self):
+        self._stop_anim_angle += 30
+        self.stop_btn.setIcon(self._spinner_icon(self._stop_anim_angle, "#FFFFFF"))
+
+    def _stop_button_anim(self):
+        """任务结束：停止按钮动画并恢复原图标"""
+        self._send_anim.stop()
+        self._stop_anim.stop()
+        self.send_btn.setIcon(_std_icon(QStyle.StandardPixmap.SP_ArrowUp))
+        self.stop_btn.setIcon(_std_icon(QStyle.StandardPixmap.SP_MediaStop))
 
     def _scroll_bottom(self):
         # 延迟到布局更新后再滚动，否则 maximum 还是旧值导致滚不到底
@@ -1098,6 +1146,7 @@ class AgentPanel(QDialog):
         self.send_btn.setEnabled(False)
         self.stop_btn.setText("停止")
         self.stop_btn.setEnabled(True)
+        self._start_send_anim()   # 发送按钮转圈动画
 
         agent_name = self.agent_combo.currentData() or "桌面助手"
         engine.start(text, agent_name)
@@ -1108,6 +1157,7 @@ class AgentPanel(QDialog):
         self._user_stopped = True
         self.stop_btn.setText("停止中…")
         self.stop_btn.setEnabled(False)
+        self._start_stop_anim()   # 停止按钮转圈动画
 
     def _do_compact(self):
         """/compact：压缩上下文，把旧消息合并为摘要"""
@@ -1131,6 +1181,7 @@ class AgentPanel(QDialog):
         self._segments = []
         self._hide_spinner()
         self.cmd_list.hide()
+        self._stop_button_anim()
         self._user_stopped = False
         self._end_badge_shown = False
         self._think_done = False
@@ -1160,18 +1211,20 @@ class AgentPanel(QDialog):
                 f"已用 {t['prompt'] + t['completion']} tokens "
                 f"(输入 {t['prompt']} / 输出 {t['completion']})")
         running = bool(self._engine and self._engine._thread and self._engine._thread.is_alive())
-        # 卡死兜底：任务进行中超过 120 秒无任何输出/状态 → 强制停止
+        # 卡死兜底：任务进行中超过 60 秒无任何输出/状态 → 强制停止
         if running and self._last_activity and not self._stalled_stop \
-                and time.time() - self._last_activity > 120:
+                and time.time() - self._last_activity > 60:
             self._stalled_stop = True
-            self._add_status("AI 长时间无响应（>120 秒），已自动停止（卡死兜底）", WARN)
+            self._add_status("AI 长时间无响应（>60 秒），已自动停止（卡死兜底）", WARN)
             self._engine.stop()
-        if not running and not self.send_btn.isEnabled():
+        # 线程结束即清理：只要引擎已停止且（转圈残留 或 按钮未恢复）就执行收尾
+        if not running and (self._spinner_row is not None or not self.send_btn.isEnabled()):
             self.send_btn.setText("发送")
             self.send_btn.setEnabled(True)
             self.stop_btn.setText("停止")
             self.stop_btn.setEnabled(False)
             self._hide_spinner()
+            self._stop_button_anim()
             if not self._end_badge_shown:
                 self._end_badge_shown = True
                 self._show_end_badge()

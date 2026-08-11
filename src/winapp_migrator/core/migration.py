@@ -4,7 +4,7 @@ import time
 from pathlib import Path
 from typing import Callable, Optional
 
-from winapp_migrator.utils.helpers import setup_logging, format_size
+from winapp_migrator.utils.helpers import setup_logging, format_size, safe_remove
 from winapp_migrator.core.permissions import take_ownership
 
 logger = setup_logging()
@@ -15,6 +15,14 @@ class MigrationResult:
         self.message = message
         self.details = details or []
         self.backup_path = backup_path
+
+def _remove_existing(target: Path) -> bool:
+    """强力删除已存在目标目录：safe_remove 重试 → force_delete_directory 兜底（权限/360）"""
+    if safe_remove(target):
+        return True
+    ok, _ = force_delete_directory(target)
+    return ok
+
 
 def migrate_folder(
     source: Path,
@@ -39,10 +47,8 @@ def migrate_folder(
             replace = False
         if not replace:
             return MigrationResult(False, f"用户选择跳过: 目标目录已存在 {target}")
-        try:
-            shutil.rmtree(target)
-        except OSError as e:
-            return MigrationResult(False, f"目标目录已存在且无法替换: {e}")
+        if not _remove_existing(target):
+            return MigrationResult(False, f"目标目录已存在且无法替换: {target}")
 
     details = []
 

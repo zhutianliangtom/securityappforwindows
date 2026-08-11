@@ -276,6 +276,7 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("WinAppMigrator")
+        self.setWindowIcon(QIcon(_app_icon_path()))
         self.setMinimumSize(960, 720)
         self.setWindowFlags(Qt.WindowType.FramelessWindowHint)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, False)

@@ -9,6 +9,7 @@
 - MCP / skills / agents：从 ~/.winapp_migrator/agent/*.json 加载
 """
 
+import base64
 import html as _html
 import json
 import os
@@ -18,13 +19,13 @@ import threading
 import time
 from pathlib import Path
 
-from PyQt6.QtCore import Qt, QTimer, QSettings, QPropertyAnimation, pyqtSignal
-from PyQt6.QtGui import QIcon, QFont, QPainter, QPen, QColor, QPixmap
+from PyQt6.QtCore import Qt, QTimer, QSettings, QPropertyAnimation, pyqtSignal, QByteArray, QBuffer, QIODevice, QFileInfo
+from PyQt6.QtGui import QIcon, QFont, QPainter, QPen, QColor, QPixmap, QImage
 from PyQt6.QtWidgets import (
     QDialog, QLabel, QLineEdit, QPushButton, QComboBox, QScrollArea,
     QVBoxLayout, QHBoxLayout, QMessageBox, QFormLayout, QWidget,
     QApplication, QStyle, QListWidget, QGraphicsOpacityEffect,
-    QCompleter, QRadioButton, QCheckBox,
+    QCompleter, QRadioButton, QCheckBox, QFileIconProvider,
 )
 
 from winapp_migrator.core import agent_llm, agent_engine, agent_skills, agent_sandbox
@@ -563,6 +564,7 @@ class AgentPanel(QDialog):
         super().__init__(parent)
         self.setWindowTitle("AI Agent 工具面板")
         self.setWindowIcon(QIcon(_app_icon_path()))
+        self.setAcceptDrops(True)   # 支持把图片/文件拖入对话框
         self.setMinimumSize(760, 600)
         self.resize(900, 660)
         self.setFont(QFont("Microsoft YaHei UI", 10))
@@ -583,6 +585,10 @@ class AgentPanel(QDialog):
         self._ask_result = ""
         self._mcp = McpManager()
         self._agents = agent_skills.load_agents()
+
+        # 拖入的附件：图片（data URL，发给模型）与非图片文件（路径文本）
+        self._pending_images: list = []
+        self._pending_files: list = []
 
         # 当前 AI 气泡段落序列（交织渲染：思考 → 操作 → 正文 → 操作 → 正文…）
         self._ai_bubble = None
@@ -721,6 +727,16 @@ class AgentPanel(QDialog):
         self.cmd_list.itemClicked.connect(self._on_cmd_selected)
         root.addWidget(self.cmd_list)
 
+        # 附件缩略图条：拖入的图片/文件在此预览（隐藏时无高度）
+        self._attach_bar = QWidget()
+        self._attach_bar.setStyleSheet("background: transparent;")
+        self._attach_lay = QHBoxLayout(self._attach_bar)
+        self._attach_lay.setContentsMargins(0, 0, 0, 0)
+        self._attach_lay.setSpacing(8)
+        self._attach_lay.addStretch(1)
+        self._attach_bar.setVisible(False)
+        root.addWidget(self._attach_bar)
+
         # 输入栏
         bottom = QHBoxLayout()
         bottom.setSpacing(10)
@@ -813,13 +829,14 @@ class AgentPanel(QDialog):
         anim.setEndValue(1.0)
         anim.start(QPropertyAnimation.DeletionPolicy.DeleteWhenStopped)
 
-    def _add_bubble(self, text: str, align: str) -> QLabel:
+    def _add_bubble(self, text: str, align: str, rich: bool = False) -> QLabel:
         bubble = QLabel(text)
         bubble.setWordWrap(True)
         bubble.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         bubble.setMaximumWidth(560)
         if align == "user":
-            bubble.setTextFormat(Qt.TextFormat.PlainText)   # 用户消息纯文本
+            # 用户消息：默认纯文本；带图片时用富文本渲染缩略图（不显示源文本）
+            bubble.setTextFormat(Qt.TextFormat.RichText if rich else Qt.TextFormat.PlainText)
             bubble.setStyleSheet(f"background: {USER_BG}; color: white;"
                                  "border-radius: 14px; padding: 10px 14px; font-size: 14px;")
         else:
@@ -1106,11 +1123,17 @@ class AgentPanel(QDialog):
                 on_reasoning=lambda s: self.reasoning_signal.emit(s),
                 confirm=self._confirm_tool,
                 ask_user=self._ask_user_tool)
+            n = self._engine.load_context()   # 重启后恢复上次对话上下文
+            if n:
+                self._add_status(f"已恢复上次对话上下文（{n} 条消息），AI 可继续之前任务", TEXT_DIM)
         return self._engine
 
     def _send(self):
         text = self.input.text().strip()
-        if not text or (self._engine and self._engine._thread and self._engine._thread.is_alive()):
+        images = list(self._pending_images)
+        files = list(self._pending_files)
+        if (not text and not images) or \
+                (self._engine and self._engine._thread and self._engine._thread.is_alive()):
             return
         if text.lower().startswith("/compact"):
             self._do_compact()
@@ -1124,9 +1147,24 @@ class AgentPanel(QDialog):
             self._add_status(f"已调用技能「{skill.get('name')}」", ACCENT)
             text = (f"请使用技能「{skill.get('name')}」，严格按其流程执行。\n\n"
                     f"技能说明：\n{skill.get('instruction', '')}")
+        # 非图片附件：把路径文本附加给 AI（不显示源内容），AI 可按需 read_file
+        if files:
+            note = "以下为拖入的附件文件，请按需读取内容：\n" + \
+                "\n".join(f"- {p}" for p in files)
+            text = (text + "\n\n" if text else "") + note
         engine = self._ensure_engine()
 
-        self._add_bubble(text, "user")
+        # 用户气泡：图片以缩略图显示，不显示源文本
+        if images:
+            parts = []
+            if text:
+                parts.append(_esc(text).replace("\n", "<br/>"))
+            parts.extend(
+                f'<img src="{u}" width="220" style="border-radius:8px;'
+                'display:block;margin:6px 0;">' for u in images)
+            self._add_bubble("<br/>".join(parts), "user", rich=True)
+        else:
+            self._add_bubble(text, "user")
         self._ai_bubble = None
         self._segments = []
         self._user_stopped = False
@@ -1139,7 +1177,8 @@ class AgentPanel(QDialog):
         self.input.clear()
         self.input.setFocus()
 
-        est = agent_llm.estimate_tokens(text)
+        est = agent_llm.estimate_tokens(text) + \
+            agent_llm.estimate_image_tokens() * len(images)
         self.token_label.setText(f"本次预计 {est} tokens · 累计 0")
 
         self.send_btn.setText("发送中…")
@@ -1148,8 +1187,9 @@ class AgentPanel(QDialog):
         self.stop_btn.setEnabled(True)
         self._start_send_anim()   # 发送按钮转圈动画
 
+        self._clear_attachments()   # 发送后清空附件条
         agent_name = self.agent_combo.currentData() or "桌面助手"
-        engine.start(text, agent_name)
+        engine.start(text, agent_name, images)
 
     def _stop(self):
         if self._engine:
@@ -1201,6 +1241,7 @@ class AgentPanel(QDialog):
         """清空上下文：停止引擎、清空历史与气泡、tokens 归零"""
         if self._engine:
             self._engine.clear_history()
+            self._engine.clear_context()   # 同时删除磁盘上的持久化上下文
             if self._engine._thread and self._engine._thread.is_alive():
                 self._engine.stop()
         self._ai_bubble = None
@@ -1215,11 +1256,85 @@ class AgentPanel(QDialog):
         self._think_start = 0.0
         self._last_activity = 0.0
         self._stalled_stop = False
+        self._clear_attachments()
         while self.msg_lay.count() > 1:  # 保留末尾 stretch
             item = self.msg_lay.takeAt(0)
             self._free_layout_item(item)
         self.token_label.setText("tokens: 0")
         self._add_status("已清空上下文，开启新对话", TEXT_DIM)
+
+    # ---------- 拖拽附件（图片/文件） ----------
+    _IMG_EXTS = (".png", ".jpg", ".jpeg", ".bmp", ".gif", ".webp")
+
+    def dragEnterEvent(self, e):
+        if e.mimeData().hasUrls():
+            e.acceptProposedAction()
+        else:
+            super().dragEnterEvent(e)
+
+    def dropEvent(self, e):
+        for url in e.mimeData().urls():
+            p = url.toLocalFile()
+            if p:
+                self._add_attachment(p)
+        e.acceptProposedAction()
+
+    def _add_attachment(self, path: str):
+        path = os.path.abspath(path)
+        if not os.path.exists(path):
+            self._add_status(f"文件不存在: {path}", WARN)
+            return
+        if os.path.splitext(path)[1].lower() in self._IMG_EXTS:
+            img = QImage(path)
+            if img.isNull():
+                self._add_status(f"无法读取图片: {path}", WARN)
+                return
+            # 压缩为 ≤320px JPEG data URL 发送给模型（缩略图预览用原图）
+            if img.width() > 320:
+                img = img.scaledToWidth(320, Qt.TransformationMode.SmoothTransformation)
+            ba = QByteArray()
+            buf = QBuffer(ba)
+            buf.open(QIODevice.OpenModeFlag.WriteOnly)
+            img.save(buf, "JPEG", 80)
+            self._pending_images.append(
+                "data:image/jpeg;base64," + base64.b64encode(bytes(ba)).decode())
+            self._attach_thumb(QPixmap(path), path)
+        else:
+            self._pending_files.append(path)
+            icon = QFileIconProvider().icon(QFileInfo(path)).pixmap(40, 40)
+            self._attach_thumb(icon, path, name=os.path.basename(path))
+
+    def _attach_thumb(self, pixmap: QPixmap, tooltip: str, name: str = ""):
+        box = QWidget()
+        box.setToolTip(tooltip)
+        box.setStyleSheet(
+            f"QWidget {{ background: {PANEL}; border: 1px solid {BORDER}; border-radius: 8px; }}")
+        v = QVBoxLayout(box)
+        v.setContentsMargins(6, 6, 6, 6)
+        v.setSpacing(3)
+        v.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        thumb = QLabel()
+        thumb.setPixmap(pixmap.scaled(56, 56, Qt.AspectRatioMode.KeepAspectRatio,
+                                      Qt.TransformationMode.SmoothTransformation))
+        thumb.setToolTip(tooltip)
+        v.addWidget(thumb, 0, Qt.AlignmentFlag.AlignCenter)
+        if name:
+            nl = QLabel(name if len(name) <= 12 else name[:11] + "…")
+            nl.setStyleSheet(f"color: {TEXT_DIM}; font-size: 10px;")
+            nl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            v.addWidget(nl, 0, Qt.AlignmentFlag.AlignCenter)
+        # 插入到 stretch 之前
+        self._attach_lay.insertWidget(self._attach_lay.count() - 1, box)
+        self._attach_bar.setVisible(True)
+
+    def _clear_attachments(self):
+        while self._attach_lay.count() > 1:
+            item = self._attach_lay.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+        self._pending_images = []
+        self._pending_files = []
+        self._attach_bar.setVisible(False)
 
     def _free_layout_item(self, item):
         if item.widget():
@@ -1254,6 +1369,8 @@ class AgentPanel(QDialog):
             if not self._end_badge_shown:
                 self._end_badge_shown = True
                 self._show_end_badge()
+            if self._engine:
+                self._engine.save_context()   # 任务结束即持久化上下文（重启可恢复）
             self._scroll_bottom()   # 结束执行时自动滚动到最下方
 
     def _show_end_badge(self):
@@ -1372,6 +1489,7 @@ class AgentPanel(QDialog):
         if self._engine:
             self._engine.stop()
             self._engine.join(3)
+            self._engine.save_context()   # 关闭前持久化上下文（重启可恢复）
         try:
             self._mcp.close_all()
         except Exception:

@@ -10,6 +10,10 @@
 import json
 import threading
 import time
+from pathlib import Path
+
+from PyQt6.QtCore import Qt, QByteArray, QBuffer, QIODevice
+from PyQt6.QtGui import QImage
 
 from winapp_migrator.core import agent_llm, agent_tools, agent_skills
 from winapp_migrator.core.agent_screen import capture_screen_data_url
@@ -17,6 +21,30 @@ from winapp_migrator.core.agent_screen import capture_screen_data_url
 # 会改变屏幕、需要执行后自动截图验证的工具
 _SCREEN_CHANGING = {"click", "drag", "scroll", "press_key", "type_text",
                     "move_mouse", "run_command"}
+
+# 对话上下文持久化路径
+CONTEXT_FILE = agent_skills.CONFIG_DIR / "context.json"
+
+
+def _compress_data_url(data_url: str, max_width: int = 320, quality: int = 80) -> str:
+    """把图片 data URL 压缩为小尺寸 JPEG（保存上下文时防止文件过大）"""
+    import base64
+    try:
+        if not isinstance(data_url, str) or not data_url.startswith("data:image"):
+            return data_url
+        _, _, b64 = data_url.partition(",")
+        img = QImage.fromData(base64.b64decode(b64))
+        if img.isNull():
+            return data_url
+        if img.width() > max_width:
+            img = img.scaledToWidth(max_width, Qt.TransformationMode.SmoothTransformation)
+        ba = QByteArray()
+        buf = QBuffer(ba)
+        buf.open(QIODevice.OpenModeFlag.WriteOnly)
+        img.save(buf, "JPEG", quality)
+        return "data:image/jpeg;base64," + base64.b64encode(bytes(ba)).decode()
+    except Exception:
+        return data_url
 
 
 def _call_with_stop(fn, stop_event, timeout: float = 30.0):
@@ -92,6 +120,54 @@ class AgentEngine:
         self._messages = []
         self.reset_tokens()
 
+    # ---------- 上下文持久化（重启保留对话） ----------
+    def save_context(self, path=CONTEXT_FILE) -> bool:
+        """把对话上下文（不含 system）保存到磁盘；图片压缩后存储"""
+        path = Path(path)
+        msgs = []
+        for m in self._messages:
+            if not isinstance(m, dict) or m.get("role") == "system":
+                continue
+            c = m.get("content")
+            if isinstance(c, list):
+                out = []
+                for x in c:
+                    if isinstance(x, dict) and x.get("type") == "image_url":
+                        url = (x.get("image_url") or {}).get("url", "")
+                        out.append({"type": "image_url",
+                                    "image_url": {"url": _compress_data_url(url)}})
+                    else:
+                        out.append(x)
+                m = dict(m)
+                m["content"] = out
+            msgs.append(m)
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(msgs, f, ensure_ascii=False)
+            return True
+        except Exception:
+            return False
+
+    def load_context(self, path=CONTEXT_FILE) -> int:
+        """从磁盘恢复上下文，返回恢复的消息条数（0 表示无历史）"""
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                msgs = json.load(f)
+            if isinstance(msgs, list):
+                self._messages = [m for m in msgs
+                                  if isinstance(m, dict) and m.get("role") != "system"]
+            return len(self._messages)
+        except Exception:
+            return 0
+
+    def clear_context(self, path=CONTEXT_FILE):
+        """删除持久化上下文文件（配合 /clear 使用）"""
+        try:
+            Path(path).unlink(missing_ok=True)
+        except Exception:
+            pass
+
     def compress_history(self, keep_recent: int = 2) -> int:
         """启发式压缩上下文：保留最近 keep_recent 条消息完整，更早的文本合并为一条摘要。
 
@@ -140,10 +216,11 @@ class AgentEngine:
             if drop:
                 m["content"] = keep
 
-    def start(self, user_input: str, agent_name: str = ""):
-        """后台线程执行一轮任务"""
+    def start(self, user_input: str, agent_name: str = "", images: list = None):
+        """后台线程执行一轮任务；images: 用户拖入的图片 data URL 列表"""
         self._stop.clear()
-        self._thread = threading.Thread(target=self.run, args=(user_input, agent_name),
+        self._thread = threading.Thread(target=self.run,
+                                        args=(user_input, agent_name, images),
                                         daemon=True)
         self._thread.start()
 
@@ -191,7 +268,7 @@ class AgentEngine:
         return {"text": f"[未知工具] {name}", "images": []}
 
     # ---------- 主循环 ----------
-    def run(self, user_input: str, agent_name: str = ""):
+    def run(self, user_input: str, agent_name: str = "", images: list = None):
         self.end_state = ""
         system = agent_skills.build_system_prompt(agent_name)
         if not self._messages or self._messages[0].get("role") != "system":
@@ -199,7 +276,7 @@ class AgentEngine:
         else:
             self._messages[0]["content"] = system  # 切换 Agent 时更新系统提示
         self._messages.append({"role": "user",
-                               "content": agent_llm.build_content(user_input)})
+                               "content": agent_llm.build_content(user_input, images)})
         try:
             for _ in range(30):  # 最多 30 轮工具循环，防死循环
                 if self._stop.is_set():

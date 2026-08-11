@@ -35,14 +35,24 @@ def _app_icon_path() -> str:
 class _TaskRow(QWidget):
     """单个下载任务行：文件名 + 进度条 + 速度/状态 + 取消"""
 
-    def __init__(self, task: DownloadTask, on_cancel, parent=None):
+    def __init__(self, task: DownloadTask, on_pause, on_cancel, parent=None):
         super().__init__(parent)
         self.task = task
+        self._on_pause = on_pause
         self._on_cancel = on_cancel
 
         self.name_label = QLabel("准备中…")
         self.name_label.setStyleSheet(f"font-size: 13px; font-weight: 700; color: {PALETTE['text']};")
         self.name_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+
+        self.pause_btn = QPushButton("暂停")
+        self.pause_btn.setFixedSize(56, 26)
+        self.pause_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.pause_btn.setStyleSheet(
+            f"background: transparent; color: {PALETTE['primary']}; font-size: 12px; "
+            "border: 1px solid #93C5FD; border-radius: 6px;"
+        )
+        self.pause_btn.clicked.connect(self._click_pause)
 
         self.cancel_btn = QPushButton("取消")
         self.cancel_btn.setFixedSize(56, 26)
@@ -51,7 +61,7 @@ class _TaskRow(QWidget):
             f"background: transparent; color: {PALETTE['danger']}; font-size: 12px; "
             "border: 1px solid #FCA5A5; border-radius: 6px;"
         )
-        self.cancel_btn.clicked.connect(lambda: self._on_cancel(task))
+        self.cancel_btn.clicked.connect(self._click_cancel)
 
         self.progress = QProgressBar()
         self.progress.setFixedHeight(10)
@@ -61,7 +71,9 @@ class _TaskRow(QWidget):
         self.info_label.setStyleSheet(f"font-size: 12px; color: {PALETTE['text_secondary']};")
 
         top = QHBoxLayout()
+        top.setSpacing(6)
         top.addWidget(self.name_label, 1)
+        top.addWidget(self.pause_btn)
         top.addWidget(self.cancel_btn)
 
         lay = QVBoxLayout(self)
@@ -70,6 +82,24 @@ class _TaskRow(QWidget):
         lay.addLayout(top)
         lay.addWidget(self.progress)
         lay.addWidget(self.info_label)
+
+    def _click_pause(self):
+        """点击暂停/继续：立即给出反馈，等待线程状态同步"""
+        if self.task.snapshot()["status"] == "paused":
+            self._on_pause(self.task)  # 实际是 resume
+            self.pause_btn.setEnabled(False)
+            self.pause_btn.setText("继续中")
+            return
+        self._on_pause(self.task)
+        self.pause_btn.setEnabled(False)
+        self.pause_btn.setText("暂停中")
+
+    def _click_cancel(self):
+        """点击取消：立即反馈，等待线程退出"""
+        self._on_cancel(self.task)
+        self.pause_btn.setEnabled(False)
+        self.cancel_btn.setEnabled(False)
+        self.info_label.setText("⏹ 正在取消…")
 
     def update_view(self, snap: dict, speed: float):
         """按任务快照刷新显示"""
@@ -82,24 +112,43 @@ class _TaskRow(QWidget):
         self.progress.setValue(pct)
 
         if status == "downloading":
+            self.pause_btn.setVisible(True)
+            self.pause_btn.setEnabled(True)
+            self.pause_btn.setText("暂停")
             self.cancel_btn.setVisible(True)
+            self.cancel_btn.setEnabled(True)
             self.cancel_btn.setText("取消")
             segs = int(snap.get("segments") or 16)
             mode_txt = f"{segs} 线程分段" if snap.get("mode") == "multi" else "单线程"
             info = f"⏳ 下载中 · {_fmt_size(done)} / {_fmt_size(total)} · {mode_txt}"
             if speed > 0:
                 info += f" · {_fmt_size(int(speed))}/s"
+        elif status == "paused":
+            self.pause_btn.setVisible(True)
+            self.pause_btn.setEnabled(True)
+            self.pause_btn.setText("继续")
+            self.cancel_btn.setVisible(True)
+            self.cancel_btn.setEnabled(True)
+            self.cancel_btn.setText("取消")
+            info = f"⏸ 已暂停 · {_fmt_size(done)} / {_fmt_size(total)}（分片已保留，可随时继续）"
         elif status == "done":
+            self.pause_btn.setVisible(False)
             self.cancel_btn.setVisible(False)
             info = f"✅ 已完成 · {_fmt_size(total)} → {snap['path']}"
         elif status == "error":
+            self.pause_btn.setVisible(False)
             self.cancel_btn.setVisible(False)
             info = f"❌ 失败：{snap['error']}"
         elif status == "canceled":
+            self.pause_btn.setVisible(False)
             self.cancel_btn.setVisible(False)
             info = "⏹ 已取消"
         else:  # pending
+            self.pause_btn.setVisible(True)
+            self.pause_btn.setEnabled(True)
+            self.pause_btn.setText("暂停")
             self.cancel_btn.setVisible(True)
+            self.cancel_btn.setEnabled(True)
             self.cancel_btn.setText("取消")
             info = "⏳ 正在连接服务器…"
         self.info_label.setText(info)
@@ -215,7 +264,7 @@ class DownloadDialog(QDialog):
         self._tasks.append(task)
 
         item = QListWidgetItem(self.task_list)
-        row = _TaskRow(task, self._cancel_task)
+        row = _TaskRow(task, self._pause_task, self._cancel_task)
         item.setSizeHint(QSize(0, 92))  # 固定行高，避免行内控件重叠
         self.task_list.addItem(item)
         self.task_list.setItemWidget(item, row)
@@ -224,6 +273,10 @@ class DownloadDialog(QDialog):
 
         self.url_edit.clear()
         self.url_edit.setFocus()
+
+    def _pause_task(self, task: DownloadTask):
+        """暂停/继续：按任务当前状态自动选择"""
+        task.pause() if task.snapshot()["status"] == "downloading" else task.resume()
 
     def _cancel_task(self, task: DownloadTask):
         task.cancel()
@@ -244,11 +297,12 @@ class DownloadDialog(QDialog):
         self._last_poll_at = now
 
     def closeEvent(self, event):
-        active = [t for t in self._tasks if t.snapshot()["status"] == "downloading"]
+        active = [t for t in self._tasks
+                  if t.snapshot()["status"] in ("downloading", "paused")]
         if active:
             ret = QMessageBox.question(
-                self, "下载进行中",
-                f"还有 {len(active)} 个任务正在下载，关闭将取消这些任务。确定关闭？",
+                self, "下载未完成",
+                f"还有 {len(active)} 个任务未完成（下载中/已暂停），关闭将取消这些任务并删除分片。确定关闭？",
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
                 QMessageBox.StandardButton.No,
             )
@@ -256,7 +310,10 @@ class DownloadDialog(QDialog):
                 event.ignore()
                 return
             for t in active:
-                t.cancel()
+                if t.snapshot()["status"] == "paused":
+                    t.discard()  # 无活跃线程，直接清理分片
+                else:
+                    t.cancel()
             for t in active:
                 t.join(3)
         event.accept()

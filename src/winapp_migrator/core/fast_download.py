@@ -6,6 +6,7 @@
 - 支持取消；分片写 .part 临时文件，完成后合并删除
 """
 
+import glob
 import os
 import re
 import threading
@@ -57,8 +58,10 @@ class DownloadTask:
         self.mode = "single"          # multi=分段并行 / single=单线程（探测后更新）
         self._segments = segments
         self._cancel = threading.Event()
+        self._pause = threading.Event()
         self._lock = threading.Lock()
         self._thread: Optional[threading.Thread] = None
+        self._range_ok = False
 
     # ---------- 线程安全访问 ----------
     def _update_done(self, n: int):
@@ -71,7 +74,30 @@ class DownloadTask:
             self.error = err
 
     def cancel(self):
+        """取消下载：清理分片，线程在下一次读取循环时退出"""
         self._cancel.set()
+        self._pause.clear()
+
+    def pause(self):
+        """暂停下载：保留已下载分片（断点续传的前提）"""
+        self._pause.set()
+
+    def resume(self):
+        """恢复下载：从分片已写位置继续 Range 续传"""
+        if self.snapshot()["status"] != "paused":
+            return
+        self._pause.clear()
+        self._thread = threading.Thread(target=self._resume_run, daemon=True)
+        self._thread.start()
+
+    def discard(self):
+        """放弃已暂停任务：清理分片并置为已取消（暂停状态下无活跃线程）"""
+        if self.snapshot()["status"] != "paused":
+            return
+        self._cancel.set()
+        if self.path:
+            self._cleanup(glob.glob(self.path + ".part*"))
+        self._set_status("canceled")
 
     def start(self):
         self._thread = threading.Thread(target=self._run, daemon=True)
@@ -130,13 +156,28 @@ class DownloadTask:
     def _run(self):
         try:
             self._set_status("downloading")
-            range_ok = self._probe_head() or self._probe_range()
-            if not range_ok or self.total <= MIN_SEGMENT_BYTES:
+            self._range_ok = self._probe_head() or self._probe_range()
+            if not self._range_ok or self.total <= MIN_SEGMENT_BYTES:
                 self.mode = "single"
-                self._download_single()
+                self._download_single(self._range_ok)
             else:
                 self.mode = "multi"
                 self._download_multi()
+        except urllib.error.HTTPError as e:
+            self._set_status("error", f"HTTP {e.code} {e.reason}")
+        except urllib.error.URLError as e:
+            self._set_status("error", f"网络错误 {e.reason}")
+        except Exception as e:
+            self._set_status("error", str(e))
+
+    def _resume_run(self):
+        """暂停后恢复：按既有模式从分片位置继续"""
+        try:
+            self._set_status("downloading")
+            if self.mode == "multi":
+                self._download_multi()
+            else:
+                self._download_single(self._range_ok)
         except urllib.error.HTTPError as e:
             self._set_status("error", f"HTTP {e.code} {e.reason}")
         except urllib.error.URLError as e:
@@ -153,21 +194,32 @@ class DownloadTask:
             except OSError:
                 pass
 
-    def _download_single(self):
+    def _download_single(self, can_resume: bool):
+        """单线程下载。can_resume=True 且存在分片时从断点续传（需服务器支持 Range）"""
         self.path = os.path.join(self.dest_dir, self.filename)
         tmp = self.path + ".part"
+        written = os.path.getsize(tmp) if os.path.exists(tmp) else 0
+        if not can_resume:
+            self._cleanup(tmp)  # 服务器不支持 Range：无法续传，从头重下
+            written = 0
         try:
-            with self._open() as resp, open(tmp, "wb") as f:
+            headers = {"Range": f"bytes={written}-"} if can_resume and written else {}
+            with self._open("GET", headers) as resp, open(tmp, "ab" if written else "wb") as f:
                 while True:
                     if self._cancelled:
                         raise InterruptedError("已取消")
+                    if self._pause.is_set():
+                        break  # 暂停：保留分片，等待恢复
                     chunk = resp.read(READ_CHUNK)
                     if not chunk:
                         break
                     f.write(chunk)
                     self._update_done(len(chunk))
-            os.replace(tmp, self.path)
-            self._set_status("done")
+            if self._pause.is_set():
+                self._set_status("paused")
+            else:
+                os.replace(tmp, self.path)
+                self._set_status("done")
         except InterruptedError:
             self._cleanup(tmp)
             self._set_status("canceled")
@@ -190,6 +242,9 @@ class DownloadTask:
             self._cleanup(part_paths)
             self._set_status("canceled")
             return
+        if self._pause.is_set():
+            self._set_status("paused")  # 暂停：保留全部已下载分片
+            return
 
         # 失败段串行补下：服务器限制单 IP 并发数时，32 段中部分会失败，
         # 这里降级为串行续传保证不整体失败（比限并发下的多段重试更稳更快）
@@ -202,6 +257,9 @@ class DownloadTask:
         if self._cancelled:
             self._cleanup(part_paths)
             self._set_status("canceled")
+            return
+        if self._pause.is_set():
+            self._set_status("paused")
             return
         # 严格校验每段完整，避免合并出损坏文件
         for i, (start, end) in enumerate(ranges):
@@ -229,22 +287,28 @@ class DownloadTask:
             self._set_status("error", f"合并失败 {e}")
 
     def _download_segment(self, start: int, end: int, part_path: str):
-        headers = {"Range": f"bytes={start}-{end}"}
+        """下载一个分片。支持断点续传：已存在的分片从当前大小位置继续"""
+        written = os.path.getsize(part_path) if os.path.exists(part_path) else 0
+        if written >= end - start + 1:
+            return  # 该段已完整（暂停恢复场景直接跳过）
+        headers = {"Range": f"bytes={start + written}-{end}"}
         for _ in range(SEGMENT_RETRY + 1):
-            if self._cancelled:
+            if self._cancelled or self._pause.is_set():
                 return
             try:
-                with self._open("GET", headers) as resp, open(part_path, "wb") as f:
+                with self._open("GET", headers) as resp, open(part_path, "ab") as f:
                     while True:
-                        if self._cancelled:
+                        if self._cancelled or self._pause.is_set():
                             return
                         chunk = resp.read(READ_CHUNK)
                         if not chunk:
                             break
                         f.write(chunk)
                         self._update_done(len(chunk))
-                if os.path.getsize(part_path) >= end - start + 1:
+                written = os.path.getsize(part_path)
+                if written >= end - start + 1:
                     return  # 该段完整下载完成
+                headers = {"Range": f"bytes={start + written}-{end}"}  # 部分成功，续传剩余
             except Exception:
                 time.sleep(0.5)
         # 重试耗尽：段可能不完整，由补下阶段处理
@@ -252,7 +316,7 @@ class DownloadTask:
     def _repair_segment(self, start: int, end: int, part_path: str):
         """单线程续传补下失败段：从已写位置继续 Range 下载"""
         for _ in range(SEGMENT_RETRY + 1):
-            if self._cancelled:
+            if self._cancelled or self._pause.is_set():
                 return
             written = os.path.getsize(part_path) if os.path.exists(part_path) else 0
             if written >= end - start + 1:
@@ -261,7 +325,7 @@ class DownloadTask:
                 headers = {"Range": f"bytes={start + written}-{end}"}
                 with self._open("GET", headers) as resp, open(part_path, "ab") as f:
                     while True:
-                        if self._cancelled:
+                        if self._cancelled or self._pause.is_set():
                             return
                         chunk = resp.read(READ_CHUNK)
                         if not chunk:

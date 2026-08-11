@@ -254,8 +254,10 @@ def build_system_prompt(agent_name: str = "") -> str:
                "run_command(白名单命令)、read_file/write_file/edit_file(读写编辑文件)、"
                "list_directory(列目录)、save_memory/load_memory(本地长期记忆)。"
                "若连接了 MCP 服务器，其工具同样可用。")
-    prompt += ("\n\n提问机制：当用户需求不明确、缺少关键信息时，必须先调用 ask_user 向用户提问"
-               "（可给出建议选项），获得明确回答后再继续执行；严禁在信息不足时猜测执行。")
+    prompt += ("\n\n提问机制：当用户需求不明确、缺少关键信息时，必须先调用 ask_user 向用户提问。"
+               "提问时尽量给出 options 建议选项方便用户直接点选；"
+               "需要用户从多个候选中挑选（可多项）时，设置 multi_select=true 以多选问答方式让用户复选；"
+               "获得明确回答后再继续执行；严禁在信息不足时猜测执行。")
     prompt += ("\n\n记忆：你有本地长期记忆文件 memory.md。遇到用户偏好、重要结论、约定、常用路径等"
                "值得长期记住的信息时，调用 save_memory 保存；新任务开始或需要回忆过往信息时，"
                "自行决定是否调用 load_memory 查看。")

@@ -571,6 +571,13 @@ class _AskUserDialog(QDialog):
             f"QDialog {{ background: {PANEL}; }}"
             f"QLabel {{ color: {TEXT}; font-size: 13px; }}"
             f"QRadioButton, QCheckBox {{ color: {TEXT}; font-size: 13px; spacing: 10px; }}"
+            # 选择圆圈/复选框：未选中白色边框，选中填充强调色
+            "QRadioButton::indicator, QCheckBox::indicator { width: 14px; height: 14px;"
+            f" border: 1.5px solid #FFFFFF; background: transparent; }}"
+            "QRadioButton::indicator { border-radius: 8px; }"
+            "QCheckBox::indicator { border-radius: 3px; }"
+            f"QRadioButton::indicator:checked, QCheckBox::indicator:checked {{"
+            f" background: {ACCENT}; border-color: {ACCENT}; }}"
             f"QLineEdit {{ background: {BG}; color: {TEXT}; border: 1px solid {BORDER};"
             "border-radius: 8px; padding: 8px 12px; font-size: 13px; }}"
             f"QPushButton {{ border: none; border-radius: 8px; padding: 8px 22px;"

@@ -84,12 +84,12 @@ def map_to_screen(x: int, y: int) -> tuple:
     return int(x * sx), int(y * sy)
 
 
-def capture_screen_data_url(grid: bool = True) -> str:
+def capture_screen_data_url(grid: bool = True, mark_cursor: bool = True) -> str:
     """全屏截图 → data URL（OpenAI 兼容 image_url 输入）。
 
-    grid=True 时先等比缩放到统一宽度 _MODEL_W，再叠加坐标网格与像素刻度：
-    模型看到的图像与刻度数字同基准（缩放系），按刻度读数即可精确到像素，
-    系统端由 map_to_screen 换算回屏幕物理坐标，彻底消除视觉坐标系统性偏差。
+    grid=True 时先等比缩放到统一宽度 _MODEL_W，再叠加坐标网格与像素刻度。
+    mark_cursor=True 时叠加红色准星标记当前鼠标位置（物理坐标标注），
+    模型凭"准星是否套住目标"对齐，比读刻度猜坐标更可靠。
     全屏截图会重置视觉基准回全屏态。
     """
     import base64
@@ -104,6 +104,8 @@ def capture_screen_data_url(grid: bool = True) -> str:
         _draw_coord_grid(img)
     else:
         _model_size = _shot_size
+    if mark_cursor:
+        _draw_cursor_marker(img)
     ba = QByteArray()
     buf = QBuffer(ba)
     buf.open(QIODevice.OpenModeFlag.WriteOnly)
@@ -111,13 +113,13 @@ def capture_screen_data_url(grid: bool = True) -> str:
     return "data:image/png;base64," + base64.b64encode(bytes(ba)).decode()
 
 
-def capture_zoom_data_url(cx: int, cy: int, region: int = 400, zoom: int = 3) -> str:
+def capture_zoom_data_url(cx: int, cy: int, region: int = 400, zoom: int = 3,
+                          mark_cursor: bool = True) -> str:
     """以屏幕物理坐标 (cx,cy) 为中心截取 region×region 区域 → 放大 zoom 倍 →
     叠细网格刻度后返回，并切换视觉基准为 zoom 态。
 
     用于两步精确定位：模型先看全屏图给粗坐标 → zoom_in 放大目标区域 →
-    基于放大图细刻度内插给精确坐标（放大 3 倍后内插误差缩小 3 倍，
-    可达 ±4px 屏幕像素）。
+    基于放大图细刻度/准星对齐给精确坐标。
     """
     import base64
     global _view
@@ -138,6 +140,8 @@ def capture_zoom_data_url(cx: int, cy: int, region: int = 400, zoom: int = 3) ->
     _draw_coord_grid(crop, cells=16)
     _view = {"cx": cx, "cy": cy, "region": region,
              "img_w": crop.width(), "img_h": crop.height(), "x0": x0, "y0": y0}
+    if mark_cursor:
+        _draw_cursor_marker(crop)   # 鼠标在区域内则画准星
     ba = QByteArray()
     buf = QBuffer(ba)
     buf.open(QIODevice.OpenModeFlag.WriteOnly)
@@ -185,6 +189,69 @@ def _draw_coord_grid(img: QImage, cells: int = 16):
 
 def screen_size() -> tuple:
     return user32.GetSystemMetrics(0), user32.GetSystemMetrics(1)
+
+
+def _cursor_pos() -> tuple:
+    """当前鼠标屏幕物理坐标 (x, y)"""
+    pt = wintypes.POINT()
+    if user32.GetCursorPos(ctypes.byref(pt)):
+        return int(pt.x), int(pt.y)
+    return 0, 0
+
+
+def _draw_cursor_marker(img: QImage):
+    """在截图上绘制红色准星标记当前鼠标位置（物理坐标标注），辅助模型精确对齐。
+
+    鼠标物理坐标 → 当前视觉基准（全屏缩放系或 zoom 放大系）；鼠标不在
+    zoom 区域内时跳过（目标区域与光标无关）。
+    """
+    cx, cy = _cursor_pos()
+    if cx <= 0 and cy <= 0:
+        return
+    sx, sy = screen_scale()
+    ox = cx / sx if sx else cx      # 物理 → 原始截图系
+    oy = cy / sy if sy else cy
+    if _view is not None and _view.get("img_w", 0) > 0:
+        # zoom 态：鼠标必须在放大区域内才画
+        x0, y0, reg = _view["x0"], _view["y0"], _view["region"]
+        if not (x0 <= ox < x0 + reg and y0 <= oy < y0 + reg):
+            return
+        mx = (ox - x0) * _view["img_w"] / reg
+        my = (oy - y0) * _view["img_h"] / reg
+    else:
+        # 全屏缩放系
+        w_orig, h_orig = _shot_size or screen_size()
+        mw, mh = _model_size or (w_orig, h_orig)
+        mx = ox * mw / w_orig if w_orig else ox
+        my = oy * mh / h_orig if h_orig else oy
+    p = QPainter(img)
+    p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+    x, y = int(mx), int(my)
+    # 外圈（红）
+    p.setPen(QPen(QColor(255, 51, 85, 230), 2))
+    p.setBrush(Qt.BrushStyle.NoBrush)
+    p.drawEllipse(x - 15, y - 15, 30, 30)
+    # 十字（白描边红芯，醒目）
+    p.setPen(QPen(QColor(255, 255, 255, 230), 1))
+    p.drawLine(x - 9, y, x + 9, y)
+    p.drawLine(x, y - 9, x, y + 9)
+    p.setPen(QPen(QColor(255, 51, 85, 255), 1))
+    p.drawLine(x - 9, y, x + 9, y)
+    p.drawLine(x, y - 9, x, y + 9)
+    # 中心实心点
+    p.setPen(Qt.PenStyle.NoPen)
+    p.setBrush(QColor(255, 51, 85, 255))
+    p.drawEllipse(x - 2, y - 2, 4, 4)
+    # 物理坐标标注（黑描边黄字，靠近准星右上方）
+    font = QFont("Consolas", 12)
+    font.setBold(True)
+    label = f"cursor ({cx},{cy})"
+    path = QPainterPath()
+    path.addText(x + 20, y - 20, font, label)
+    p.setPen(QPen(QColor(0, 0, 0, 220), 3))
+    p.drawPath(path)
+    p.fillPath(path, QColor(255, 230, 0, 255))
+    p.end()
 
 
 # ---- 虚拟桌面（多桌面） ----

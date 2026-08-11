@@ -10,6 +10,7 @@
 """
 
 import base64
+import os
 import subprocess
 import winreg
 from pathlib import Path
@@ -77,7 +78,12 @@ class SecurityScanner:
 
     # ---------- 恶意进程 ----------
     def scan_processes(self) -> List[dict]:
-        """枚举进程并按特征库匹配，返回 [{'pid','name','path'}]（真实 CIM API）"""
+        """枚举进程并按特征库匹配，返回 [{'pid','name','path'}]（真实 CIM API）
+
+        进程名（Name）与可执行路径文件名（ExecutablePath）任一命中特征库即告警：
+        恶意软件常伪装进程名（如 PEB 篡改使任务管理器显示正常名），
+        但可执行路径往往仍暴露矿机/木马文件名（如 %TEMP%\\xmrig.exe）。
+        """
         script = r'''
 $procs = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
     Where-Object { $_.Name -or $_.ExecutablePath } |
@@ -94,13 +100,23 @@ $procs
                 pid = int(parts[0])
                 name = (parts[1] or "").lower()
                 path = parts[2] if len(parts) > 2 else ""
-                if self._is_malicious_name(name) and self._not_system(path or name):
+                if not (self._is_malicious_name(name) or self._malicious_path(path)):
+                    continue
+                if self._not_system(path or name):
                     out.append({"pid": pid, "name": parts[1], "path": path})
         return out
 
     @staticmethod
     def _is_malicious_name(name: str) -> bool:
         return name.replace(".exe", "").strip() in _MALICIOUS_PROCESS_NAMES
+
+    @staticmethod
+    def _malicious_path(path: str) -> bool:
+        """匹配可执行路径文件名（进程名伪装后路径暴露特征）"""
+        if not path:
+            return False
+        base = os.path.basename(path).lower().replace(".exe", "").strip()
+        return base in _MALICIOUS_PROCESS_NAMES
 
     @staticmethod
     def _not_system(path: str) -> bool:

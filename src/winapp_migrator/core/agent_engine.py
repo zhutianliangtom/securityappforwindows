@@ -21,16 +21,18 @@ _SCREEN_CHANGING = {"click", "drag", "scroll", "press_key", "type_text",
 class AgentEngine:
     def __init__(self, llm: agent_llm.LLMClient,
                  mcp_manager=None,
-                 on_delta=None, on_status=None, confirm=None):
+                 on_delta=None, on_status=None, on_result=None, confirm=None):
         """
         on_delta: Callable[[str], None]      流式文本增量
         on_status: Callable[[str], None]     步骤状态（如"正在思考/执行工具 click"）
+        on_result: Callable[[str, str], None] 工具执行结果（工具名, 输出文本）
         confirm: Callable[[str, dict], bool] 工具执行前确认；None 表示自动放行（测试用）
         """
         self.llm = llm
         self.mcp = mcp_manager
         self.on_delta = on_delta
         self.on_status = on_status
+        self.on_result = on_result
         self.confirm = confirm
         self._messages: list = []
         self.tokens = {"prompt": 0, "completion": 0}
@@ -190,6 +192,8 @@ class AgentEngine:
                             self.on_status(f"正在执行: {name}")
                         res = self._execute(name, args, allow_dangerous=approved)
                         text, imgs = res["text"], res["images"]
+                        if self.on_result:
+                            self.on_result(name, text)
                         # 操作类工具无截图时自动截屏验证（截图验证闭环）
                         if not imgs and name in _SCREEN_CHANGING:
                             try:

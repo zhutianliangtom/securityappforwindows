@@ -2,7 +2,8 @@
 
 配置目录：~/.winapp_migrator/agent/
 - skills.json      技能：[{"name","description","instruction"}]
-- agents.json      助手：[{"name","description","system_prompt","skills":[],"tools":[]}]
+- agents.json      助手：[{"name","description","persona","rules","tool_instructions","system_prompt","skills":[],"tools":[]}]
+                    persona: 人设描述；rules: 规则约束数组；tool_instructions: {工具名: {"理解": str, "执行拆分": [str]}}
 - mcp_servers.json MCP：[{"name","type":"stdio|sse","command","args"|"url"}]
 目录/文件不存在时使用内置默认值，首次运行自动生成示例文件。
 """
@@ -21,13 +22,45 @@ DEFAULT_SKILLS = [
 
 DEFAULT_AGENTS = [
     {"name": "桌面助手", "description": "通用桌面自动化助手：观察屏幕并操控电脑完成任务",
-     "system_prompt": ("你是运行在 Windows 上的桌面 AI 助手。通过截图观察屏幕，使用工具"
-                       "（移动/点击鼠标、输入文本、执行白名单命令）帮用户完成任务。\n"
-                       "规则：\n"
-                       "1. 每次操作前用一句话说明意图（会弹窗由用户确认）。\n"
-                       "2. 操作后先截图验证结果再继续。\n"
-                       "3. 坐标必须基于最近一次截图与 get_screen_size 的分辨率计算。\n"
-                       "4. 完成目标后总结结果，不要做多余操作。"),
+     "persona": "你是运行在 Windows 上的桌面 AI 助手，性格谨慎可靠、注重安全，"
+                "执行每步操作前都会先想清楚后果。",
+     "rules": [
+         "1. 每次操作前用一句话说明意图（会弹窗由用户确认）。",
+         "2. 操作后先截图验证结果再继续。",
+         "3. 坐标必须基于最近一次截图与 get_screen_size 的分辨率计算。",
+         "4. 完成目标后总结结果，不要做多余操作。",
+         "5. 读取/写入文件前必须先确认路径在用户目录内。",
+     ],
+     "tool_instructions": {
+         "run_command": {
+             "理解": "在系统终端执行命令，返回命令输出文本；只读诊断命令优先。",
+             "执行拆分": ["分析命令安全性（删除/格式化/关机等一律拒绝）",
+                          "说明意图并等待确认",
+                          "执行并读取输出",
+                          "截图验证屏幕变化"],
+         },
+         "write_file": {
+             "理解": "创建或覆盖写入文本文件，仅限用户目录。",
+             "执行拆分": ["确认目标路径合法（用户目录内）",
+                          "说明写入目标文件并等待确认",
+                          "执行写入",
+                          "截图或读取文件确认结果"],
+         },
+         "read_file": {
+             "理解": "读取文本文件内容，仅限用户目录。",
+             "执行拆分": ["确认目标路径合法",
+                          "读取文件",
+                          "向用户摘要关键内容"],
+         },
+         "save_memory": {
+             "理解": "把任务中的关键信息（用户偏好、约定、路径）追加保存到本地记忆。",
+             "执行拆分": ["判断信息是否值得长期记住",
+                          "确认保存意图",
+                          "写入记忆文件"],
+         },
+     },
+     "system_prompt": ("通过截图观察屏幕，使用工具（移动/点击鼠标、输入文本、"
+                       "执行白名单命令、读写文件、管理记忆）帮用户完成任务。"),
      "skills": ["screen_operate"], "tools": []},
 ]
 
@@ -91,10 +124,35 @@ def skill_instructions(skill_names: list) -> str:
 
 
 def build_system_prompt(agent_name: str = "") -> str:
-    """构造 system prompt：Agent 基础提示 + 所选技能说明 + 内置工具列表"""
+    """构造 system prompt：人设 persona + 基础提示 + 严格规则 + 工具执行规范 + 技能说明 + 工具列表"""
     agent = next((a for a in load_agents() if a.get("name") == agent_name), None) \
         or DEFAULT_AGENTS[0]
-    prompt = agent.get("system_prompt", "")
+    parts = []
+    persona = agent.get("persona")
+    if persona:
+        parts.append(persona)
+    system_prompt = agent.get("system_prompt", "")
+    if system_prompt:
+        parts.append(system_prompt)
+    rules = agent.get("rules", [])
+    if rules:
+        parts.append("严格规则（必须遵守）：\n" + "\n".join(str(r) for r in rules))
+    tool_ins = agent.get("tool_instructions") or {}
+    if tool_ins:
+        block = ["工具执行规范（每个工具先理解再按固定流程拆分执行）："]
+        for tname, cfg in tool_ins.items():
+            if not isinstance(cfg, dict):
+                continue
+            u = cfg.get("理解")
+            steps = cfg.get("执行拆分")
+            if u:
+                block.append(f"- {tname}（{u}）")
+            if steps:
+                for i, st in enumerate(steps, 1):
+                    block.append(f"  步骤{i}. {st}")
+        parts.append("\n".join(block))
+    prompt = "\n\n".join(parts)
+
     skills = agent.get("skills", [])
     if skills:
         inst = skill_instructions(skills)

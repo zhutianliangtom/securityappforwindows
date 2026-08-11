@@ -17,12 +17,12 @@ import sys
 import threading
 from pathlib import Path
 
-from PyQt6.QtCore import Qt, QTimer, QSettings, pyqtSignal
-from PyQt6.QtGui import QIcon, QFont
+from PyQt6.QtCore import Qt, QTimer, QSettings, QPropertyAnimation, pyqtSignal
+from PyQt6.QtGui import QIcon, QFont, QPainter, QPen, QColor
 from PyQt6.QtWidgets import (
     QDialog, QLabel, QLineEdit, QPushButton, QComboBox, QScrollArea,
     QVBoxLayout, QHBoxLayout, QMessageBox, QFormLayout, QWidget,
-    QApplication, QStyle, QListWidget,
+    QApplication, QStyle, QListWidget, QGraphicsOpacityEffect,
 )
 
 from winapp_migrator.core import agent_llm, agent_engine, agent_skills, agent_sandbox
@@ -134,6 +134,35 @@ def _render_text(raw: str) -> str:
     return _md_to_html(raw)
 
 
+class _Spinner(QWidget):
+    """自绘转圈动画（矢量，无 emoji）：QTimer 驱动圆弧旋转"""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._angle = 0
+        self.setFixedSize(18, 18)
+        self._timer = QTimer(self)
+        self._timer.timeout.connect(self._rotate)
+        self._timer.start(50)
+
+    def _rotate(self):
+        self._angle = (self._angle + 30) % 360
+        self.update()
+
+    def paintEvent(self, event):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        pen = QPen(QColor(ACCENT), 2.5)
+        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+        p.setPen(pen)
+        p.drawArc(2, 2, 14, 14, -self._angle * 16, 270 * 16)
+        p.end()
+
+
+# 写入类操作：确认弹窗隐藏具体内容，仅提示目标
+_HIDE_CONTENT_TOOLS = {"write_file", "edit_file", "save_memory"}
+
+
 class _ConfirmDialog(QDialog):
     """工具执行确认：显示当前屏幕截图 + 操作 + 风险等级"""
 
@@ -160,12 +189,24 @@ class _ConfirmDialog(QDialog):
         head.setStyleSheet("font-size: 14px;")
         lay.addWidget(head)
 
-        arg_txt = QLabel(json.dumps(args, ensure_ascii=False, indent=2))
+        arg_txt = QLabel()
         arg_txt.setWordWrap(True)
         arg_txt.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         arg_txt.setStyleSheet(
             f"background: {BG}; color: {TEXT_DIM}; border: 1px solid {BORDER};"
             "border-radius: 8px; padding: 10px; font-size: 12px; font-family: Consolas;")
+        if name in _HIDE_CONTENT_TOOLS:
+            # 写入类操作：隐藏写入内容正文，仅显示目标路径与操作类型
+            if name == "save_memory":
+                shown = {"目标": "本地记忆文件 memory.md",
+                         "写入量": f"{len(str(args.get('content', '')))} 字符"}
+            else:
+                shown = {"目标路径": args.get("path", ""),
+                         "操作": {"write_file": "覆盖写入", "edit_file": "精确替换"}.get(name, name)}
+            arg_txt.setText("（写入内容已隐藏，仅确认是否允许此操作）\n\n"
+                            + json.dumps(shown, ensure_ascii=False, indent=2))
+        else:
+            arg_txt.setText(json.dumps(args, ensure_ascii=False, indent=2))
         lay.addWidget(arg_txt, 1)
 
         pic_label = QLabel("正在截取当前屏幕…")
@@ -442,6 +483,7 @@ class _McpManagerDialog(QDialog):
 class AgentPanel(QDialog):
     delta_signal = pyqtSignal(str)
     status_signal = pyqtSignal(str)
+    result_signal = pyqtSignal(str, str)   # 工具名, 执行输出
     confirm_signal = pyqtSignal(str, str, str)  # name, args_json, risk
     mcp_signal = pyqtSignal(str)
 
@@ -470,14 +512,15 @@ class AgentPanel(QDialog):
 
         # 当前 AI 气泡段落序列（交织渲染：思考 → 操作 → 正文 → 操作 → 正文…）
         self._ai_bubble = None
-        self._segments = []   # [{"type": "think|op|text|mark", "html"/"raw": ...}]
-        self._think_idx = 0
+        self._segments = []   # [{"type": "think|op|result|text|mark", "html"/"raw": ...}]
+
+        # 任务进行中的转圈动画行（显示在消息流顶部）
+        self._spinner_row = None
+        self._spinner = None
+        self._spinner_lbl = None
 
         self._build_ui()
         self._connect_signals()
-
-        self._think_timer = QTimer(self)
-        self._think_timer.timeout.connect(self._tick_think)
 
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._refresh_meta)
@@ -573,7 +616,7 @@ class AgentPanel(QDialog):
         self.input.setMinimumHeight(42)
         self.input.setStyleSheet(
             f"QLineEdit {{ background: {PANEL}; color: {TEXT}; border: 1px solid {BORDER};"
-            "border-radius: 10px; padding: 0 14px; font-size: 13px; }}"
+            "border-radius: 10px; padding: 0 14px; font-size: 14px; }}"
             f"QLineEdit:focus {{ border: 1px solid #4B6BD6; }}")
         self.input.returnPressed.connect(self._send)
         bottom.addWidget(self.input, 1)
@@ -615,6 +658,7 @@ class AgentPanel(QDialog):
     def _connect_signals(self):
         self.delta_signal.connect(self._on_delta)
         self.status_signal.connect(self._on_status)
+        self.result_signal.connect(self._on_result)
         self.confirm_signal.connect(self._on_confirm)
         self.mcp_signal.connect(self._on_mcp_status)
 
@@ -637,6 +681,17 @@ class AgentPanel(QDialog):
             self._add_status("AskBeforeEdit 模式：每步操作弹窗确认", OK)
 
     # ---------- 消息气泡 ----------
+    @staticmethod
+    def _fade_in(widget: QWidget, parent: QWidget):
+        """气泡淡入动画（增强体验）"""
+        eff = QGraphicsOpacityEffect(widget)
+        widget.setGraphicsEffect(eff)
+        anim = QPropertyAnimation(eff, b"opacity", parent)
+        anim.setDuration(220)
+        anim.setStartValue(0.0)
+        anim.setEndValue(1.0)
+        anim.start(QPropertyAnimation.DeletionPolicy.DeleteWhenStopped)
+
     def _add_bubble(self, text: str, align: str) -> QLabel:
         bubble = QLabel(text)
         bubble.setWordWrap(True)
@@ -645,12 +700,12 @@ class AgentPanel(QDialog):
         if align == "user":
             bubble.setTextFormat(Qt.TextFormat.PlainText)   # 用户消息纯文本
             bubble.setStyleSheet(f"background: {USER_BG}; color: white;"
-                                 "border-radius: 14px; padding: 10px 14px; font-size: 13px;")
+                                 "border-radius: 14px; padding: 10px 14px; font-size: 14px;")
         else:
             bubble.setTextFormat(Qt.TextFormat.RichText)    # AI 消息富文本（思考/操作/正文）
             bubble.setStyleSheet(f"background: {AI_BG}; color: {TEXT};"
                                  f"border: 1px solid {BORDER}; border-radius: 14px;"
-                                 "padding: 10px 14px; font-size: 13px;")
+                                 "padding: 10px 14px; font-size: 14px;")
         row = QHBoxLayout()
         row.setContentsMargins(0, 0, 0, 0)
         if align == "user":
@@ -660,6 +715,7 @@ class AgentPanel(QDialog):
             row.addWidget(bubble, 0, Qt.AlignmentFlag.AlignLeft)
             row.addStretch(1)
         self.msg_lay.insertLayout(self.msg_lay.count() - 1, row)
+        self._fade_in(bubble, self)
         self._scroll_bottom()
         return bubble
 
@@ -705,10 +761,14 @@ class AgentPanel(QDialog):
                 parts.append(f'<div style="color:{TEXT_DIM};font-size:12px;font-style:italic;">'
                              f'{seg["html"]}</div>')
             elif t == "op":
-                parts.append(f'<div style="color:{ACCENT};font-size:12px;'
+                parts.append(f'<div style="color:{ACCENT};font-size:13px;'
                              f'font-family:Consolas;">{seg["html"]}</div>')
+            elif t == "result":
+                parts.append(f'<div style="color:{TEXT_DIM};font-size:13px;font-family:Consolas;'
+                             f'border-left:3px solid {BORDER};padding:2px 10px;margin:2px 0 4px 14px;">'
+                             f'{seg["html"]}</div>')
             elif t == "text":
-                parts.append(f'<div style="color:{TEXT};font-size:13px;">'
+                parts.append(f'<div style="color:{TEXT};font-size:14px;">'
                              f'{_render_text(seg["raw"])}</div>')
             elif t == "mark":
                 parts.append(f'<div style="color:{TEXT_DIM};font-size:12px;">{seg["html"]}</div>')
@@ -717,29 +777,38 @@ class AgentPanel(QDialog):
         except RuntimeError:
             self._ai_bubble = None
 
-    # ---------- "思考中"动画 ----------
+    # ---------- 转圈动画（AI 任务进行中） ----------
+    def _ensure_spinner(self):
+        """在消息流顶部创建/显示转圈动画行（转圈 + 'AI 思考中…'）"""
+        if self._spinner_row is not None:
+            return
+        self._spinner = _Spinner()
+        self._spinner_lbl = QLabel("AI 思考中…")
+        self._spinner_lbl.setStyleSheet(f"color: {TEXT_DIM}; font-size: 12px;")
+        self._spinner_row = QHBoxLayout()
+        self._spinner_row.setContentsMargins(0, 0, 0, 0)
+        self._spinner_row.setSpacing(8)
+        self._spinner_row.addWidget(self._spinner)
+        self._spinner_row.addWidget(self._spinner_lbl)
+        self._spinner_row.addStretch(1)
+        self.msg_lay.insertLayout(self.msg_lay.count() - 1, self._spinner_row)
+        self._scroll_bottom()
+
+    def _hide_spinner(self):
+        """任务结束/清空时移除转圈动画行"""
+        if self._spinner_row is None:
+            return
+        for i in range(self.msg_lay.count()):
+            if self.msg_lay.itemAt(i).layout() is self._spinner_row:
+                self._free_layout_item(self.msg_lay.takeAt(i))
+                break
+        self._spinner = None
+        self._spinner_lbl = None
+        self._spinner_row = None
+
     def _start_think(self):
-        self._think_idx = 0
-        self._ensure_ai_bubble()
-        if not self._segments or self._segments[-1]["type"] != "think":
-            self._segments.append({"type": "think", "html": "思考中"})
-        else:
-            self._segments[-1]["html"] = "思考中"
-        self._refresh_ai_html()
-        self._think_timer.start(350)
-
-    def _tick_think(self):
-        self._think_idx += 1
-        if self._segments and self._segments[-1]["type"] == "think":
-            self._segments[-1]["html"] = "思考中" + "." * (self._think_idx % 4)
-            self._refresh_ai_html()
-
-    def _stop_think(self):
-        self._think_timer.stop()
-        # 保留思考行（固定文字），思考区始终位于气泡顶部，下方跟操作与正文
-        if self._segments and self._segments[-1]["type"] == "think":
-            self._segments[-1]["html"] = "思考中"
-            self._refresh_ai_html()
+        """任务进行中：显示转圈动画（持续到任务结束）"""
+        self._ensure_spinner()
 
     # ---------- MCP 初始化 ----------
     def _init_mcp(self):
@@ -791,6 +860,7 @@ class AgentPanel(QDialog):
                 mcp_manager=self._mcp,
                 on_delta=lambda s: self.delta_signal.emit(s),
                 on_status=lambda s: self.status_signal.emit(s),
+                on_result=lambda n, t: self.result_signal.emit(n, t),
                 confirm=self._confirm_tool)
         return self._engine
 
@@ -846,7 +916,7 @@ class AgentPanel(QDialog):
                 self._engine.stop()
         self._ai_bubble = None
         self._segments = []
-        self._stop_think()
+        self._hide_spinner()
         while self.msg_lay.count() > 1:  # 保留末尾 stretch
             item = self.msg_lay.takeAt(0)
             self._free_layout_item(item)
@@ -874,7 +944,7 @@ class AgentPanel(QDialog):
             self.send_btn.setEnabled(True)
             self.stop_btn.setText("停止")
             self.stop_btn.setEnabled(False)
-            self._stop_think()
+            self._hide_spinner()
 
     # ---------- 引擎回调（信号槽，主线程） ----------
     def _ensure_text_segment(self):
@@ -883,10 +953,20 @@ class AgentPanel(QDialog):
             self._segments.append({"type": "text", "raw": ""})
 
     def _on_delta(self, s: str):
-        self._stop_think()
         self._ensure_ai_bubble()
         self._ensure_text_segment()
         self._segments[-1]["raw"] += s
+        self._refresh_ai_html()
+        self._scroll_bottom()
+
+    def _on_result(self, name: str, text: str):
+        """工具执行完成：操作行下方换行显示执行输出"""
+        self._ensure_ai_bubble()
+        shown = (text or "").strip()
+        if len(shown) > 400:
+            shown = shown[:400] + " …（输出过长已截断）"
+        shown = _esc(shown).replace("\n", "<br/>")
+        self._segments.append({"type": "result", "html": shown})
         self._refresh_ai_html()
         self._scroll_bottom()
 
@@ -909,9 +989,9 @@ class AgentPanel(QDialog):
             self._refresh_ai_html()
             self._scroll_bottom()
         elif s == "完成":
-            pass   # 正文即最终输出，无需额外标记
+            self._hide_spinner()   # 任务结束，停掉转圈
         elif s in ("已停止", "已达到最大工具轮数，自动结束") or s.startswith("错误"):
-            self._stop_think()
+            self._hide_spinner()
             self._ensure_ai_bubble()
             self._segments.append({"type": "mark", "html": _esc(s)})
             self._refresh_ai_html()

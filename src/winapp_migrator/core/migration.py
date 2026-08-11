@@ -1,5 +1,6 @@
 import os
 import shutil
+import time
 from pathlib import Path
 from typing import Callable, Optional
 
@@ -20,12 +21,28 @@ def migrate_folder(
     target: Path,
     progress_callback: Optional[Callable[[int, str], None]] = None,
     mode: str = "junction",
+    on_conflict: Optional[Callable[[Path, Path], bool]] = None,
 ) -> MigrationResult:
-    """迁移目录。mode="junction" 时旧路径保留目录联接；mode="move" 完全移动，备份由调用方清理"""
+    """迁移目录。mode="junction" 时旧路径保留目录联接；mode="move" 完全移动，备份由调用方清理
+
+    on_conflict(source, target)：目标已存在时询问用户，返回 True 表示删除目标并替换，
+    False 表示跳过该目录（视为失败）。为 None 时目标已存在直接报错。
+    """
     if not source.exists():
         return MigrationResult(False, f"源目录不存在: {source}")
     if target.exists():
-        return MigrationResult(False, f"目标目录已存在: {target}")
+        if on_conflict is None:
+            return MigrationResult(False, f"目标目录已存在: {target}")
+        try:
+            replace = bool(on_conflict(source, target))
+        except Exception:
+            replace = False
+        if not replace:
+            return MigrationResult(False, f"用户选择跳过: 目标目录已存在 {target}")
+        try:
+            shutil.rmtree(target)
+        except OSError as e:
+            return MigrationResult(False, f"目标目录已存在且无法替换: {e}")
 
     details = []
 
@@ -53,14 +70,34 @@ def migrate_folder(
 
     report(70, "重命名原目录为备份...")
     backup = Path(str(source) + ".migrator_backup")
-    try:
-        if backup.exists():
-            shutil.rmtree(backup, ignore_errors=True)
-        source.rename(backup)
-    except Exception as e:
-        logger.exception("重命名原目录失败")
-        shutil.rmtree(target, ignore_errors=True)
-        return MigrationResult(False, f"无法重命名原目录: {e}")
+    renamed = False
+    last_err = ""
+    for attempt in range(3):
+        try:
+            if backup.exists():
+                shutil.rmtree(backup, ignore_errors=True)
+            source.rename(backup)
+            renamed = True
+            break
+        except Exception as e:
+            last_err = str(e)
+            # 换备份名，避开可能被占用的残留备份
+            backup = Path(f"{source}.migrator_backup{attempt + 1}")
+            time.sleep(0.8)
+    if not renamed:
+        if mode == "junction":
+            shutil.rmtree(target, ignore_errors=True)
+            return MigrationResult(False, f"无法重命名原目录: {last_err}")
+        # move 模式：文件已复制并校验，直接尝试删除原目录；删除失败则残留待清理，不中断迁移
+        try:
+            shutil.rmtree(source, ignore_errors=True)
+        except Exception:
+            pass
+        if not source.exists():
+            details.append("原目录已直接删除")
+            return MigrationResult(True, f"成功迁移到 {target}", details)
+        details.append(f"警告: 原目录未能删除（{last_err}），请稍后手动清理 {source}")
+        return MigrationResult(True, f"成功迁移到 {target}", details, backup_path=source)
 
     report(80, "处理旧目录...")
     if mode == "junction":

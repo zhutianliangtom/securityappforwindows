@@ -22,6 +22,7 @@ class MigrationOrchestrator:
         progress_callback: Optional[Callable[[int, str], None]] = None,
         update_registry: bool = True,
         extra_dirs: Optional[List[Path]] = None,
+        on_conflict: Optional[Callable[[Path, Path], bool]] = None,
     ) -> dict:
         source = app.install_location
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -51,7 +52,7 @@ class MigrationOrchestrator:
         all_blocked = _terminate_processes(source)
         if all_blocked:
             self._notify(progress_callback, 3, f"结束占用进程... 以下进程无法自动结束: {', '.join(all_blocked)}")
-        result = migrate_folder(source, target, progress_callback, mode="move")
+        result = migrate_folder(source, target, progress_callback, mode="move", on_conflict=on_conflict)
         if not result.success:
             return {
                 "success": False,
@@ -66,7 +67,7 @@ class MigrationOrchestrator:
             extra_target = target.parent / (target.name + "_Data") / extra.name
             self._notify(progress_callback, None, f"迁移数据目录: {extra}")
             all_blocked += _terminate_processes(extra)
-            r = migrate_folder(extra, extra_target, progress_callback, mode="move")
+            r = migrate_folder(extra, extra_target, progress_callback, mode="move", on_conflict=on_conflict)
             if not r.success:
                 self._rollback(moved)
                 return {

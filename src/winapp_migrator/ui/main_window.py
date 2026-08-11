@@ -1,6 +1,7 @@
 import os
 import sys
 import ctypes
+import threading
 from pathlib import Path
 from typing import List
 
@@ -134,6 +135,7 @@ class IconLoaderWorker(QThread):
 class MigrateWorker(QThread):
     progress = pyqtSignal(int, str)
     finished = pyqtSignal(dict)
+    conflict = pyqtSignal(object, object)  # source, target：请求用户确认是否替换
 
     def __init__(self, app: AppInfo, target: Path, extra_dirs=None, parent=None):
         super().__init__(parent)
@@ -141,10 +143,28 @@ class MigrateWorker(QThread):
         self.target = target
         self.extra_dirs = extra_dirs or []
         self.orchestrator = MigrationOrchestrator()
+        self._conflict_answer = False
+        self._conflict_event = threading.Event()
+
+    def _on_conflict(self, source: Path, target: Path) -> bool:
+        """目标已存在时发信号到主线程询问，阻塞等待用户选择"""
+        self._conflict_answer = False
+        self._conflict_event.clear()
+        self.conflict.emit(source, target)
+        self._conflict_event.wait()
+        return self._conflict_answer
+
+    def resolve_conflict(self, replace: bool):
+        """主线程调用：注入用户选择并唤醒工作线程"""
+        self._conflict_answer = replace
+        self._conflict_event.set()
 
     def run(self):
         try:
-            result = self.orchestrator.migrate(self.app, self.target, self.progress.emit, extra_dirs=self.extra_dirs)
+            result = self.orchestrator.migrate(
+                self.app, self.target, self.progress.emit,
+                extra_dirs=self.extra_dirs, on_conflict=self._on_conflict,
+            )
             self.finished.emit(result)
         except Exception as e:
             logger.exception("迁移异常")
@@ -649,7 +669,21 @@ class MainWindow(QMainWindow):
         self.migrate_worker = MigrateWorker(self.selected_app, target, extra_dirs)
         self.migrate_worker.progress.connect(self._on_progress)
         self.migrate_worker.finished.connect(self._on_migrate_finished)
+        self.migrate_worker.conflict.connect(self._on_migrate_conflict)
         self.migrate_worker.start()
+
+    def _on_migrate_conflict(self, source: Path, target: Path):
+        """迁移目标已存在：询问用户是否删除并替换"""
+        ret = QMessageBox.question(
+            self,
+            "目标目录已存在",
+            f"目标位置已存在同名目录：\n<b>{target}</b>\n\n"
+            f"是否删除该目录并替换？\n（源目录：{source}）\n\n"
+            f"选择「否」将跳过该目录的迁移。",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        self.migrate_worker.resolve_conflict(ret == QMessageBox.StandardButton.Yes)
 
     def _choose_extra_dirs(self):
         """检测并让用户勾选要一并迁移的数据目录，返回勾选的目录列表"""
@@ -693,14 +727,14 @@ class MainWindow(QMainWindow):
             self._warn_360_blocked(result.get("blocked") or [])
         if result.get("success"):
             self.progress.setValue(100)
-            QMessageBox.information(
-                self,
-                "迁移成功",
-                f"{result['message']}\n\n"
-                f"新位置: {result['target']}\n"
-                f"注册表更新: {result.get('registry_changed', 0)} 处\n"
-                f"快捷方式更新: {result.get('shortcuts_changed', 0)} 个",
-            )
+            msg = (f"{result['message']}\n\n"
+                   f"新位置: {result['target']}\n"
+                   f"注册表更新: {result.get('registry_changed', 0)} 处\n"
+                   f"快捷方式更新: {result.get('shortcuts_changed', 0)} 个")
+            warns = [d for d in (result.get("details") or []) if "警告" in str(d) or "未能删除" in str(d)]
+            if warns:
+                msg += "\n\n⚠ " + "\n".join(warns)
+            QMessageBox.information(self, "迁移成功", msg)
         else:
             self.progress.setValue(0)
             QMessageBox.critical(self, "迁移失败", result.get("message", "未知错误"))

@@ -186,7 +186,8 @@ TOOLS = [
         "function": {
             "name": "run_command",
             "description": "在系统终端执行命令（受沙盒白名单约束）。只读诊断命令放行，"
-                           "危险命令（删除/格式化/关机等）会被拒绝。",
+                           "危险命令（删除/格式化/关机等）会被拒绝。"
+                           "启动 GUI 应用/常驻程序时会立即返回，不等待其退出。",
             "parameters": {"type": "object",
                            "properties": {"command": {"type": "string"}},
                            "required": ["command"]},
@@ -399,19 +400,23 @@ def execute_tool(name: str, args: dict, allow_dangerous: bool = False,
 
 def _run_command(command: str) -> dict:
     try:
-        proc = subprocess.run(command, shell=True, capture_output=True,
-                              text=True, timeout=30,
-                              creationflags=0x08000000)  # CREATE_NO_WINDOW
-        out = (proc.stdout or "").strip()
-        err = (proc.stderr or "").strip()
+        proc = subprocess.Popen(command, shell=True, stdout=subprocess.PIPE,
+                                stderr=subprocess.PIPE, text=True,
+                                creationflags=0x08000000)  # CREATE_NO_WINDOW
+        try:
+            out, err = proc.communicate(timeout=5)
+        except subprocess.TimeoutExpired:
+            # GUI/常驻程序：5 秒内未退出则不再阻塞等待，进程保持后台运行
+            return {"text": "命令已启动并在后台运行（5 秒内未结束，判定为 GUI/常驻程序）。"
+                            "如需确认效果请截图查看。", "images": []}
+        out = (out or "").strip()
+        err = (err or "").strip()
         text = out[:30000]
         if err:
             text += f"\n[stderr] {err[:8000]}"
         if not text:
             text = f"（命令完成，退出码 {proc.returncode}）"
         return {"text": text, "images": []}
-    except subprocess.TimeoutExpired:
-        return _blocked("[沙盒] 命令执行超时（30 秒）")
     except Exception as e:
         return _blocked(f"[沙盒] 命令执行失败: {e}")
 

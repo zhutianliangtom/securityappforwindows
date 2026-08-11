@@ -251,7 +251,7 @@ def build_system_prompt(agent_name: str = "") -> str:
                "ask_user(需求不明确时向用户提问)、"
                "find_app(秒查已安装应用路径)、search_files(用户目录快速查找文件)、"
                "move_mouse/click/drag/scroll(鼠标)、press_key/type_text(键盘)、"
-               "run_command(白名单命令)、read_file/write_file/edit_file(读写编辑文件)、"
+               "run_command(白名单命令，启动GUI/常驻程序会立即返回、不等待退出)、read_file/write_file/edit_file(读写编辑文件)、"
                "list_directory(列目录)、save_memory/load_memory(本地长期记忆)。"
                "若连接了 MCP 服务器，其工具同样可用。")
     prompt += ("\n\n提问机制：当用户需求不明确、缺少关键信息时，必须先调用 ask_user 向用户提问。"

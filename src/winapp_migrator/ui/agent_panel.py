@@ -21,13 +21,15 @@ import uuid
 from pathlib import Path
 
 from PyQt6.QtCore import (Qt, QTimer, QSettings, QPropertyAnimation, pyqtSignal,
-                          pyqtProperty, QEasingCurve, QByteArray, QBuffer, QIODevice, QFileInfo)
-from PyQt6.QtGui import QIcon, QFont, QPainter, QPen, QColor, QPixmap, QImage, QPainterPath
+                          pyqtProperty, QEasingCurve, QByteArray, QBuffer, QIODevice,
+                          QEvent, QRect)
+from PyQt6.QtGui import (QIcon, QFont, QPainter, QPen, QColor, QPixmap, QImage,
+                         QPainterPath, QKeySequence)
 from PyQt6.QtWidgets import (
     QDialog, QLabel, QLineEdit, QPushButton, QComboBox, QScrollArea,
     QVBoxLayout, QHBoxLayout, QMessageBox, QFormLayout, QWidget,
     QApplication, QStyle, QListWidget, QGraphicsOpacityEffect,
-    QCompleter, QRadioButton, QCheckBox, QFileIconProvider, QListWidgetItem,
+    QCompleter, QRadioButton, QCheckBox, QListWidgetItem,
     QStackedWidget, QMenu, QFileDialog, QPlainTextEdit, QSlider,
 )
 
@@ -1027,6 +1029,7 @@ class AgentPanel(QDialog):
         self._stop_anim_angle = 0
 
         self._build_ui()
+        self.setAcceptDrops(True)   # 整个面板接收文件/图片拖放（子控件拒绝后冒泡到此）
         self._sync_effort_ui()   # 把 settings 里的力度/自动开关同步到滑块与模型下拉
         self._connect_signals()
         self._restore_workdir()   # 恢复上次选择的工作目录（QSettings 持久化）
@@ -1242,7 +1245,22 @@ class AgentPanel(QDialog):
         self._completer.setCompletionMode(QCompleter.CompletionMode.InlineCompletion)
         self._completer.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
         self.input.setCompleter(self._completer)
+        self.input.installEventFilter(self)   # 拦截 Ctrl+V：剪贴板图片转附件
         bottom.addWidget(self.input, 1)
+
+        # 输入框右侧「+」上传按钮：文件选择器多选（也支持拖拽 / Ctrl+V 粘贴）
+        self.attach_btn = QPushButton("+")
+        self.attach_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.attach_btn.setAutoDefault(False)
+        self.attach_btn.setFixedSize(42, 42)
+        self.attach_btn.setToolTip("上传文件/图片给 AI（也可拖拽文件到输入框或 Ctrl+V 粘贴截图）")
+        self.attach_btn.setStyleSheet(
+            f"QPushButton {{ background: {PANEL}; color: {ACCENT};"
+            f"border: 1px solid {BORDER}; border-radius: 21px;"
+            "font-size: 22px; font-weight: 700; }}"
+            f"QPushButton:hover {{ border: 1px solid {ACCENT}; }}")
+        self.attach_btn.clicked.connect(self._pick_attachments)
+        bottom.addWidget(self.attach_btn)
 
         # 输入框右侧：手动切换本次使用的模型（选「自动」则按工作力度路由）
         self.model_combo = _ArrowComboBox()
@@ -2350,13 +2368,23 @@ class AgentPanel(QDialog):
         self._rows.append({"type": "user", "text": text})
         self._update_welcome()          # 发消息后欢迎介绍立即消失
 
-        # 用户气泡：文字与拖拽图片一并渲染进同一气泡（图片缩小缩略图、独立成块，不挤压不窜位）
-        if images:
-            src = ("<br/>".join(
-                ([f'<div style="font-size:14px;">{_esc(text).replace(chr(10), "<br/>")}</div>']
-                 if text else []) +
-                [f'<img src="{u}" width="200" style="border-radius:8px;display:block;'
-                 'margin:12px 0 12px 0;">' for u in images]))
+        # 用户气泡：文字与拖入的图片/文件一并渲染进同一气泡
+        # （图片缩小缩略图、文件用彩色徽章缩略图+文件名，独立成块不挤压不窜位）
+        if images or files:
+            parts = ([f'<div style="font-size:14px;">{_esc(text).replace(chr(10), "<br/>")}</div>']
+                     if text else [])
+            parts += [f'<img src="{u}" width="200" style="border-radius:8px;display:block;'
+                      'margin:12px 0 12px 0;">' for u in images]
+            for p in files:
+                parts.append(
+                    f'<div style="display:inline-block;text-align:center;margin:12px 8px 12px 0;'
+                    f'padding:6px;background:{PANEL};border:1px solid {BORDER};border-radius:8px;">'
+                    f'<img src="{self._file_thumb_data_url(p)}" width="56" height="56" '
+                    'style="display:block;">'
+                    f'<div style="font-size:11px;color:{TEXT_DIM};max-width:80px;'
+                    'white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">'
+                    f'{_esc(os.path.basename(p)[:12])}</div></div>')
+            src = "<br/>".join(parts)
             b = self._add_bubble(self._scale_user_html(src, self._font_scale()),
                                  "user", rich=True)
             b.setProperty("rich_src", src)   # 存未缩放原文，窗口全屏时按缩放系数重渲染
@@ -2592,8 +2620,35 @@ class AgentPanel(QDialog):
         self._update_welcome()
         self._add_status("已清空上下文并永久删除该对话", TEXT_DIM)
 
-    # ---------- 拖拽附件（图片/文件） ----------
+    # ---------- 拖拽/粘贴/上传附件（图片/文件） ----------
     _IMG_EXTS = (".png", ".jpg", ".jpeg", ".bmp", ".gif", ".webp")
+
+    # 文件缩略图自定义样式：扩展名 → (徽章文字, 底色)。未收录的扩展名显示其大写形式
+    _FILE_THUMB_STYLE = {
+        ".py": ("PY", "#3572A5"), ".cs": ("CS", "#178600"),
+        ".cpp": ("C++", "#5C8DBC"), ".cc": ("C++", "#5C8DBC"), ".cxx": ("C++", "#5C8DBC"),
+        ".c": ("C", "#555555"), ".h": ("H", "#555555"),
+        ".java": ("JAVA", "#E76F00"), ".kt": ("KT", "#7F52FF"), ".kts": ("KT", "#7F52FF"),
+        ".html": ("HTML", "#E44D26"), ".htm": ("HTML", "#E44D26"), ".css": ("CSS", "#264DE4"),
+        ".js": ("JS", "#F0C000"), ".mjs": ("JS", "#F0C000"), ".ts": ("TS", "#3178C6"),
+        ".jsx": ("JSX", "#61DAFB"), ".tsx": ("TSX", "#3178C6"), ".vue": ("VUE", "#41B883"),
+        ".json": ("JSON", "#7A5BC0"), ".xml": ("XML", "#8A93A6"), ".yaml": ("YAML", "#8A93A6"),
+        ".yml": ("YML", "#8A93A6"), ".toml": ("TOML", "#8A93A6"),
+        ".md": ("MD", "#4B6BD6"), ".txt": ("TXT", "#8A93A6"), ".rst": ("RST", "#8A93A6"),
+        ".sql": ("SQL", "#E38C00"), ".sh": ("SH", "#4EAA25"), ".bash": ("BASH", "#4EAA25"),
+        ".bat": ("BAT", "#4EAA25"), ".ps1": ("PS1", "#012456"), ".cmd": ("CMD", "#4EAA25"),
+        ".go": ("GO", "#00ADD8"), ".rs": ("RS", "#DEA584"), ".rb": ("RB", "#CC342D"),
+        ".php": ("PHP", "#777BB4"), ".swift": ("SWIFT", "#F05138"), ".dart": ("DART", "#0175C2"),
+        ".csv": ("CSV", "#27AE60"), ".xlsx": ("XLSX", "#217346"), ".xls": ("XLS", "#217346"),
+        ".docx": ("DOCX", "#2B579A"), ".doc": ("DOC", "#2B579A"), ".pptx": ("PPT", "#D24726"),
+        ".pdf": ("PDF", "#E74C3C"), ".ipynb": ("IPY", "#F37726"),
+        ".zip": ("ZIP", "#B8860B"), ".7z": ("7Z", "#B8860B"), ".rar": ("RAR", "#B8860B"),
+        ".tar": ("TAR", "#B8860B"), ".gz": ("GZ", "#B8860B"),
+        ".exe": ("EXE", "#3B3B3B"), ".dll": ("DLL", "#3B3B3B"), ".msi": ("MSI", "#3B3B3B"),
+        ".iso": ("ISO", "#3B3B3B"), ".apk": ("APK", "#3DDC84"), ".svg": ("SVG", "#FFB13B"),
+        ".ico": ("ICO", "#8A93A6"), ".ini": ("INI", "#8A93A6"), ".cfg": ("CFG", "#8A93A6"),
+        ".log": ("LOG", "#8A93A6"), ".db": ("DB", "#8A93A6"), ".sqlite": ("DB", "#8A93A6"),
+    }
 
     def dragEnterEvent(self, e):
         if e.mimeData().hasUrls():
@@ -2633,8 +2688,74 @@ class AgentPanel(QDialog):
             self._attach_thumb(QPixmap(path), path)
         else:
             self._pending_files.append(path)
-            icon = QFileIconProvider().icon(QFileInfo(path)).pixmap(40, 40)
-            self._attach_thumb(icon, path, name=os.path.basename(path))
+            self._attach_thumb(self._file_thumb(path), path, name=os.path.basename(path))
+
+    @staticmethod
+    def _file_thumb(path: str, size: int = 56) -> QPixmap:
+        """自定义文件缩略图：按扩展名生成彩色圆角徽章（PY/C++/JAVA/HTML…），
+        未收录的扩展名显示其大写形式，替代单调的系统图标"""
+        ext = os.path.splitext(path or "")[1].lower()
+        label, color = AgentPanel._FILE_THUMB_STYLE.get(
+            ext, (ext[1:].upper() or "FILE", "#6B7280"))
+        pm = QPixmap(size, size)
+        pm.fill(Qt.GlobalColor.transparent)
+        p = QPainter(pm)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(QColor(color))
+        p.drawRoundedRect(2, 2, size - 4, size - 4, 10, 10)
+        f = QFont("Segoe UI", max(7, int(size * 0.20)))
+        f.setBold(True)
+        p.setFont(f)
+        p.setPen(QColor("#FFFFFF"))
+        p.drawText(QRect(0, 0, size, size), Qt.AlignmentFlag.AlignCenter, label[:5])
+        p.end()
+        return pm
+
+    def _file_thumb_data_url(self, path: str) -> str:
+        """文件徽章缩略图 → PNG data URL（嵌入发送后用户气泡富文本）"""
+        pm = self._file_thumb(path)
+        ba = QByteArray()
+        buf = QBuffer(ba)
+        buf.open(QIODevice.OpenModeFlag.WriteOnly)
+        pm.save(buf, "PNG")
+        return "data:image/png;base64," + base64.b64encode(bytes(ba)).decode()
+
+    def _paste_clipboard_image(self) -> bool:
+        """Ctrl+V：剪贴板含图片时作为附件加入（多模态模型）；无图返回 False 走默认文本粘贴"""
+        clip = QApplication.clipboard()
+        if not clip.mimeData().hasImage():
+            return False
+        img = clip.image()
+        if img.isNull():
+            return False
+        if self._text_only:
+            self._add_status("当前为纯文本模型，不支持粘贴图片", WARN)
+            return True   # 吞掉事件，避免图片被当文本粘贴进输入框
+        if img.width() > 320:
+            img = img.scaledToWidth(320, Qt.TransformationMode.SmoothTransformation)
+        ba = QByteArray()
+        buf = QBuffer(ba)
+        buf.open(QIODevice.OpenModeFlag.WriteOnly)
+        img.save(buf, "JPEG", 80)
+        self._pending_images.append(
+            "data:image/jpeg;base64," + base64.b64encode(bytes(ba)).decode())
+        self._attach_thumb(QPixmap.fromImage(img), "剪贴板截图（Ctrl+V 粘贴）")
+        return True
+
+    def eventFilter(self, obj, event):
+        """拦截输入框 Ctrl+V：剪贴板有图片时转成附件，而不是粘贴进文本框"""
+        if obj is self.input and event.type() == QEvent.Type.KeyPress and \
+                event.matches(QKeySequence.StandardKey.Paste) and \
+                self._paste_clipboard_image():
+            return True
+        return super().eventFilter(obj, event)
+
+    def _pick_attachments(self):
+        """「+」上传按钮：文件选择器多选，图片/文件均可（纯文本模型自动过滤图片）"""
+        paths, _ = QFileDialog.getOpenFileNames(self, "选择文件/图片发送给 AI")
+        for p in paths or []:
+            self._add_attachment(p)
 
     def _attach_thumb(self, pixmap: QPixmap, tooltip: str, name: str = ""):
         box = QWidget()

@@ -35,7 +35,7 @@ from PyQt6.QtWidgets import (
     QApplication, QStyle, QListWidget, QGraphicsOpacityEffect,
     QRadioButton, QCheckBox, QListWidgetItem,
     QStackedWidget, QMenu, QFileDialog, QPlainTextEdit, QSlider,
-    QLayout, QWidgetItem,
+    QLayout, QWidgetItem, QInputDialog,
 )
 
 from winapp_migrator.core import agent_llm, agent_engine, agent_skills, agent_sandbox, agent_tools, agent_screen
@@ -544,6 +544,15 @@ class _AgentSettingsDialog(QDialog):
         imp.clicked.connect(self._import_skill)
         root.addWidget(imp)
 
+        # 删除用户导入/创建的技能（内置技能不可删除）
+        del_skill = QPushButton("删除技能…")
+        del_skill.setStyleSheet(f"background: {PANEL}; color: {TEXT};"
+                                f"border: 1px solid {BORDER};")
+        del_skill.setAutoDefault(False)
+        del_skill.setToolTip("删除用户导入/创建的技能（连同 SKILL.md 与附属文件）；内置技能不可删除")
+        del_skill.clicked.connect(self._delete_skill)
+        root.addWidget(del_skill)
+
         btns = QHBoxLayout()
         ok = QPushButton(_std_icon(QStyle.StandardPixmap.SP_DialogYesButton), "保存")
         ok.setStyleSheet(f"background: {OK}; color: #06281B;")
@@ -603,6 +612,29 @@ class _AgentSettingsDialog(QDialog):
             QMessageBox.information(self, "导入技能", msg)
         else:
             QMessageBox.warning(self, "导入失败", msg)
+
+    def _delete_skill(self):
+        """删除用户技能：下拉选择（排除内置），确认后删除并即时生效"""
+        builtin = {s.get("name") for s in agent_skills.DEFAULT_SKILLS}
+        deletable = [s["name"] for s in agent_skills.load_skills()
+                     if s.get("name") and s["name"] not in builtin]
+        if not deletable:
+            QMessageBox.information(self, "删除技能", "没有可删除的技能（内置技能不可删除）")
+            return
+        name, ok = QInputDialog.getItem(self, "删除技能", "选择要删除的技能：",
+                                        deletable, 0, False)
+        if not ok or not name:
+            return
+        reply = QMessageBox.question(
+            self, "确认删除",
+            f"确定删除技能「{name}」吗？\n将同时删除其 SKILL.md 与附属文件（resources 等）。")
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+        ok2, msg = agent_skills.delete_skill(name)
+        if ok2:
+            QMessageBox.information(self, "删除技能", msg)
+        else:
+            QMessageBox.warning(self, "删除失败", msg)
 
 
 class _McpServerDialog(QDialog):

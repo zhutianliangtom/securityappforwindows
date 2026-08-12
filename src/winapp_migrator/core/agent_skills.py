@@ -356,6 +356,40 @@ def load_md_skills() -> list:
     return out
 
 
+def delete_skill(name: str) -> tuple:
+    """删除用户技能：md 技能（skills/<name> 目录含 resources）与 skills.json 中的条目；
+    内置技能（DEFAULT_SKILLS）拒绝删除。返回 (ok, message)。"""
+    import shutil
+    name = (name or "").strip()
+    if not name:
+        return False, "技能名不能为空"
+    builtin = {s.get("name") for s in DEFAULT_SKILLS}
+    if name in builtin:
+        return False, f"「{name}」是内置技能，不可删除"
+    removed = False
+    # 1. md 技能目录（SKILL.md + resources 等附属文件）
+    d = _skills_dir() / name
+    if d.is_dir():
+        try:
+            shutil.rmtree(d)
+            removed = True
+        except OSError as e:
+            return False, f"删除技能目录失败: {e}"
+    # 2. skills.json 中的同名条目
+    try:
+        data = _load("skills.json", DEFAULT_SKILLS)
+        if any(s.get("name") == name for s in data):
+            data = [s for s in data if s.get("name") != name]
+            with open(CONFIG_DIR / "skills.json", "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+            removed = True
+    except OSError:
+        pass
+    if not removed:
+        return False, f"未找到技能「{name}」"
+    return True, f"已删除技能「{name}」并即时生效"
+
+
 def create_md_skill(name: str, description: str, instruction: str) -> tuple:
     """以用户自然语言描述为基础，生成市场标准 SKILL.md 技能并注册。
 

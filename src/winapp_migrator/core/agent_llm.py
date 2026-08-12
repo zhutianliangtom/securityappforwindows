@@ -212,9 +212,60 @@ def build_content(text: str = "", images: Optional[List[str]] = None) -> list:
     return parts or [{"type": "text", "text": ""}]
 
 
+def _repair_tool_pairs(messages: list) -> list:
+    """修复工具调用配对：assistant(tool_calls) 与其 tool 回复必须一一对应，
+    否则上游会报 "tool_calls must be followed by tool messages" 400。
+
+    覆盖场景：上下文压缩/截断切断配对、任务中途停止留下半截 tool_calls、
+    历史持久化恢复的残缺状态。规则：
+    - 孤儿 tool 消息（前面没有 assistant 声明该 call_id）→ 丢弃
+    - assistant 中未被任何 tool 回复的 tool_call → 从 tool_calls 中剔除（保留文本）
+    """
+    pending = {}          # call_id -> 是否已收到回复（False=已回复）
+    first = []
+    for m in messages or []:
+        if not isinstance(m, dict):
+            first.append(m)
+            continue
+        if m.get("role") == "assistant" and m.get("tool_calls"):
+            kept = [tc for tc in m["tool_calls"]
+                    if isinstance(tc, dict) and tc.get("id")]
+            nm = dict(m)
+            if kept:
+                nm["tool_calls"] = kept
+                for tc in kept:
+                    pending.setdefault(tc["id"], True)
+            else:
+                nm.pop("tool_calls", None)
+            first.append(nm)
+        elif m.get("role") == "tool":
+            cid = m.get("tool_call_id")
+            if cid and cid in pending:
+                pending[cid] = False
+                first.append(m)
+            # 无对应声明的孤儿 tool 消息：丢弃
+        else:
+            first.append(m)
+    out = []
+    for m in first:
+        if (isinstance(m, dict) and m.get("role") == "assistant"
+                and m.get("tool_calls")):
+            kept = [tc for tc in m["tool_calls"]
+                    if pending.get(tc.get("id")) is False]
+            nm = dict(m)
+            if kept:
+                nm["tool_calls"] = kept
+            else:
+                nm.pop("tool_calls", None)
+            out.append(nm)
+        else:
+            out.append(m)
+    return out
+
+
 def _sanitize_messages(messages: list) -> list:
     """发送前统一清洗消息：剔除内容数组里的空文本/空图部分、空数组补占位文本、
-    空 content 补空串，避免上游校验器报 'message content parts cannot be empty'"""
+    空 content 补空串，并修复 tool_calls/tool 回复配对完整性（见 _repair_tool_pairs）"""
     out = []
     for m in messages or []:
         if not isinstance(m, dict):
@@ -241,7 +292,7 @@ def _sanitize_messages(messages: list) -> list:
         elif c is None:
             m = dict(m, content="")
         out.append(m)
-    return out
+    return _repair_tool_pairs(out)
 
 
 def _to_responses_input(messages: list) -> list:

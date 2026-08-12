@@ -34,8 +34,12 @@ def _sub_tools(allowed=None) -> list:
 
 
 def _compress(messages: list) -> list:
-    """子 Agent 上下文过长时压缩：保留 system + 首条 user（任务目标）+ 最近 12 条"""
-    return messages[:2] + messages[-12:]
+    """子 Agent 上下文过长时压缩：保留 system + 首条 user（任务目标）+ 最近 12 条；
+    截断边界若落在 tool 回复上则向前回退，避免切断 assistant(tool_calls)/tool 配对"""
+    start = max(len(messages) - 12, 2)
+    while start > 2 and messages[start].get("role") == "tool":
+        start -= 1
+    return messages[:2] + messages[start:]
 
 
 def run_sub_agent(llm, goal, allowed=None, max_rounds=8, stop=None, on_status=None) -> str:

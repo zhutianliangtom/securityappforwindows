@@ -194,9 +194,14 @@ class AgentEngine:
         """
         if len(self._messages) <= keep_recent + 1:
             return 0
+        # 压缩边界不切断 assistant(tool_calls)/tool 回复配对：
+        # 尾部起点若落在 tool 回复上，向前回退包含其 assistant，防止上游 400
+        start = max(len(self._messages) - keep_recent, 1)
+        while start > 1 and self._messages[start].get("role") == "tool":
+            start -= 1
         head = self._messages[0]                       # system 提示
-        recent = self._messages[-keep_recent:]
-        old = self._messages[1:-keep_recent]
+        recent = self._messages[start:]
+        old = self._messages[1:start]
         parts, first_goal = [], ""
         for m in old:
             c = m.get("content")
@@ -472,8 +477,15 @@ class AgentEngine:
                 })
                 last_images = []
                 last_failed = False
+                answered = set()
                 for call in calls:
                     if self._stop.is_set():
+                        # 补齐未执行工具的回复，保持 tool_calls 配对完整，防下一轮发送 400
+                        for c in calls:
+                            if c.get("id") and c["id"] not in answered:
+                                self._messages.append({
+                                    "role": "tool", "tool_call_id": c["id"],
+                                    "content": "[已停止] 用户已停止任务，该工具未执行"})
                         self.end_state = "stopped"
                         return
                     name = call["function"]["name"]
@@ -488,6 +500,7 @@ class AgentEngine:
                                 "请检查参数格式（字符串需正确转义引号）并重新发起该工具调用。")
                         self._messages.append({"role": "tool", "tool_call_id": call["id"],
                                                "content": text})
+                        answered.add(call["id"])
                         if self.on_result:
                             self.on_result(name, text, [])
                         last_failed = True
@@ -529,6 +542,7 @@ class AgentEngine:
                         "role": "tool", "tool_call_id": call["id"],
                         "content": tool_text,   # 纯字符串更兼容（部分 API 拒绝数组 content）
                     })
+                    answered.add(call["id"])
                     if imgs:
                         last_images = imgs   # 本轮全部截图喂给下一轮视觉验证，不做裁剪
                 if last_images:

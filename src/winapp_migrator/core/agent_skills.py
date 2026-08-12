@@ -555,6 +555,8 @@ def build_system_prompt(agent_name: str = "", extra_skills: list = None,
                "避免其他窗口干扰)、get_screen_size(分辨率)、"
                "ask_user(需求不明确时向用户提问)、"
                "find_app(秒查已安装应用路径)、search_files(工作目录内快速查找文件，未设工作目录则搜用户常用目录)、"
+               "web_search(联网搜索，实时信息/新闻/文档，返回标题+URL+摘要)、"
+               "web_fetch(联网抓取指定 URL 的网页/JSON 接口/文件文本内容)、"
                "move_mouse/click/drag/scroll(鼠标)、press_key/type_text(键盘)、"
                "run_command(执行命令，可设 wait/force_quit，长任务用 check_command 轮询进度)、"
                "read_file/write_file/edit_file/delete_file/list_directory(文件读写改删列，相对路径基于工作目录)、"

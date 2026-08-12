@@ -482,6 +482,34 @@ TOOLS = [
     {
         "type": "function",
         "function": {
+            "name": "web_fetch",
+            "description": "联网抓取指定 URL 的内容（网页 HTML / JSON 接口 / raw 文件文本），"
+                           "返回文本供阅读分析。需要访问网络上的页面、接口或文件时使用。",
+            "parameters": {"type": "object",
+                           "properties": {
+                               "url": {"type": "string", "description": "http/https 地址"},
+                               "max_chars": {"type": "integer",
+                                             "description": "返回内容最大字符数，默认 8000"}},
+                           "required": ["url"]},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "web_search",
+            "description": "联网搜索：在 Bing 上搜索关键词，返回结果列表（标题/URL/摘要）。"
+                           "需要查询实时信息、新闻、文档或知识范围外内容时使用。",
+            "parameters": {"type": "object",
+                           "properties": {
+                               "query": {"type": "string", "description": "搜索关键词"},
+                               "max_results": {"type": "integer",
+                                               "description": "返回结果条数，默认 8，最大 10"}},
+                           "required": ["query"]},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "create_skill",
             "description": "以用户自然语言描述为基础，自动生成市场标准 SKILL.md 技能文件并加载（写入 "
                            "skills/<name>/SKILL.md，创建后立即生效，AI 与用户均可通过 /技能名 调用）。",
@@ -716,6 +744,12 @@ def execute_tool(name: str, args: dict, allow_dangerous: bool = False,
             return _migrate_app(str(args.get("name", "")), str(args.get("target", "")))
         if name == "fast_download":
             return _fast_download(str(args.get("url", "")), str(args.get("dest_dir", "")))
+        if name == "web_fetch":
+            return _web_fetch(str(args.get("url", "")),
+                              agent_sandbox.to_int(args.get("max_chars", 8000)))
+        if name == "web_search":
+            return _web_search(str(args.get("query", "")),
+                               agent_sandbox.to_int(args.get("max_results", 8)))
         if name == "create_skill":
             return _create_skill(str(args.get("name", "")),
                                  str(args.get("description", "")),
@@ -1175,6 +1209,91 @@ def cancel_active_download():
             t.cancel()
         except Exception:
             pass
+
+
+def _http_get(url: str, timeout: int = 15, max_bytes: int = 512 * 1024) -> str:
+    """真实 HTTP GET：urllib 标准库请求，带浏览器 UA，超时与大小限制，返回响应文本"""
+    import gzip
+    import urllib.request
+    req = urllib.request.Request(
+        url, headers={
+            "User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                           "AppleWebKit/537.36 (KHTML, like Gecko) "
+                           "Chrome/126.0 Safari/537.36"),
+            "Accept": "text/html,application/json,text/plain,*/*",
+            "Accept-Encoding": "identity",
+            "Accept-Language": "zh-CN,zh;q=0.9",
+        })
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        raw = resp.read(max_bytes + 1)
+    if len(raw) > max_bytes:
+        raw = raw[:max_bytes]
+    # 少数服务器无视 Accept-Encoding 仍返回 gzip：按魔数判断解压
+    if raw[:2] == b"\x1f\x8b":
+        raw = gzip.decompress(raw)
+    return raw.decode("utf-8", errors="replace")
+
+
+def _web_fetch(url: str, max_chars: int = 8000) -> dict:
+    """联网抓取 URL 文本内容（网页/JSON/raw），截断后返回给模型阅读"""
+    import html as _html_mod
+    url = (url or "").strip()
+    if not url:
+        return _blocked("[web_fetch] 缺少 URL")
+    if not url.lower().startswith(("http://", "https://")):
+        return _blocked("[web_fetch] 仅支持 http/https 地址")
+    try:
+        text = _http_get(url)
+    except Exception as e:
+        return _blocked(f"[web_fetch] 请求失败: {e}")
+    text = _html_mod.unescape(text).strip()
+    if not text:
+        return _blocked("[web_fetch] 返回内容为空")
+    if len(text) > max_chars:
+        text = text[:max_chars] + f"\n…（内容过长，已截断至 {max_chars} 字符）"
+    return {"text": f"[web_fetch] {url}\n{text}", "images": []}
+
+
+def _web_search(query: str, max_results: int = 8) -> dict:
+    """联网搜索：Bing（cn.bing.com）关键词搜索，解析结果列表（标题/URL/摘要）"""
+    import re as _re
+    import urllib.parse
+    query = (query or "").strip()
+    if not query:
+        return _blocked("[web_search] 缺少搜索关键词 query")
+    max_results = max(1, min(int(max_results or 8), 10))
+    url = f"https://cn.bing.com/search?q={urllib.parse.quote(query)}&mkt=zh-CN"
+    try:
+        html = _http_get(url)
+    except Exception as e:
+        return _blocked(f"[web_search] 搜索请求失败: {e}")
+    # Bing 结果条目 <li class="b_algo"> 内 <h2><a href> 标题 + <p> 摘要
+    items = []
+    for m in _re.finditer(r'<li class="b_algo"[^>]*>(.*?)</li>', html, _re.S):
+        block = m.group(1)
+        am = _re.search(r'<a[^>]+href="([^"]+)"[^>]*>(.*?)</a>', block, _re.S)
+        if not am:
+            continue
+        href = am.group(1).strip()
+        title = _re.sub(r"<[^>]+>", "", am.group(2)).strip()
+        if not title:
+            continue
+        pm = _re.search(r"<p[^>]*>(.*?)</p>", block, _re.S)
+        snippet = _re.sub(r"<[^>]+>", "", pm.group(1)).strip() if pm else ""
+        items.append((title, href, snippet))
+        if len(items) >= max_results:
+            break
+    if not items:
+        return {"text": f"[web_search] 未解析到结果（关键词：{query}）。"
+                        "可改用 web_fetch 直接抓取搜索页分析。", "images": []}
+    import html as _html_mod
+    lines = [f"搜索结果（{len(items)} 条，来源 Bing）："]
+    for i, (t, h, s) in enumerate(items, 1):
+        lines.append(f"{i}. {_html_mod.unescape(t)}")
+        lines.append(f"   {h}")
+        if s:
+            lines.append(f"   摘要：{_html_mod.unescape(s)[:200]}")
+    return {"text": "\n".join(lines), "images": []}
 
 
 def _fast_download(url: str, dest_dir: str) -> dict:

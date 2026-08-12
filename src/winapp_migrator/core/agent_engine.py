@@ -327,14 +327,18 @@ class AgentEngine:
         if name in self._builtin_names:
             # 内置工具（run_command 等）同样可能长时间阻塞 → 用带超时/可中断封装
             try:
+                # 下载不设 40s 放弃：长任务由 UI 轮询快照渲染进度条，停止按钮可取消
+                timeout = 3600.0 if name == "fast_download" else 40.0
                 res = _call_with_stop(
                     lambda: agent_tools.execute_tool(name, args, allow_dangerous=allow_dangerous),
-                    self._stop, timeout=40.0)
+                    self._stop, timeout=timeout)
                 if res is None:   # stop 触发已放弃等待（工具仍在后台线程执行）
+                    if name == "fast_download":
+                        agent_tools.cancel_active_download()   # 停止即取消后台下载
                     return {"text": "[已停止等待] 工具仍在后台执行，本轮已跳过", "images": []}
                 return res
             except TimeoutError:
-                return {"text": f"[工具超时] {name} 无响应，已放弃（40 秒）", "images": []}
+                return {"text": f"[工具超时] {name} 无响应，已放弃（{timeout:.0f} 秒）", "images": []}
             except Exception as e:
                 return {"text": f"[工具错误] {name}: {e}", "images": []}
         if self.mcp:

@@ -1150,6 +1150,35 @@ def _migrate_app(name: str, target: str) -> dict:
     return {"text": f"应用「{app.name}」迁移{state}：{result.get('message', '')}", "images": []}
 
 
+# 当前活跃下载任务（供 UI 轮询快照渲染进度条）
+_active_download = None
+
+
+def get_active_download():
+    return _active_download
+
+
+def set_active_download(task):
+    global _active_download
+    _active_download = task
+
+
+def clear_active_download():
+    global _active_download
+    _active_download = None
+
+
+def cancel_active_download():
+    """停止按钮触发时取消后台下载任务"""
+    global _active_download
+    t, _active_download = _active_download, None
+    if t is not None:
+        try:
+            t.cancel()
+        except Exception:
+            pass
+
+
 def _fast_download(url: str, dest_dir: str) -> dict:
     from winapp_migrator.core.fast_download import DownloadTask
     url = (url or "").strip()
@@ -1159,8 +1188,9 @@ def _fast_download(url: str, dest_dir: str) -> dict:
     try:
         os.makedirs(dest, exist_ok=True)
         task = DownloadTask(url, dest)
+        set_active_download(task)   # 注册为活跃下载，UI 轮询快照渲染进度条
         task.start()
-        task.join(timeout=60)
+        task.join()                 # 等待完成/失败/取消，不做提前放弃
         snap = task.snapshot()
         if snap.get("status") == "done":
             return {"text": f"下载完成：{snap.get('path')}（{_fmt_size(snap.get('total'))}）",
@@ -1168,6 +1198,7 @@ def _fast_download(url: str, dest_dir: str) -> dict:
         err = snap.get("error") or "进行中（可稍后重试）"
         return {"text": f"下载未完成：状态 {snap.get('status')}，{err}", "images": []}
     except Exception as e:
+        clear_active_download()
         return _blocked(f"[fast_download] 下载失败: {e}")
 
 

@@ -1254,9 +1254,8 @@ class AgentPanel(QDialog):
         self._think_start = 0.0        # 本轮思考开始时间（time.time）
         self._think_done = False       # 思考是否已完成（已输出"已思考 x 秒"）
 
-        # 卡死兜底 hooks：长时间无任何输出则自动停止
+        # 卡死兜底 hooks：最近一次有输出/状态的时间戳（供 UI 反馈，不再自动强停）
         self._last_activity = 0.0      # 最近一次有输出/状态的时间戳
-        self._stalled_stop = False     # 是否因卡死自动停止
         self._task_active = False      # 是否有任务在执行（结束收尾的可靠依据）
         self._eval_pending = None      # 任务难度评估待启动参数 (ai_text, send_images, skill_names)
         # 管理员权限下的原生拖放（UIPI 绕行，仅提权时启用）
@@ -2002,6 +2001,7 @@ class AgentPanel(QDialog):
                 self.msg_lay.takeAt(i)
                 break
         self.msg_lay.insertLayout(self.msg_lay.count() - 1, self._spinner_row)
+        self._scroll_bottom()   # 移动后确保滚到底部，动画行不被遮挡
 
     # ---------- 发送/停止按钮转圈动画 ----------
     @staticmethod
@@ -2042,12 +2042,14 @@ class AgentPanel(QDialog):
 
     def _scroll_bottom(self):
         # 流式输出高频调用时去重，避免 singleShot 堆积；
-        # 0ms 立即滚 + 150ms 兜底（气泡最终高度稳定后再滚一次）
+        # 0ms 立即滚 + 150/400/800ms 兜底（气泡高度与布局异步稳定后确保滚到最底部）
         if self._scroll_pending:
             return
         self._scroll_pending = True
         QTimer.singleShot(0, self._do_scroll_bottom)
         QTimer.singleShot(150, self._do_scroll_bottom)
+        QTimer.singleShot(400, self._do_scroll_bottom)
+        QTimer.singleShot(800, self._do_scroll_bottom)
 
     def _do_scroll_bottom(self):
         self._scroll_pending = False
@@ -2115,6 +2117,19 @@ class AgentPanel(QDialog):
                              f'border-left:3px solid {BORDER};padding:2px 10px;'
                              'margin:16px 0 4px 14px;">'
                              f'{seg["html"]}</div>')
+            elif t == "progress":
+                # 下载进度条：AI 气泡内实时渲染（面板轮询快照更新）
+                pct = max(0, min(100, int(seg.get("pct") or 0)))
+                bw = 220
+                fill = int(bw * pct / 100)
+                parts.append(
+                    f'<div style="margin:12px 0 6px;">'
+                    f'<div style="background:{BG};border:1px solid {BORDER};border-radius:6px;'
+                    f'height:10px;width:{bw}px;">'
+                    f'<div style="background:{ACCENT};height:10px;width:{fill}px;'
+                    'border-radius:6px;"></div></div>'
+                    f'<div style="color:{TEXT_DIM};font-size:11px;margin-top:3px;">'
+                    f'{_esc(seg.get("text") or "下载中…")}</div></div>')
             elif t == "image":
                 # 截图融入主对话气泡：圆角缩略图 + 细边框，不显示“已截屏”等提示小字
                 url = seg.get("url", "")
@@ -2666,7 +2681,6 @@ class AgentPanel(QDialog):
         self._think_done = False
         self._think_start = 0.0
         self._last_activity = time.time()
-        self._stalled_stop = False
         self.input.clear()
         self.input.setFocus()
 
@@ -2936,7 +2950,6 @@ class AgentPanel(QDialog):
         self._think_done = False
         self._think_start = 0.0
         self._last_activity = 0.0
-        self._stalled_stop = False
         self._clear_attachments()
         while self.msg_lay.count() > 1:  # 保留末尾 stretch
             item = self.msg_lay.takeAt(0)
@@ -3212,14 +3225,8 @@ class AgentPanel(QDialog):
         running = bool(self._eval_pending is not None
                        or (self._engine and self._engine._thread
                            and self._engine._thread.is_alive()))
-        # 卡死兜底：任务进行中超过 60 秒无任何输出/状态 → 强制停止
-        # （评估阶段跳过：assess_effort 自带 30 秒超时与本地回退）
-        if running and self._eval_pending is None and self._last_activity \
-                and not self._stalled_stop \
-                and time.time() - self._last_activity > 60:
-            self._stalled_stop = True
-            self._add_status("AI 长时间无响应（>60 秒），已自动停止（卡死兜底）", WARN)
-            self._engine.stop()
+        # 下载任务实时进度：轮询快照渲染到 AI 气泡内进度条
+        self._sync_download_progress()
         # 任务结束即清理：只要任务标志开启且线程已退出，就执行收尾
         # （不依赖 spinner/按钮状态判断，避免切换模式等路径下漏清理）
         if not running and self._task_active:
@@ -3236,11 +3243,50 @@ class AgentPanel(QDialog):
             self._persist_current()   # 任务结束即持久化当前会话（重启可恢复）
             self._scroll_bottom()   # 结束执行时自动滚动到最下方
 
+    def _sync_download_progress(self):
+        """轮询活跃下载任务，把进度条实时渲染进 AI 气泡（完成后保留最终状态）"""
+        task = agent_tools.get_active_download()
+        if task is None:
+            return
+        try:
+            snap = task.snapshot()
+        except Exception:
+            agent_tools.clear_active_download()
+            return
+        status = snap.get("status") or ""
+        total = snap.get("total") or 0
+        done = snap.get("done") or 0
+        pct = int(done * 100 / total) if total else 0
+        name = snap.get("filename") or "下载中"
+        self._ensure_ai_bubble()
+        seg = next((s for s in reversed(self._segments)
+                    if s.get("type") == "progress"), None)
+        if seg is None:
+            seg = {"type": "progress", "pct": 0, "text": ""}
+            self._segments.append(seg)
+        seg["pct"] = pct
+        seg["text"] = (f"{name} · {self._fmt_bytes(done)}/{self._fmt_bytes(total)}"
+                       f" · {status}")
+        self._refresh_ai_html()
+        if status in ("done", "error", "canceled"):
+            agent_tools.clear_active_download()   # 结束：保留最终进度条不再轮询
+        self._scroll_bottom()
+
+    @staticmethod
+    def _fmt_bytes(n) -> str:
+        """字节数人性化显示（B/KB/MB/GB）"""
+        try:
+            n = max(0, int(n or 0))
+        except (TypeError, ValueError):
+            n = 0
+        for unit in ("B", "KB", "MB", "GB", "TB"):
+            if n < 1024:
+                return f"{n:.0f} {unit}" if unit == "B" else f"{n:.1f} {unit}"
+            n /= 1024
+        return f"{n:.1f} PB"
+
     def _show_end_badge(self):
         """任务结束后在 AI 气泡外显示结果徽章"""
-        if self._stalled_stop:
-            self._add_badge("Error", ERR)
-            return
         state = getattr(self._engine, "end_state", "") if self._engine else ""
         if self._user_stopped or state == "stopped":
             self._add_badge("Stop by user", WARN)

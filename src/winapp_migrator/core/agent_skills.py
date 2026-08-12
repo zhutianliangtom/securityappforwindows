@@ -1,7 +1,9 @@
 """skills / agents / MCP 服务器配置：JSON 文件加载（启动时读取，可热改）
 
+技能已统一为市场标准 md 格式（~/.winapp_migrator/agent/skills/<name>/SKILL.md），
+skills.json 仅保留用户自建的非内置 JSON 技能（内置旧 JSON 条目加载时自动迁移移除）。
 配置目录：~/.winapp_migrator/agent/
-- skills.json      技能：[{"name","description","instruction"}]
+- skills.json      用户自建技能（可选）：[{"name","description","instruction"}]
 - agents.json      助手：[{"name","description","persona","rules","tool_instructions","system_prompt","skills":[],"tools":[]}]
                     persona: 人设描述；rules: 规则约束数组；tool_instructions: {工具名: {"理解": str, "执行拆分": [str]}}
 - mcp_servers.json MCP：[{"name","type":"stdio|sse","command","args"|"url"}]
@@ -16,57 +18,12 @@ from pathlib import Path
 
 CONFIG_DIR = Path.home() / ".winapp_migrator" / "agent"
 
-DEFAULT_SKILLS = [
-    {"name": "screen_operate", "description": "屏幕操控（截图分析、鼠标点击、键盘输入）",
-     "instruction": ("你可以通过截图观察屏幕，用鼠标点击/输入文本完成用户请求。标准流程：\n"
-                     "1. 任务开始先截图观察当前屏幕环境，并用 get_screen_size 确认分辨率。\n"
-                     "2. 每步操作前用一句话说明意图。\n"
-                     "3. 坐标必须基于最近截图换算像素位置，禁止凭空估计。\n"
-                     "4. 操作后立即截图验证结果：目标出现才继续；失败则分析截图差异、修正坐标/方案重试。\n"
-                     "5. 全部完成截图确认最终结果。")},
-    {"name": "complex-task", "description": "复杂任务：拆解为步骤清单，逐步执行并验证",
-     "instruction": ("1. 把复杂任务拆解为可独立验证的步骤清单，按依赖顺序排列，先输出计划再动手。\n"
-                     "2. 每步执行前说明意图；执行后截图/读取结果验证，成功才进入下一步。\n"
-                     "3. 步骤失败时先自查原因（截图差异、坐标偏移、路径错误、名称不符），"
-                     "换方案重试（最多 2 次），仍失败用 ask_user 向用户求助，禁止盲目重复。\n"
-                     "4. 需要定位应用/文件时先用 find_app / search_files；信息不足用 ask_user 澄清。\n"
-                     "5. 步骤多时每完成一个阶段用 save_memory 保存进度，上下文被压缩后先 load_memory 恢复。\n"
-                     "6. 全部完成后输出总结：完成项、最终结果、关键产出位置。")},
-    {"name": "brainstorming", "description": "头脑风暴：先理清需求，再制定计划并交用户审核",
-     "instruction": ("1. 先用 ask_user 依次澄清需求：目标、范围、约束、输入/输出与验收标准，"
-                     "直到需求完全明确（禁止在信息不足时猜测执行）。\n"
-                     "2. 需求明确后进入方案设计：提出 2-3 个可行方案并对比优缺点、成本与风险，"
-                     "用 ask_user 征询用户选择。\n"
-                     "3. 方案确认后，按 writing-plans 技能的流程制定详细执行计划："
-                     "把任务拆解为可独立验证的小步骤，每步写明目标与验证方式。\n"
-                     "4. 将完整计划作为文档输出（文字/列表，或 write_file 写入计划文件），"
-                     "并请用户审核：确认计划、或提出修改与补充意见。\n"
-                     "5. 用户审核通过后才开始执行；执行中每步完成后验证再继续，任何变更先与用户确认。")},
-    {"name": "writing-plans", "description": "为多步骤任务制定详细执行计划",
-     "instruction": ("1. 把任务拆解为可独立执行的小步骤，每步写明目标、动作与验证方式，按依赖顺序排列。\n"
-                     "2. 将完整计划作为文档输出（文字/列表，或 write_file 写入计划文件），"
-                     "并请用户审核确认后再执行。\n"
-                     "3. 按计划逐步执行，每步完成后截图或读取结果验证再继续；计划变更先与用户确认。")},
-    {"name": "test-driven-development", "description": "测试驱动开发：先写测试再实现",
-     "instruction": ("1. 先用 write_file 编写针对目标行为的测试用例。\n"
-                     "2. 运行测试确认失败（红）。\n"
-                     "3. 实现最小可用代码使测试通过（绿），必要时重构（重构）。\n"
-                     "4. 重复直到所有用例通过并汇报结果。")},
-    {"name": "systematic-debugging", "description": "系统化调试：不靠猜测定位问题",
-     "instruction": ("1. 复现问题并读取相关日志/输出（run_command 或 read_file）。\n"
-                     "2. 提出最可能的 2-3 个根因假设，按可能性排序。\n"
-                     "3. 逐个用最小实验验证假设，排除一个再验证下一个。\n"
-                     "4. 定位根因后修复，再复现验证已解决。")},
-    {"name": "code-review", "description": "代码审查：检查问题与改进点",
-     "instruction": ("1. 用 read_file 读取待审查文件，list_directory 了解项目结构。\n"
-                     "2. 按顺序检查：逻辑正确性、边界与错误处理、安全与权限、可维护性。\n"
-                     "3. 输出审查结论：严重问题/一般问题/建议，逐条给出文件与行号。")},
-    {"name": "skill-create", "description": "技能创建：根据用户自然语言描述自动生成市场标准 SKILL.md 技能并加载",
-     "instruction": ("1. 倾听用户对技能的描述，提炼出：技能名（英文，字母/数字/下划线/连字符，≤50 字符）、"
-                     "一句话用途简介、执行流程正文。\n"
-                     "2. 用 create_skill 工具创建：instruction 写清触发条件、执行步骤与规则（markdown）。\n"
-                     "3. 创建成功后提示：已可通过 /技能名 或对话描述调用；若用户描述的是可复用的流程，适合沉淀为技能。")},
-]
+# 技能体系统一为市场标准 md 格式（SKILL.md），JSON 技能已废弃：
+# 原 JSON 技能（screen_operate/complex-task/brainstorming/writing-plans/
+# test-driven-development/systematic-debugging/skill-create）已迁移至
+# _BUILTIN_MD_SKILLS 内置 md 模板；code-review 由随包技能提供（见 skills/）。
+# 保留空列表仅为兼容 _ensure_samples / load_skills 的兜底逻辑。
+DEFAULT_SKILLS = []
 
 # 内置 md 技能模板：首次运行时自动生成到 skills/<name>/SKILL.md（市场标准格式，以 SKILL.md 为核心）。
 # 不加入 DEFAULT_SKILLS（JSON 优先会覆盖 md 版，导致用户编辑 SKILL.md 不生效）。
@@ -311,6 +268,83 @@ create_skill(name=技能名, description=用途简介, instruction=执行流程�
 ## 3. 验证与汇报
 创建后说明：技能名、调用方式（/技能名 或自然语言描述）、是否已生效。
 市场已有同名技能时，建议先询问用户是否仍要创建（避免覆盖）。""",
+    },
+    # ---- 原 JSON 技能迁移（统一为市场标准 md）----
+    "screen_operate": {
+        "description": "屏幕操控：截图观察、鼠标点击、键盘输入，坐标基于截图换算",
+        "instruction": """# screen_operate：屏幕操控
+
+当需要操作界面、点击按钮、输入文本时使用本技能。
+
+1. 任务开始先截图观察当前屏幕环境，并用 get_screen_size 确认分辨率。
+2. 每步操作前用一句话说明意图。
+3. 坐标必须基于最近截图换算像素位置，禁止凭空估计。
+4. 操作后立即截图验证结果：目标出现才继续；失败则分析截图差异、修正坐标/方案重试。
+5. 全部完成截图确认最终结果。""",
+    },
+    "complex-task": {
+        "description": "复杂任务：拆解为可独立验证的步骤清单，逐步执行并验证",
+        "instruction": """# complex-task：复杂任务拆解执行
+
+1. 把复杂任务拆解为可独立验证的步骤清单，按依赖顺序排列，先输出计划再动手。
+2. 每步执行前说明意图；执行后截图/读取结果验证，成功才进入下一步。
+3. 步骤失败时先自查原因（截图差异、坐标偏移、路径错误、名称不符），
+   换方案重试（最多 2 次），仍失败用 ask_user 向用户求助，禁止盲目重复。
+4. 需要定位应用/文件时先用 find_app / search_files；信息不足用 ask_user 澄清。
+5. 步骤多时每完成一个阶段用 save_memory 保存进度，上下文被压缩后先 load_memory 恢复。
+6. 全部完成后输出总结：完成项、最终结果、关键产出位置。""",
+    },
+    "brainstorming": {
+        "description": "头脑风暴：先理清需求，再制定计划并交用户审核",
+        "instruction": """# brainstorming：需求澄清与方案计划
+
+当任务目标、范围或验收标准不明确时使用本技能，先想清楚再动手。
+
+1. 先用 ask_user 依次澄清需求：目标、范围、约束、输入/输出与验收标准，
+   直到需求完全明确（禁止在信息不足时猜测执行）。
+2. 需求明确后进入方案设计：提出 2-3 个可行方案并对比优缺点、成本与风险，
+   用 ask_user 征询用户选择。
+3. 方案确认后，按 writing-plans 技能的流程制定详细执行计划：
+   把任务拆解为可独立验证的小步骤，每步写明目标与验证方式。
+4. 将完整计划作为文档输出（文字/列表，或 write_file 写入计划文件），
+   并请用户审核：确认计划、或提出修改与补充意见。
+5. 用户审核通过后才开始执行；执行中每步完成后验证再继续，任何变更先与用户确认。""",
+    },
+    "writing-plans": {
+        "description": "为多步骤任务制定详细执行计划，交用户审核后再执行",
+        "instruction": """# writing-plans：制定执行计划
+
+1. 把任务拆解为可独立执行的小步骤，每步写明目标、动作与验证方式，按依赖顺序排列。
+2. 将完整计划作为文档输出（文字/列表，或 write_file 写入计划文件），
+   并请用户审核确认后再执行。
+3. 按计划逐步执行，每步完成后截图或读取结果验证再继续；计划变更先与用户确认。""",
+    },
+    "test-driven-development": {
+        "description": "测试驱动开发：先写测试再实现，红-绿-重构循环",
+        "instruction": """# test-driven-development：测试驱动开发
+
+1. 先用 write_file 编写针对目标行为的测试用例。
+2. 运行测试确认失败（红）。
+3. 实现最小可用代码使测试通过（绿），必要时重构（重构）。
+4. 重复直到所有用例通过并汇报结果。""",
+    },
+    "systematic-debugging": {
+        "description": "系统化调试：复现问题、假设根因、逐一验证，不靠猜测",
+        "instruction": """# systematic-debugging：系统化调试
+
+1. 复现问题并读取相关日志/输出（run_command 或 read_file）。
+2. 提出最可能的 2-3 个根因假设，按可能性排序。
+3. 逐个用最小实验验证假设，排除一个再验证下一个。
+4. 定位根因后修复，再复现验证已解决。""",
+    },
+    "skill-create": {
+        "description": "技能创建：根据用户自然语言描述自动生成市场标准 SKILL.md 技能并加载",
+        "instruction": """# skill-create：创建新技能
+
+1. 倾听用户对技能的描述，提炼出：技能名（英文，字母/数字/下划线/连字符，≤50 字符）、
+   一句话用途简介、执行流程正文。
+2. 用 create_skill 工具创建：instruction 写清触发条件、执行步骤与规则（markdown）。
+3. 创建成功后提示：已可通过 /技能名 或对话描述调用；若用户描述的是可复用的流程，适合沉淀为技能。""",
     },
 }
 
@@ -689,11 +723,33 @@ def import_skill_file(path: str) -> tuple:
         return False, f"导入失败: {e}"
 
 
+def _migrate_legacy_json_skills() -> None:
+    """迁移旧 JSON 技能：技能已统一为市场标准 md（SKILL.md），
+    若 skills.json 中存在已内置化的旧 JSON 条目则自动移除（保留用户自建技能），
+    避免 JSON 优先覆盖 md 版本导致 SKILL.md 编辑不生效。"""
+    try:
+        path = CONFIG_DIR / "skills.json"
+        if not path.is_file():
+            return
+        data = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(data, list):
+            return
+        builtin = set(_BUILTIN_MD_SKILLS) | {"code-review"}
+        leftover = [s for s in data
+                    if isinstance(s, dict) and s.get("name") not in builtin]
+        if len(leftover) != len(data):
+            path.write_text(json.dumps(leftover, ensure_ascii=False, indent=2),
+                            encoding="utf-8")
+    except Exception:
+        pass
+
+
 def load_skills() -> list:
     """全部技能：内置 skills.json + 内置核心技能兜底 + 市场标准 md 技能（skills/<name>/SKILL.md）
 
     md 技能与 JSON 同名时以 JSON 为准（JSON 优先）。每次调用实时扫描，新增 md 技能即时生效。
     """
+    _migrate_legacy_json_skills()
     merged = list(_load("skills.json", DEFAULT_SKILLS))
     seen = {s.get("name") for s in merged if s.get("name")}
     # 内置核心技能兜底：缺失时补充（保证 skill-create 等始终可用）

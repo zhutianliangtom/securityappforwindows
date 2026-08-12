@@ -2508,7 +2508,23 @@ class AgentPanel(QDialog):
         self.cmd_list.setFixedHeight(min(count, 5) * row_h)
 
     def _on_cmd_selected(self, item):
-        self.input.setPlainText(item.text())
+        """点击候选框选中命令：填入输入框，光标停在命令名末尾（便于继续输入参数）"""
+        self._fill_command(item.text())
+
+    def _complete_cmd(self) -> bool:
+        """Tab 补全命令：按当前输入前缀补全为首个候选，光标停在命令名末尾"""
+        item = self.cmd_list.item(0)
+        if item is None:
+            return False
+        self._fill_command(item.text())
+        return True
+
+    def _fill_command(self, cmd: str):
+        """把命令写入输入框并把光标移到命令末尾（textChanged 会重建候选列表，随后隐藏）"""
+        self.input.setPlainText(cmd)
+        cur = self.input.textCursor()
+        cur.setPosition(len(cmd))
+        self.input.setTextCursor(cur)
         self.input.setFocus()
         self.cmd_list.hide()
 
@@ -3070,12 +3086,14 @@ class AgentPanel(QDialog):
         return True
 
     def eventFilter(self, obj, event):
-        """拦截输入框 Ctrl+V：剪贴板有图片时转成附件，而不是粘贴进文本框。
+        """拦截输入框按键：Tab 补全命令；Ctrl+V 剪贴板图片转附件。
         （文件拖放由面板 dragEnterEvent/dropEvent 统一处理，无需在此接管）"""
-        if obj is self.input and event.type() == QEvent.Type.KeyPress and \
-                event.matches(QKeySequence.StandardKey.Paste) and \
-                self._paste_clipboard_image():
-            return True
+        if obj is self.input and event.type() == QEvent.Type.KeyPress:
+            if event.key() == Qt.Key.Key_Tab and self.cmd_list.isVisible():
+                return self._complete_cmd()
+            if event.matches(QKeySequence.StandardKey.Paste) and \
+                    self._paste_clipboard_image():
+                return True
         return super().eventFilter(obj, event)
 
     def _pick_attachments(self):

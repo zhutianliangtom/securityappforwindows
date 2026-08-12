@@ -27,7 +27,7 @@ from PyQt6.QtWidgets import (
 )
 
 APP_NAME = "WinAppMigrator"
-APP_VERSION = "1.0.0"
+APP_VERSION = "2.0.0"
 APP_PUBLISHER = "WinAppMigrator"
 UNINSTALL_REG_PATH = r"Software\Microsoft\Windows\CurrentVersion\Uninstall\WinAppMigrator"
 

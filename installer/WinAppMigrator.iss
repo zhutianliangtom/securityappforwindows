@@ -5,7 +5,7 @@
 ; ╚══════════════════════════════════════════════════════════╝
 
 #define MyAppName "WinAppMigrator"
-#define MyAppVersion "1.0.0"
+#define MyAppVersion "2.0.0"
 #define MyAppPublisher "WinAppMigrator"
 #define MyAppExeName "WinAppMigrator.exe"
 

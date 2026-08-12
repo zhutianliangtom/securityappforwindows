@@ -225,6 +225,93 @@ find_app(query=应用名)：秒查已安装应用的可启动路径，比逐层�
 - 每次操作后截图验证结果；失败先自查再换方案，禁止盲目重复点击
 - 系统会自动把截图坐标换算为真实屏幕坐标，不要手动换算""",
     },
+    "cmd-ops": {
+        "description": "命令执行与下载：run_command 执行命令（含白名单/沙盒约束）、check_command 轮询后台命令、fast_download 高速下载文件",
+        "instruction": """# cmd-ops：命令执行、轮询与下载
+
+当需要在终端执行命令、下载文件时使用本技能。
+
+## 1. 执行命令
+run_command(command=命令, wait=等待秒数默认5, force_quit=是否超时强杀)：
+- 危险命令（删除/格式化/关机等）会被沙盒拒绝，先想清楚再执行
+- 短命令：默认 wait=5 等输出；启动 GUI 应用建议 wait=1
+- 长任务：wait 秒内未完成且 force_quit=false 会转入后台，返回命令 ID
+- 预计长时间挂起/无输出的命令：force_quit=true 防阻塞
+
+## 2. 轮询后台命令
+check_command(cmd_id=命令ID) 查询进度与最新输出；不传 cmd_id 列出全部后台命令。
+
+## 3. 下载文件
+fast_download(url=下载地址, dest_dir=保存目录留空用工作目录)：多段并发高速下载，自动探测文件名，支持断点续传。
+
+## 4. 汇报
+输出：命令执行结果/退出码、下载的文件路径。""",
+    },
+    "memory": {
+        "description": "长期记忆：save_memory 追加保存用户偏好/重要结论/约定/路径到本地记忆，load_memory 读取全部记忆",
+        "instruction": """# memory：本地长期记忆
+
+当需要记住跨任务信息或回忆过往内容时使用本技能。
+
+## 1. 保存（主动）
+遇到值得长期记住的信息时调用 save_memory(content=内容)：
+- 用户偏好、习惯、语言要求
+- 重要结论、决策、约定
+- 常用路径、工作目录、文件位置
+每条自动带时间戳追加，单条 ≤8000 字符，不会覆盖旧记录。
+
+## 2. 读取
+load_memory() 读取本地记忆文件 memory.md 全部内容。
+新任务开始、或需要回忆过往信息时自行决定是否调用。
+
+## 3. 原则
+- 只存真正长期有价值的信息，临时性内容不必存
+- 每次任务结束前回顾是否有值得保存的内容""",
+    },
+    "sub-agent": {
+        "description": "子任务调度：dispatch_sub_agents 并行派发互不依赖的子任务、explore_project 快速了解新项目、search_large 大规模跨目录搜索",
+        "instruction": """# sub-agent：子任务并行调度与大规模搜索
+
+当任务包含多个互不依赖的子任务、需要快速了解项目、或搜索范围很大时使用本技能。
+
+## 1. 并行派发
+dispatch_sub_agents(tasks=[{title: 标题, goal: 目标与要求}]):
+- 适合：大规模读取/搜索/探索、多文件并行处理
+- 子任务 1-8 个，每个 goal 写清"要做什么、输出什么"
+- 子 Agent 可读写文件但不能执行命令；执行类工作留在主 Agent
+
+## 2. 了解新项目
+explore_project(directory=项目目录)：生成目录结构、读 README 与关键入口，
+输出项目概览（用途/技术栈/模块结构/入口/构建方式）。接手新项目先用它。
+
+## 3. 大规模搜索
+search_large(query=关键词, directories=目录列表可选, max_results=条数)：
+跨目录多轮搜索并汇总命中，适合范围大、文件多的场景；
+小范围/单文件查找用 search_files 更轻量。
+
+## 4. 汇报
+汇总各子任务结果、项目概览或搜索命中清单。""",
+    },
+    "skill-mgmt": {
+        "description": "技能创建：create_skill 根据用户自然语言描述自动生成市场标准 SKILL.md 技能并立即加载生效",
+        "instruction": """# skill-mgmt：创建新技能
+
+当用户要求"创建一个技能 / 把某个能力做成 skill"时使用本技能。
+
+## 1. 确认需求
+用 ask_user 问清：技能要做什么（触发场景）、执行流程、注意事项。
+信息不足禁止猜测。
+
+## 2. 创建
+create_skill(name=技能名, description=用途简介, instruction=执行流程正文)：
+- name：仅字母/数字/下划线/连字符，≤50 字符（如 doc-gen）
+- instruction：markdown 正文，写清触发条件、分步流程、注意事项
+- 生成到 skills/<name>/SKILL.md，创建后立即生效
+
+## 3. 验证与汇报
+创建后说明：技能名、调用方式（/技能名 或自然语言描述）、是否已生效。
+市场已有同名技能时，建议先询问用户是否仍要创建（避免覆盖）。""",
+    },
 }
 
 DEFAULT_AGENTS = [

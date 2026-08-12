@@ -1681,10 +1681,14 @@ class AgentPanel(QDialog):
             self._maximized_once = True
             QTimer.singleShot(0, self.showMaximized)
 
-    def _add_bubble(self, text: str, align: str, rich: bool = False) -> QLabel:
+    def _add_bubble(self, text: str, align: str, rich: bool = False,
+                    animate: bool = True) -> QLabel:
         bubble = QLabel(text)
         bubble.setWordWrap(True)
-        bubble.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        # 支持文本选择 + 富文本链接点击（思考过程折叠/展开等自定义链接）
+        bubble.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse |
+            Qt.TextInteractionFlag.LinksAccessibleByMouse)
         bubble.setMaximumWidth(self._bubble_max_width())
         # 仅 AI 气泡设最小宽度（让截图/内容覆盖半页）；用户气泡按内容自适应，避免短句异常拉长
         if align == "ai":
@@ -1921,16 +1925,16 @@ class AgentPanel(QDialog):
         self._ai_bubble = None
         for r in (self._rows or self._reconstruct_rows()):
             if r.get("type") == "user":
-                self._add_bubble(r.get("text", ""), "user")
+                self._add_bubble(r.get("text", ""), "user", animate=False)
             else:
-                self._add_ai_group_bubble(r.get("segs") or [])
+                self._add_ai_group_bubble(r.get("segs") or [], animate=False)
         # 未归档的当前回复段（渲染时恒为空，防御保留）
         if self._segments:
             self._add_ai_group_bubble(self._segments)
 
-    def _add_ai_group_bubble(self, segs: list):
+    def _add_ai_group_bubble(self, segs: list, animate: bool = True):
         """把一组 AI 段渲染为一条独立气泡，并设为当前气泡（新回复流式续接）"""
-        b = self._add_bubble("", "ai")
+        b = self._add_bubble("", "ai", animate=animate)
         try:
             b.setText(self._build_ai_html(segs))
         except RuntimeError:
@@ -2744,11 +2748,32 @@ class AgentPanel(QDialog):
         return True
 
     def eventFilter(self, obj, event):
-        """拦截输入框 Ctrl+V：剪贴板有图片时转成附件，而不是粘贴进文本框"""
-        if obj is self.input and event.type() == QEvent.Type.KeyPress and \
-                event.matches(QKeySequence.StandardKey.Paste) and \
-                self._paste_clipboard_image():
-            return True
+        """拦截输入框事件：
+        - Ctrl+V：剪贴板有图片时转成附件，而不是粘贴进文本框
+        - 拖放文件：QLineEdit 默认接受拖放但拒绝文件 URL（显示禁用样式），
+          这里接管文件拖放转成附件，纯文本拖放仍走默认"""
+        if obj in (self.input, self.model_combo):
+            t = event.type()
+            if t == QEvent.Type.DragEnter:
+                if event.mimeData().hasUrls():
+                    event.acceptProposedAction()
+                    return True
+            elif t == QEvent.Type.DragMove:
+                if event.mimeData().hasUrls():
+                    event.acceptProposedAction()
+                    return True
+            elif t == QEvent.Type.Drop:
+                if event.mimeData().hasUrls():
+                    for url in event.mimeData().urls():
+                        p = url.toLocalFile()
+                        if p:
+                            self._add_attachment(p)
+                    event.acceptProposedAction()
+                    return True
+            elif t == QEvent.Type.KeyPress and \
+                    event.matches(QKeySequence.StandardKey.Paste) and \
+                    self._paste_clipboard_image():
+                return True
         return super().eventFilter(obj, event)
 
     def _pick_attachments(self):

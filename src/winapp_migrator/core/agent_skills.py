@@ -113,6 +113,118 @@ _BUILTIN_MD_SKILLS = {
 ## 6. 汇报
 输出总结：技能名、来源仓库、安装路径、调用方式（/技能名 或自然语言描述）。""",
     },
+    "doc-gen": {
+        "description": "文档生成：用 create_docx/create_pptx/create_xlsx 自动生成 Word/PPT/Excel，配合 extract_text 验证内容",
+        "instruction": """# doc-gen：Word / PPT / Excel 文档自动生成
+
+当用户要求"做一份文档 / 生成 PPT / 整理成 Excel 表格"时使用本技能。
+
+## 1. 确认需求
+先问清：文档主题与内容要点、保存路径、格式（docx/pptx/xlsx）。
+内容信息不足时用 ask_user 补齐，禁止编造数据。
+
+## 2. 生成
+- Word（create_docx）：path=保存路径，title=文档标题，paragraphs=[段落文本列表]
+- PPT（create_pptx）：path，title=总标题，slides=[{title: 页标题, bullets: [要点列表]}]
+  首页自动生成标题页，每页为"标题+要点"布局；每页要点建议 3-6 条，避免一页堆太多文字。
+- Excel（create_xlsx）：path，sheets=[{name: 工作表名, rows: [[单元格值]...]}]
+  首行常作表头；纯数字字符串自动转数值，无需引号包裹数字。
+
+## 3. 验证（必做）
+生成后用 extract_text(path) 读取文件，确认标题、正文、中文、表格数据均正确。
+
+## 4. 汇报
+输出：文件路径、包含的章节/工作表、内容摘要。""",
+    },
+    "web-search": {
+        "description": "联网搜索：web_search 搜索实时信息（新闻/文档/教程/代码），web_fetch 抓取网页或调用 API 接口",
+        "instruction": """# web-search：联网搜索与网页抓取
+
+当需要查询实时信息、查找资料、调用网络接口时使用本技能。
+
+## 1. 搜索
+web_search(query=搜索关键词, max_results=返回条数)：
+- 适合：新闻、文档、教程、代码示例、产品信息等实时内容
+- 返回标题+URL+摘要，先读摘要判断相关性，再决定是否抓详情
+
+## 2. 抓取详情
+web_fetch(url=地址)，默认 GET；
+- 调用 API：method=POST/PUT/DELETE，headers 传鉴权头（如 {"Authorization": "Bearer xxx"}），
+  body 传请求体（JSON 字符串或原始文本）
+- 响应过长会截断，可指定 max_chars 调整
+
+## 3. 信息不足时
+换关键词重搜或用 ask_user 向用户确认方向，禁止编造内容与链接。
+
+## 4. 汇报
+给出结论并附来源 URL。""",
+    },
+    "file-ops": {
+        "description": "文件操作：read_file/write_file/edit_file/delete_file/list_directory 读写改删列文件，search_files 模糊查找",
+        "instruction": """# file-ops：文件读写改删与查找
+
+当需要读取、创建、修改、删除文件或查找文件时使用本技能。
+
+## 1. 定位
+- 知道路径：直接用 read_file / write_file / edit_file / delete_file / list_directory
+  （相对路径基于工作目录，未设工作目录则基于用户目录）
+- 不知道路径：search_files(query=文件名关键字, folder=限定目录可选) 模糊查找
+
+## 2. 操作要点
+- 读：read_file(path)，大文件分段读取
+- 写：write_file(path, content)，会覆盖已存在文件，写前先确认目标
+- 改：edit_file(path, old_text, new_text)，只替换首次匹配，old_text 需在文件中唯一
+- 删：delete_file(path)
+- 列目录：list_directory(path)
+
+## 3. 注意事项
+- 修改前先 read_file 了解原文，避免改错
+- 系统关键目录（Windows、Program Files 等）的删除会被沙盒拒绝
+- 操作后建议 read_file 验证结果""",
+    },
+    "system-admin": {
+        "description": "系统管理：find_app 定位应用、system_info/get_time/env_var 查系统信息、optimize_memory 清理内存、uninstall_app 卸载、migrate_app 迁移应用",
+        "instruction": """# system-admin：系统信息查询与应用管理
+
+当需要查询系统信息、定位应用、清理内存、卸载或迁移应用时使用本技能。
+
+## 1. 查询类（无副作用）
+- system_info：主机名/系统版本/CPU 核心数/物理内存
+- get_time：当前时间
+- env_var(name)：读取环境变量
+
+## 2. 定位应用
+find_app(query=应用名)：秒查已安装应用的可启动路径，比逐层截图找图标高效。
+
+## 3. 重量级操作（工具内部会弹用户确认）
+- optimize_memory：清理内存（终止可安全退出的后台进程、压缩工作集）
+- uninstall_app(name)：卸载应用（先调自带卸载器再清理残留）
+- migrate_app(name, target)：把应用迁移到其他盘
+先向用户说明影响，确认后再执行；完成后汇报结果。""",
+    },
+    "ui-automation": {
+        "description": "界面自动化：screenshot 截图观察、click_text 按文字点击、move_mouse/click/zoom_in 精确鼠标操作、type_text/press_key 键盘输入、list_windows/capture_window 只截指定窗口、clipboard 剪贴板",
+        "instruction": """# ui-automation：屏幕观察与鼠标键盘操控
+
+当需要操作界面、点击按钮、输入文字、观察屏幕时使用本技能。
+
+## 1. 观察
+- 先 screenshot 截屏观察当前界面
+- 只操作某个窗口时：list_windows 找到目标窗口 → capture_window(window) 只截该窗口，避开其他窗口干扰
+
+## 2. 点击（按优先级）
+- 文字类目标（按钮/菜单/输入框）：click_text(text)，系统 UIA+OCR 自动定位文字像素中心，无需自己估算坐标
+- 图标/图形目标：move_mouse 移动 → 截图看红色准星是否套住目标 → 未对准按偏移修正坐标 → 对准后 click
+- 目标太小：zoom_in(x, y) 放大后按细刻度读数，再以该坐标 click（系统自动换算）
+
+## 3. 输入
+- 键盘：press_key(键)；输入文本：type_text(text)
+- 剪贴板：clipboard(action=write, text) 写入，clipboard(action=read) 读取
+
+## 4. 原则
+- 每次操作后截图验证结果；失败先自查再换方案，禁止盲目重复点击
+- 系统会自动把截图坐标换算为真实屏幕坐标，不要手动换算""",
+    },
 }
 
 DEFAULT_AGENTS = [

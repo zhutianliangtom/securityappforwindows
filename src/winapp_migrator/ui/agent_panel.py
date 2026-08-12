@@ -1026,7 +1026,15 @@ class _DropTextEdit(QPlainTextEdit):
 
     def _auto_height(self):
         """高度随内容自适应：单行 42px，多行增高，最高 140px（超出内部滚动）"""
-        h = int(self.document().size().height()) + 16   # 内容高度 + 内边距
+        doc = self.document()
+        # 文档 textWidth 未设置时按无限宽布局（不换行、恒为单行）→ 对齐视口宽度
+        vw = self.viewport().width()
+        if vw > 0 and doc.textWidth() != vw:
+            doc.setTextWidth(vw)
+        # 注意：QPlainTextDocumentLayout.documentSize().height() 返回的是行数（非像素），
+        # 需乘以行高换算像素高度，否则单行文本高度恒为 42 不增高
+        lines = doc.documentLayout().documentSize().height()
+        h = int(lines * self.fontMetrics().lineSpacing()) + 16   # 行高 × 行数 + 内边距
         self.setFixedHeight(min(max(h, 42), 140))
 
     def keyPressEvent(self, e):

@@ -975,7 +975,7 @@ class AgentPanel(QDialog):
 
     def _update_welcome(self):
         """无对话内容时显示欢迎页，否则显示聊天区（发消息后立即切换）"""
-        has_msg = bool(self._segments or self._user_msgs)
+        has_msg = bool(self._segments or self._history_segments or self._user_msgs)
         self.msg_stack.setCurrentWidget(
             self.msg_area if has_msg else self._welcome_page)
 
@@ -1027,9 +1027,9 @@ class AgentPanel(QDialog):
         if self._engine:
             self._engine.save_context(d / f"{self._session_id}.json")
         try:
-            # 持久化前过滤“已停止”提示小字，保持会话数据干净
+            # 完整对话流 = 历史段（含 split 边界）+ 当前回复段；过滤“已停止”提示小字
             clean_segments = [
-                seg for seg in self._segments
+                seg for seg in (self._history_segments + self._segments)
                 if not (seg.get("type") == "mark" and seg.get("html") == "已停止")
             ]
             with open(d / f"{self._session_id}.ui.json", "w", encoding="utf-8") as f:
@@ -1069,6 +1069,7 @@ class AgentPanel(QDialog):
         self._session_name = s.get("name", "新对话") if s else "新对话"
         self._ai_bubble = None
         self._segments = []
+        self._history_segments = []
         self._user_msgs = []
         self._hide_spinner()
         while self.msg_lay.count() > 1:  # 清空消息流（保留末尾 stretch）
@@ -1087,15 +1088,12 @@ class AgentPanel(QDialog):
             pass
         self._user_msgs = ums
         # 加载时过滤掉旧版本中持久化的“已停止”提示小字，避免重启后仍显示
-        self._segments = [
+        self._history_segments = [
             seg for seg in (segs or [])
             if not (seg.get("type") == "mark" and seg.get("html") == "已停止")
         ]
-        for u in ums:                       # 重绘用户气泡与 AI 气泡
-            self._add_bubble(u, "user")
-        if segs:
-            self._ensure_ai_bubble()
-            self._refresh_ai_html()   # 截图 image 段随气泡富文本渲染（缩略图独立成块）
+        self._segments = []
+        self._render_history_all()   # 用户气泡与 AI 回复按轮次交错重绘（每条 AI 回复一个气泡）
         self._end_badge_shown = False
         self._refresh_session_combo()
         self._update_welcome()
@@ -1114,6 +1112,7 @@ class AgentPanel(QDialog):
             self._engine.clear_history()
         self._ai_bubble = None
         self._segments = []
+        self._history_segments = []
         self._user_msgs = []
         self._hide_spinner()
         while self.msg_lay.count() > 1:
@@ -1257,7 +1256,14 @@ class AgentPanel(QDialog):
                     b.setText(self._scale_user_html(src, s))
             except RuntimeError:
                 pass
-        self._refresh_ai_html()   # AI 气泡字体/图片随全屏缩放系数重渲染
+        # AI 气泡随全屏缩放重渲染文本（按分组顺序对应，不重建布局避免 resize 卡顿）
+        ai_bubbles = [b for b in self._bubble_widgets
+                      if b.property("align") == "ai" and self._bubble_alive(b)]
+        for b, g in zip(ai_bubbles, self._split_groups()):
+            try:
+                b.setText(self._build_ai_html(g))
+            except RuntimeError:
+                pass
 
     def showEvent(self, e):
         super().showEvent(e)
@@ -1395,14 +1401,13 @@ class AgentPanel(QDialog):
         return src.replace("font-size:14px", f"font-size:{int(14 * s)}px") \
                   .replace('width="200"', f'width="{int(200 * s)}"')
 
-    def _refresh_ai_html(self):
-        if self._ai_bubble is None:
-            return
+    def _build_ai_html(self, segs: list) -> str:
+        """把一组 AI 段渲染为富文本（思考/操作/结果/截图/正文/标记）"""
         s = self._font_scale()
         f_main, f_dim, f_sm, f_op = int(14 * s), int(12 * s), int(11 * s), int(13 * s)
         img_w = max(200, int(self._bubble_max_width() * 0.4))   # 截图缩略图随气泡宽度放大（约占内容区半宽）
         parts = []
-        for seg in self._segments:
+        for seg in segs:
             t = seg["type"]
             if t == "think":
                 parts.append(f'<div style="color:{TEXT_DIM};font-size:{f_sm}px;font-style:italic;">'
@@ -1427,8 +1432,57 @@ class AgentPanel(QDialog):
                              f'{_render_text(seg["raw"])}</div>')
             elif t == "mark":
                 parts.append(f'<div style="color:{TEXT_DIM};font-size:{f_sm}px;">{seg["html"]}</div>')
+        return "".join(parts)
+
+    def _segments_full(self) -> list:
+        """完整对话流 = 历史段（含 split 边界）+ 当前回复段"""
+        return self._history_segments + self._segments
+
+    def _split_groups(self) -> list:
+        """按 split 边界把完整段流切分为「每条 AI 回复一组」"""
+        groups, cur = [], []
+        for seg in self._segments_full():
+            if seg["type"] == "split":
+                if cur:
+                    groups.append(cur)
+                    cur = []
+            else:
+                cur.append(seg)
+        if cur:
+            groups.append(cur)
+        return groups
+
+    def _render_history_all(self):
+        """全量重建消息流：用户气泡与 AI 回复按轮次交错（加载会话/全屏缩放时调用）"""
+        while self.msg_lay.count() > 1:   # 清空消息流（保留末尾 stretch）
+            item = self.msg_lay.takeAt(0)
+            self._free_layout_item(item)
+        self._bubble_widgets = []
+        self._ai_bubble = None
+        groups = self._split_groups()
+        n = len(self._user_msgs)
+        for i, u in enumerate(self._user_msgs):      # 第 i 条用户消息 → 第 i 组 AI 回复
+            self._add_bubble(u, "user")
+            if i < len(groups):
+                self._add_ai_group_bubble(groups[i])
+        for g in groups[n:]:                          # 多余 AI 组兜底追加
+            self._add_ai_group_bubble(g)
+
+    def _add_ai_group_bubble(self, segs: list):
+        """把一组 AI 段渲染为一条独立气泡，并设为当前气泡（新回复流式续接）"""
+        b = self._add_bubble("", "ai")
         try:
-            self._ai_bubble.setText("".join(parts))
+            b.setText(self._build_ai_html(segs))
+        except RuntimeError:
+            pass
+        self._ai_bubble = b
+
+    def _refresh_ai_html(self):
+        """只更新当前（流式）AI 气泡内容，用于思考/操作/正文逐段追加"""
+        if self._ai_bubble is None:
+            return
+        try:
+            self._ai_bubble.setText(self._build_ai_html(self._segments))
         except RuntimeError:
             self._ai_bubble = None
 
@@ -1725,6 +1779,10 @@ class AgentPanel(QDialog):
         if shot:
             # 喂给模型时带坐标网格（精确点击定位），展示用干净原图
             send_images.append(agent_screen.capture_screen_data_url(grid=True))
+        # 归档当前 AI 回复到历史（末尾加 split 边界分隔各组），完整对话流用于持久化与加载重绘
+        if self._segments:
+            self._history_segments.extend(self._segments)
+            self._history_segments.append({"type": "split"})
         self._ai_bubble = None
         self._segments = []
         if shot:
@@ -1914,6 +1972,7 @@ class AgentPanel(QDialog):
                 self._engine.stop()
         self._ai_bubble = None
         self._segments = []
+        self._history_segments = []
         self._user_msgs = []
         self._hide_spinner()
         self.cmd_list.hide()

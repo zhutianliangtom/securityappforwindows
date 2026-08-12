@@ -2557,15 +2557,31 @@ class AgentPanel(QDialog):
         engine = self._ensure_engine()
         cfg = self._llm_config()
         model = self._model_override or agent_llm.resolve_model(cfg, effort)
-        # 自动模式（下拉选「自动」）下带图片时：若按力度路由到的模型是纯文本，
-        # 改用默认视觉模型 agnes-2.5-flash 处理图片而非丢弃
-        # （评估已由 agnes 完成；手动指定纯文本模型时仍走下方剥离逻辑）
-        if (not self._model_override and send_images
-                and agent_llm.is_text_only_model(model)):
-            self._add_status(
-                f"路由模型 {model} 为纯文本模型，已改用视觉模型 "
-                f"{agent_llm.DEFAULT_MODEL} 处理图片", WARN)
-            model = agent_llm.DEFAULT_MODEL
+        base_url = cfg.get("base_url") or agent_llm.DEFAULT_BASE_URL
+        api_key = cfg.get("api_key") or agent_llm.DEFAULT_API_KEY
+        # 自动模式（下拉选「自动」）：agnes-2.5-flash 只在内置默认服务可用。
+        # 1) 带图片时：路由模型为纯文本，或路由到 agnes 但客户端指向自定义服务商
+        #    （如 DeepSeek，消息 schema 只接受 text，含 image_url 必 400）→
+        #    整体切到内置默认 agnes 服务处理图片（评估同样由 agnes 完成）；
+        # 2) 纯文本任务：自定义服务商路由到 agnes（其服务不了）时回退用户主模型。
+        # 手动指定模型时不做自动切换。
+        if not self._model_override:
+            if send_images and (agent_llm.is_text_only_model(model)
+                                or (model == agent_llm.DEFAULT_MODEL
+                                    and base_url != agent_llm.DEFAULT_BASE_URL)):
+                self._add_status(
+                    f"路由模型 {model} 不支持图片，已改用视觉模型 "
+                    f"{agent_llm.DEFAULT_MODEL}（内置默认服务）处理图片", WARN)
+                model = agent_llm.DEFAULT_MODEL
+                base_url = agent_llm.DEFAULT_BASE_URL
+                api_key = agent_llm.DEFAULT_API_KEY
+            elif (not send_images
+                  and base_url != agent_llm.DEFAULT_BASE_URL
+                  and model == agent_llm.DEFAULT_MODEL):
+                model = str(cfg.get("model") or model)
+        # 同步客户端连接参数（模型可能来自不同服务商）
+        engine.llm.base_url = base_url.rstrip("/")
+        engine.llm.api_key = api_key
         engine.llm.model = model
         engine.llm.reasoning_effort = (agent_llm.reasoning_effort_for(effort)
                                        if cfg.get("send_effort") else None)
@@ -2987,11 +3003,11 @@ class AgentPanel(QDialog):
             nl.setToolTip(tooltip)
             v.addWidget(nl, 0, Qt.AlignmentFlag.AlignCenter)
         # 插入到 stretch 之前
-        self._attach_lay.insertWidget(self._attach_lay.count() - 1, box)
+        self._attach_lay.addWidget(box)
         self._attach_bar.setVisible(True)
 
     def _clear_attachments(self):
-        while self._attach_lay.count() > 1:
+        while self._attach_lay.count() > 0:
             item = self._attach_lay.takeAt(0)
             if item.widget():
                 item.widget().deleteLater()

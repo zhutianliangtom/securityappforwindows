@@ -66,6 +66,53 @@ DEFAULT_SKILLS = [
                      "3. 创建成功后提示：已可通过 /技能名 或对话描述调用；若用户描述的是可复用的流程，适合沉淀为技能。")},
 ]
 
+# 内置 md 技能模板：首次运行时自动生成到 skills/<name>/SKILL.md（市场标准格式，以 SKILL.md 为核心）。
+# 不加入 DEFAULT_SKILLS（JSON 优先会覆盖 md 版，导致用户编辑 SKILL.md 不生效）。
+_BUILTIN_MD_SKILLS = {
+    "download-skill": {
+        "description": "技能下载安装：在 GitHub 上搜索市场标准 SKILL.md 技能，下载并导入本地配置生效",
+        "instruction": """# download-skill：GitHub 技能搜索、下载与导入
+
+当用户要求"下载 / 安装 / 寻找某个 skill（技能）"时，按以下流程执行。
+
+## 1. 确认需求
+用 ask_user 与用户确认：技能名称/关键词、用途、是否有已知 GitHub 仓库地址。
+信息不足时禁止猜测，先问清楚。
+
+## 2. 在 GitHub 上定位技能
+候选仓库判断标准：仓库根目录或 skills/ 子目录存在 SKILL.md（含 --- name / description --- frontmatter）。
+- 用户提供仓库地址：先 run_command 执行 `git ls-remote <仓库地址>` 验证仓库可访问；
+- 用户只给名称/关键词：依次探测常用市场仓库（git ls-remote 验证存在后浅克隆）：
+  - https://github.com/anthropics/skills
+  - https://github.com/anthropics/claude-code
+  - 其他含 SKILL.md 的 skills 聚合仓库
+  找不到时用 ask_user 请用户提供具体仓库地址，不要编造 URL。
+- 用 `git clone --depth 1 <仓库> <临时目录>` 浅克隆后，用 list_directory / read_file
+  在仓库内查找 SKILL.md，读取 frontmatter 确认技能 name 与 description 是否匹配用户需求。
+
+## 3. 下载前确认（强制）
+用 ask_user 向用户展示以下信息并征得同意：
+- 仓库地址
+- 技能名与 description
+- SKILL.md 内容摘要（前若干行）
+用户确认后才下载；用户拒绝则停止并说明。
+
+## 4. 下载
+- 整仓浅克隆：git clone --depth 1 <仓库> <临时目录>（临时目录建议 %TEMP% 下）
+- 有 zip 或 raw 文件直链：用 fast_download 工具下载到本地
+- 单文件：下载 SKILL.md 的 raw 内容
+
+## 5. 导入本地并配置
+- 目标目录：~/.winapp_migrator/agent/skills/<技能名>/SKILL.md
+- 用 import_skill_file 导入（支持 SKILL.md 单文件或含 SKILL.md 的 zip），
+  或把下载到的 SKILL.md 复制到目标目录
+- 验证：read_file 确认 SKILL.md 已写入目标位置；技能系统实时扫描，导入后立即可用
+
+## 6. 汇报
+输出总结：技能名、来源仓库、安装路径、调用方式（/技能名 或自然语言描述）。""",
+    },
+}
+
 DEFAULT_AGENTS = [
     {"name": "zhuzhu Copilot", "description": "zhuzhu Copilot：观察屏幕并操控电脑高质量完成任务",
      "persona": "你是 zhuzhu Copilot，运行在 Windows 上的桌面 AI 助手，性格谨慎可靠、注重安全，"
@@ -272,8 +319,25 @@ def _parse_skill_md(text: str) -> dict:
     return {"name": name, "description": desc, "instruction": body}
 
 
+def ensure_md_skills() -> None:
+    """确保内置 md 技能存在：首次运行时自动生成 skills/<name>/SKILL.md（可被用户编辑）"""
+    root = _skills_dir()
+    for name, cfg in _BUILTIN_MD_SKILLS.items():
+        f = root / name / "SKILL.md"
+        if f.is_file():
+            continue
+        try:
+            f.parent.mkdir(parents=True, exist_ok=True)
+            f.write_text(
+                f"---\nname: {name}\ndescription: {cfg['description']}\n---\n\n"
+                f"{cfg['instruction'].strip()}\n", encoding="utf-8")
+        except OSError:
+            pass
+
+
 def load_md_skills() -> list:
     """扫描市场标准技能目录，返回 [{name,description,instruction,source:'md'}]"""
+    ensure_md_skills()
     out = []
     try:
         root = _skills_dir()

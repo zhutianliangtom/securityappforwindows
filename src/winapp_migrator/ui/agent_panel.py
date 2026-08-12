@@ -1019,6 +1019,7 @@ class AgentPanel(QDialog):
         self._scroll_pending = False   # 滚动调度去重标志
         self._bubble_widgets: list = []  # 所有气泡 QLabel（窗口缩放时同步宽度）
         self._bubble_segs: dict = {}     # 气泡 id → 其 AI 段列表（思考折叠/展开局部重渲染用）
+        self._html_dirty = False         # 流式刷新节流标志（60ms 批量 setText）
         self._maximized_once = False   # 首次显示即最大化（默认最大化展示）
 
         # 发送/停止按钮转圈动画
@@ -1691,7 +1692,8 @@ class AgentPanel(QDialog):
             row.addWidget(bubble, 0, Qt.AlignmentFlag.AlignLeft)
             row.addStretch(1)
         self.msg_lay.insertLayout(self.msg_lay.count() - 1, row)
-        self._fade_in(bubble, self)
+        if animate:
+            self._fade_in(bubble, self)   # 历史批量加载跳过动画，避免逐条淡入造成卡顿
         self._scroll_bottom()
         return bubble
 
@@ -1937,7 +1939,15 @@ class AgentPanel(QDialog):
             pass
 
     def _refresh_ai_html(self):
-        """只更新当前（流式）AI 气泡内容，用于思考/操作/正文逐段追加"""
+        """节流刷新 AI 气泡：流式 token 高频调用时合并为每 60ms 批量 setText 一次，
+        避免每个 token 全量重建 HTML + 触发整条消息区重排版导致输出卡顿"""
+        if self._ai_bubble is None or self._html_dirty:
+            return
+        self._html_dirty = True
+        QTimer.singleShot(60, self._apply_refresh_ai_html)
+
+    def _apply_refresh_ai_html(self):
+        self._html_dirty = False
         if self._ai_bubble is None:
             return
         try:

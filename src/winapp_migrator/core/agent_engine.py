@@ -22,6 +22,10 @@ from winapp_migrator.core.agent_screen import capture_screen_data_url, virtual_d
 _SCREEN_CHANGING = {"click", "click_text", "drag", "scroll", "press_key", "type_text",
                     "move_mouse", "run_command", "virtual_desktop"}
 
+# 工具结果进入对话上下文的长度上限：长输出（如 run_command 回显）截断后仍进上下文，
+# 完整内容由 AI 按需用 read_file/check_command 查看，避免上下文无限膨胀烧 tokens
+_TOOL_TEXT_MAX = 3000
+
 # 对话上下文持久化路径
 CONTEXT_FILE = agent_skills.CONFIG_DIR / "context.json"
 
@@ -411,7 +415,7 @@ class AgentEngine:
                     return
                 if self.on_status:
                     self.on_status("正在思考…")
-                self._prune_images(6)  # 历史截图保留最近 6 张，避免过度压缩模型视觉输入
+                self._prune_images(2)  # 历史截图只保留最近 2 张，其余剥离成纯文本，控制视觉输入 tokens
                 # 自动压缩：上下文过长时合并旧消息（保留任务目标），防止长任务中 AI 遗忘开头
                 if len(self._messages) > 45:
                     n = self.compress_history(keep_recent=8)
@@ -490,9 +494,15 @@ class AgentEngine:
                                            [_compress_data_url(u, 480) for u in imgs])
                     if _looks_failed(text):
                         last_failed = True
+                    # 长输出截断后再进入上下文（控制 tokens，防上下文膨胀）；
+                    # 超长命令完整结果可用 read_file/check_command 按需读取
+                    tool_text = text
+                    if len(tool_text) > _TOOL_TEXT_MAX:
+                        tool_text = tool_text[:_TOOL_TEXT_MAX] + \
+                            " …（输出过长已截断，如需完整内容可调用 read_file/check_command 查看）"
                     self._messages.append({
                         "role": "tool", "tool_call_id": call["id"],
-                        "content": text,   # 纯字符串更兼容（部分 API 拒绝数组 content）
+                        "content": tool_text,   # 纯字符串更兼容（部分 API 拒绝数组 content）
                     })
                     if imgs:
                         last_images = imgs   # 本轮全部截图喂给下一轮视觉验证，不做裁剪

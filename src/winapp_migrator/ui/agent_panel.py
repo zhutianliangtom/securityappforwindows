@@ -2557,11 +2557,20 @@ class AgentPanel(QDialog):
         engine = self._ensure_engine()
         cfg = self._llm_config()
         model = self._model_override or agent_llm.resolve_model(cfg, effort)
+        # 自动模式（下拉选「自动」）下带图片时：若按力度路由到的模型是纯文本，
+        # 改用默认视觉模型 agnes-2.5-flash 处理图片而非丢弃
+        # （评估已由 agnes 完成；手动指定纯文本模型时仍走下方剥离逻辑）
+        if (not self._model_override and send_images
+                and agent_llm.is_text_only_model(model)):
+            self._add_status(
+                f"路由模型 {model} 为纯文本模型，已改用视觉模型 "
+                f"{agent_llm.DEFAULT_MODEL} 处理图片", WARN)
+            model = agent_llm.DEFAULT_MODEL
         engine.llm.model = model
         engine.llm.reasoning_effort = (agent_llm.reasoning_effort_for(effort)
                                        if cfg.get("send_effort") else None)
         engine.text_only = agent_llm.is_text_only_model(model)
-        # 本次路由的模型为纯文本时剥离图片（混配模型场景逐次判断）
+        # 手动指定纯文本模型时剥离图片（混配模型场景逐次判断）
         if engine.text_only and send_images:
             self._add_status("当前模型为纯文本模型，已忽略图片输入", WARN)
             send_images = []

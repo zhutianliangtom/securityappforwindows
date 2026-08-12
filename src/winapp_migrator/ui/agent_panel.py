@@ -1016,6 +1016,13 @@ class _DropTextEdit(QPlainTextEdit):
         self.setWordWrapMode(QTextOption.WrapMode.WrapAtWordBoundaryOrAnywhere)
         self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.textChanged.connect(lambda: QTimer.singleShot(0, self._auto_height))
+        # 初始校准：QPlainTextEdit 默认尺寸偏高，事件循环启动后立刻按内容压回单行高
+        QTimer.singleShot(0, self._auto_height)
+
+    def resizeEvent(self, e):
+        # 窗口宽度变化 → 换行变化 → 高度需重新校准（去抖）
+        super().resizeEvent(e)
+        QTimer.singleShot(0, self._auto_height)
 
     def _auto_height(self):
         """高度随内容自适应：单行 42px，多行增高，最高 140px（超出内部滚动）"""

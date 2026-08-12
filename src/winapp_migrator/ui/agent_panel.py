@@ -1005,7 +1005,6 @@ class AgentPanel(QDialog):
         # 流式思考过程状态
         self._think_start = 0.0        # 本轮思考开始时间（time.time）
         self._think_done = False       # 思考是否已完成（已输出"已思考 x 秒"）
-        self._reasoning_buf = ""       # 思考过程文本缓冲
 
         # 卡死兜底 hooks：长时间无任何输出则自动停止
         self._last_activity = 0.0      # 最近一次有输出/状态的时间戳
@@ -1019,6 +1018,7 @@ class AgentPanel(QDialog):
         self._rows: list = []          # 用户消息与 AI 回复的交错顺序行（[{"type": "user"/"ai", ...}]，持久化保证重启顺序正确）
         self._scroll_pending = False   # 滚动调度去重标志
         self._bubble_widgets: list = []  # 所有气泡 QLabel（窗口缩放时同步宽度）
+        self._bubble_segs: dict = {}     # 气泡 id → 其 AI 段列表（思考折叠/展开局部重渲染用）
         self._maximized_once = False   # 首次显示即最大化（默认最大化展示）
 
         # 发送/停止按钮转圈动画
@@ -1505,6 +1505,7 @@ class AgentPanel(QDialog):
             item = self.msg_lay.takeAt(0)
             self._free_layout_item(item)
         self._bubble_widgets = []
+        self._bubble_segs = {}
         self._refresh_session_combo()
         self._update_welcome()
         self._add_status("已开启新对话，上下文与旧对话隔离", ACCENT)
@@ -1772,6 +1773,8 @@ class AgentPanel(QDialog):
     def _ensure_ai_bubble(self):
         if self._ai_bubble is None or not self._bubble_alive(self._ai_bubble):
             self._ai_bubble = self._add_bubble("", "ai")
+            self._bubble_segs[id(self._ai_bubble)] = self._segments
+            self._ai_bubble.linkActivated.connect(self._on_bubble_link)
         return self._ai_bubble
 
     @staticmethod
@@ -1800,8 +1803,25 @@ class AgentPanel(QDialog):
         for seg in segs:
             t = seg["type"]
             if t == "think":
-                parts.append(f'<div style="color:{TEXT_DIM};font-size:{f_sm}px;font-style:italic;">'
-                             f'{seg["html"]}</div>')
+                body = seg.get("html", "") or ""
+                if len(body) > 1500:      # 思考全文过长时显示截断
+                    body = "…" + body[-1500:]
+                if seg.get("collapsed"):
+                    # 折叠态：一行提示，点击展开
+                    parts.append(
+                        f'<div style="color:{TEXT_DIM};font-size:{f_sm}px;margin-top:2px;">'
+                        f'<a href="think:toggle" style="color:{ACCENT};text-decoration:none;">'
+                        f'💭 思考过程（已折叠 · 点击展开）</a></div>')
+                else:
+                    # 展开态：标题在上，思考内容在下，末尾可收起
+                    parts.append(
+                        f'<div style="color:{TEXT_DIM};font-size:{f_sm}px;margin:2px 0;">'
+                        f'💭 思考过程&nbsp;'
+                        f'<a href="think:toggle" style="color:{TEXT_DIM};font-size:{f_sm}px;'
+                        f'text-decoration:none;">收起 ▲</a></div>'
+                        f'<div style="color:{TEXT_DIM};font-size:{f_sm}px;font-style:italic;'
+                        f'border-left:2px solid {BORDER};padding:2px 10px;'
+                        f'margin:0 0 8px 6px;">{body}</div>')
             elif t == "op":
                 parts.append(f'<div style="color:{ACCENT};font-size:{f_op}px;'
                              f'font-family:Consolas;margin-top:16px;">{seg["html"]}</div>')
@@ -1877,6 +1897,7 @@ class AgentPanel(QDialog):
             item = self.msg_lay.takeAt(0)
             self._free_layout_item(item)
         self._bubble_widgets = []
+        self._bubble_segs = {}
         self._ai_bubble = None
         for r in (self._rows or self._reconstruct_rows()):
             if r.get("type") == "user":
@@ -1894,7 +1915,26 @@ class AgentPanel(QDialog):
             b.setText(self._build_ai_html(segs))
         except RuntimeError:
             pass
+        self._bubble_segs[id(b)] = segs
+        b.linkActivated.connect(self._on_bubble_link)
         self._ai_bubble = b
+
+    def _on_bubble_link(self, url: str):
+        """气泡内链接点击：折叠/展开思考过程（仅局部重渲染该气泡）"""
+        if url != "think:toggle":
+            return
+        bubble = self.sender()
+        segs = self._bubble_segs.get(id(bubble)) if bubble is not None else None
+        if not segs:
+            return
+        for seg in segs:
+            if seg.get("type") == "think":
+                seg["collapsed"] = not seg.get("collapsed", False)
+                break
+        try:
+            bubble.setText(self._build_ai_html(segs))
+        except RuntimeError:
+            pass
 
     def _refresh_ai_html(self):
         """只更新当前（流式）AI 气泡内容，用于思考/操作/正文逐段追加"""
@@ -1905,9 +1945,9 @@ class AgentPanel(QDialog):
         except RuntimeError:
             self._ai_bubble = None
 
-    # ---------- 转圈动画 + 流式思考过程（AI 任务进行中） ----------
+    # ---------- 转圈动画 + 思考过程（思考内容在 AI 气泡开头，完成后折叠） ----------
     def _ensure_spinner(self):
-        """创建/显示转圈行：第一行[转圈+状态]，下方半透明小字流式思考过程"""
+        """创建/显示转圈行：仅转圈 + 状态文字（思考全文在 AI 气泡内展示）"""
         if self._spinner_row is not None:
             return
         self._spinner = _Spinner()
@@ -1920,18 +1960,10 @@ class AgentPanel(QDialog):
         top.addWidget(self._spinner_lbl)
         top.addStretch(1)
 
-        self._reasoning_lbl = QLabel("")
-        self._reasoning_lbl.setWordWrap(True)
-        self._reasoning_lbl.setMaximumWidth(self._bubble_max_width())
-        self._reasoning_lbl.setStyleSheet(
-            "color: rgba(138, 155, 184, 170); font-size: 11px;"  # 半透明小字体
-            "padding-left: 26px;")
-
         self._spinner_row = QVBoxLayout()
         self._spinner_row.setContentsMargins(0, 0, 0, 0)
         self._spinner_row.setSpacing(2)
         self._spinner_row.addLayout(top)
-        self._spinner_row.addWidget(self._reasoning_lbl)
         self.msg_lay.insertLayout(self.msg_lay.count() - 1, self._spinner_row)
         self._scroll_bottom()
 
@@ -1945,40 +1977,38 @@ class AgentPanel(QDialog):
                 break
         self._spinner = None
         self._spinner_lbl = None
-        self._reasoning_lbl = None
         self._spinner_row = None
 
     def _start_think(self):
-        """任务进行中：显示转圈；首轮思考重置计时与思考文本"""
+        """任务进行中：显示转圈；首轮思考重置计时"""
         if not self._think_done:
             self._think_start = time.time()
-            self._reasoning_buf = ""
             if self._spinner_lbl is not None:
                 self._spinner_lbl.setText("AI 思考中…")
-            if self._reasoning_lbl is not None:
-                self._reasoning_lbl.setText("")
         self._ensure_spinner()
 
     def _finish_thinking(self):
-        """思考完成（开始输出正文/工具调用）：状态改为'已思考 x 秒'"""
+        """思考完成（开始输出正文/工具调用）：转圈行显示'已思考 x 秒'，气泡内思考自动折叠"""
         if self._think_done:
             return
         self._think_done = True
         if self._spinner_lbl is not None and self._think_start:
             el = int(time.time() - self._think_start)
             self._spinner_lbl.setText(f"已思考 {el} 秒")
+        if self._segments and self._segments[0].get("type") == "think":
+            self._segments[0]["collapsed"] = True   # 思考完成后自动折叠，可点击展开
+            self._refresh_ai_html()
 
     def _on_reasoning(self, s: str):
-        """流式思考过程：半透明小字追加显示在'思考中'下方"""
+        """流式思考过程：追加到当前 AI 气泡开头的思考区块（转义为富文本）"""
         if self._think_done:
             return
         self._last_activity = time.time()
-        self._ensure_spinner()
-        self._reasoning_buf += s
-        shown = self._reasoning_buf
-        if len(shown) > 800:
-            shown = "…" + shown[-800:]
-        self._reasoning_lbl.setText(shown)
+        self._ensure_ai_bubble()
+        if not self._segments or self._segments[0].get("type") != "think":
+            self._segments.insert(0, {"type": "think", "html": ""})
+        self._segments[0]["html"] += _esc(s)
+        self._refresh_ai_html()
         self._scroll_bottom()
 
     # ---------- MCP 初始化 ----------
@@ -2336,7 +2366,6 @@ class AgentPanel(QDialog):
         self._user_stopped = False
         self._end_badge_shown = False
         self._think_done = False
-        self._reasoning_buf = ""
         self._think_start = 0.0
         self._last_activity = time.time()
         self._stalled_stop = False
@@ -2456,6 +2485,7 @@ class AgentPanel(QDialog):
             self._user_msgs = []
             self._ai_bubble = None
             self._bubble_widgets = []
+            self._bubble_segs = {}
             self._hide_spinner()
             self._stop_button_anim()
             self._task_active = False
@@ -2533,7 +2563,6 @@ class AgentPanel(QDialog):
         self._user_stopped = False
         self._end_badge_shown = False
         self._think_done = False
-        self._reasoning_buf = ""
         self._think_start = 0.0
         self._last_activity = 0.0
         self._stalled_stop = False
@@ -2542,6 +2571,7 @@ class AgentPanel(QDialog):
             item = self.msg_lay.takeAt(0)
             self._free_layout_item(item)
         self._bubble_widgets = []   # 清空气泡引用，避免 resizeEvent 处理已删除对象
+        self._bubble_segs = {}
         self.token_label.setText("0 tk")
         # ---- 永久删除该对话，并新开空会话（界面回到欢迎页） ----
         self._delete_session(old_id)

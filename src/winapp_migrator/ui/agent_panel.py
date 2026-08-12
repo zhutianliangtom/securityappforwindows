@@ -2372,7 +2372,9 @@ class AgentPanel(QDialog):
                     for k, v in props.items())
         return "(无参数)"
 
-    def _update_cmd_suggestions(self, text: str):
+    def _update_cmd_suggestions(self, *_):
+        # QPlainTextEdit 的 textChanged 无参数，需自行读取当前文本
+        text = self.input.toPlainText()
         # 输入 "/" 时展示全部可调用项（系统命令 + 全部技能 + 全部内置工具）；否则按前缀过滤
         if text.startswith("/"):
             matches = [c for c in self._all_commands() if c.startswith(text)]

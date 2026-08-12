@@ -895,17 +895,27 @@ class _AskUserDialog(QDialog):
         lay.addWidget(q_lbl)
 
         self._choice_btns = []
+        # 自定义输入框：有选项时默认隐藏（由"其他…"勾选控制显示），无选项时直接作自由回答
+        self._free_input = QLineEdit()
+        self._free_input.setPlaceholderText("输入自定义内容…")
+        self._free_input.hide()
+        lay.addWidget(self._free_input)
         if options:
             for opt in options:
                 b = QCheckBox(str(opt)) if multi_select else QRadioButton(str(opt))
                 b.setAutoExclusive(not multi_select)
                 self._choice_btns.append(b)
                 lay.addWidget(b)
-            self._free_input = None
+            # "其他…"选项：勾选后显示输入框，可输入自定义内容
+            other = QCheckBox("✏️ 其他…") if multi_select else QRadioButton("✏️ 其他…")
+            other.setAutoExclusive(not multi_select)
+            other.toggled.connect(lambda on: self._free_input.setVisible(on))
+            self._choice_btns.append(other)
+            lay.addWidget(other)
+            self._free_input.setPlaceholderText("输入自定义内容…")
         else:
-            self._free_input = QLineEdit()
             self._free_input.setPlaceholderText("输入你的回答…")
-            lay.addWidget(self._free_input)
+            self._free_input.show()
 
         btns = QHBoxLayout()
         ok = QPushButton(_std_icon(QStyle.StandardPixmap.SP_DialogYesButton), "确定")
@@ -925,11 +935,17 @@ class _AskUserDialog(QDialog):
 
     def _accept_clicked(self):
         sel = [b.text() for b in self._choice_btns if b.isChecked()]
+        custom = self._free_input.text().strip() if self._free_input.isVisible() else ""
+        # 自定义输入内容替换"其他…"选项；未填写的"其他…"直接忽略
+        if custom:
+            sel = [custom if t.startswith("✏️ 其他") else t for t in sel]
+        else:
+            sel = [t for t in sel if not t.startswith("✏️ 其他")]
         if sel:
             self._answer = " / ".join(sel)
-        elif self._free_input is not None:
-            self._answer = self._free_input.text().strip()
-        if not self._answer:
+        elif custom:
+            self._answer = custom
+        else:
             self._answer = "（用户未作答）"
         self.accept()
 
@@ -2559,10 +2575,9 @@ class AgentPanel(QDialog):
 
     # ---------- 命令补全（/ 展示全部命令 + 内联预测） ----------
     def _all_commands(self) -> list:
-        """所有可斜杠调用项：系统命令 + 全部技能 + 全部内置工具"""
+        """所有可斜杠调用项：系统命令（/clear、/compact）+ 全部技能（隐藏内置工具命令）"""
         cmds = ["/compact", "/clear"]
         cmds += [f"/{s.get('name')}" for s in agent_skills.load_skills() if s.get("name")]
-        cmds += [f"/{t['function']['name']}" for t in agent_tools.TOOLS]
         return cmds
 
     def _cmd_desc(self, cmd: str) -> str:

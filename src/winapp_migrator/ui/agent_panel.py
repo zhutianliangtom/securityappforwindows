@@ -1118,6 +1118,30 @@ def _drag_query_files(hdrop) -> list:
     return paths
 
 
+def _all_process_hwnds() -> list:
+    """当前进程全部窗口句柄（顶层 + 所有后代），用于逐窗口设置 UIPI 放行与撤销 OLE 注册"""
+    from ctypes import wintypes
+    user32 = ctypes.windll.user32
+    pid = ctypes.windll.kernel32.GetCurrentProcessId()
+    found = []
+    WNDENUMPROC = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+
+    def child_cb(hwnd, _lp):
+        found.append(hwnd)
+        return True
+
+    def top_cb(hwnd, _lp):
+        p = wintypes.DWORD()
+        user32.GetWindowThreadProcessId(hwnd, ctypes.byref(p))
+        if p.value == pid:
+            found.append(hwnd)
+            user32.EnumChildWindows(hwnd, WNDENUMPROC(child_cb), 0)
+        return True
+
+    user32.EnumWindows(WNDENUMPROC(top_cb), 0)
+    return found
+
+
 class _AdminDropFilter(QAbstractNativeEventFilter):
     """把 WM_DROPFILES 转成 Qt 拖放事件，投递给鼠标下方的可接收控件"""
 
@@ -3022,21 +3046,29 @@ class AgentPanel(QDialog):
         try:
             hwnd = int(self.winId())
             user32 = ctypes.windll.user32
+            shell32 = ctypes.windll.shell32
+            ole32 = ctypes.windll.ole32
+            # 进程级放行（作用于进程内所有窗口）
             for m in (_WM_DROPFILES, _WM_COPYDATA, _WM_COPYGLOBALDATA):
                 user32.ChangeWindowMessageFilter(m, _MSGFLT_ADD)
-            try:
-                _ex = user32.ChangeWindowMessageFilterEx
-                _ex.argtypes = [ctypes.c_void_p, ctypes.c_uint, ctypes.c_uint,
-                                ctypes.c_void_p]
-                print("[dnd] ChangeWindowMessageFilterEx:",
-                      _ex(hwnd, _WM_DROPFILES, _MSGFLT_ADD, None), flush=True)
-            except Exception as e:
-                print("[dnd] ChangeWindowMessageFilterEx 不可用:", e, flush=True)
-            print("[dnd] DragAcceptFiles:",
-                  ctypes.windll.shell32.DragAcceptFiles(hwnd, True), flush=True)
-            # 移除 Qt 的 OLE 拖放注册，让 Explorer 回退到 WM_DROPFILES 消息通道
-            print("[dnd] RevokeDragDrop:",
-                  ctypes.windll.ole32.RevokeDragDrop(hwnd), flush=True)
+            # Qt 会在每个 setAcceptDrops 控件（含输入框等子控件）上注册 OLE IDropTarget。
+            # 只撤销顶层注册时，鼠标悬停在子控件上 Explorer 仍走 OLE 路径、被 UIPI 拦截
+            # （表现为"禁用圆圈"拖不进来）。因此对本进程所有窗口：
+            # 1) 窗口级放行 WM_DROPFILES/COPYDATA/COPYGLOBALDATA（UIPI 消息过滤）
+            # 2) RevokeDragDrop 移除全部 OLE 拖放注册，强制 Explorer 回退 WM_DROPFILES
+            _ex = user32.ChangeWindowMessageFilterEx
+            _ex.argtypes = [ctypes.c_void_p, ctypes.c_uint, ctypes.c_uint,
+                            ctypes.c_void_p]
+            hwnds = _all_process_hwnds()
+            for w in hwnds:
+                for m in (_WM_DROPFILES, _WM_COPYDATA, _WM_COPYGLOBALDATA):
+                    _ex(w, m, _MSGFLT_ADD, None)
+                ole32.RevokeDragDrop(w)
+            print(f"[dnd] 已对 {len(hwnds)} 个窗口放行消息并撤销 OLE 拖放注册", flush=True)
+            # WM_DROPFILES 只注册在顶层窗口：落点坐标为顶层客户区基准（_deliver 的 childAt 依赖）
+            shell32.DragAcceptFiles.restype = None   # 该函数返回 VOID，显式声明避免误读
+            shell32.DragAcceptFiles(hwnd, True)
+            print("[dnd] DragAcceptFiles(顶层) 完成", flush=True)
             self._admin_drop_filter = _AdminDropFilter(self)
             QApplication.instance().installNativeEventFilter(self._admin_drop_filter)
             self._admin_dnd = True

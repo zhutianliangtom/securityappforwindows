@@ -321,7 +321,7 @@ class AgentEngine:
                 return {"text": self.ask_user(args), "images": []}
             return {"text": "[ask_user] 未接入提问面板", "images": []}
         if name in agent_tools.SUB_AGENT_TOOLS:
-            # 子 Agent 工具：并发派发只读子任务；不做轮数与时间上限，
+            # 子 Agent 工具：并发派发子任务（可读写项目文件）；不做轮数与时间上限，
             # 长任务持续到完成或被用户停止（stop），与主 Agent 无轮数上限一致
             try:
                 res = _call_with_stop(lambda: self._run_subagent_tool(name, args),
@@ -362,7 +362,7 @@ class AgentEngine:
 
     # ---------- 子 Agent 工具（explorer / 搜索 / 通用并发分发） ----------
     def _run_subagent_tool(self, name: str, args: dict) -> dict:
-        """子 Agent 工具执行：复用同一 LLM 客户端，派发只读子任务并汇总结果"""
+        """子 Agent 工具执行：复用同一 LLM 客户端，派发子任务（可读写项目文件）并汇总结果"""
         args = args or {}
         tasks = []
         if name == "explore_project":
@@ -402,11 +402,11 @@ class AgentEngine:
 
     @staticmethod
     def _sub_allowed(tools_str: str):
-        """子任务可用工具：与只读白名单取交集；空则用全部只读工具"""
+        """子任务可用工具：与子 Agent 白名单取交集；空则用全部白名单工具"""
         if not tools_str:
             return None
         names = {x.strip() for x in str(tools_str).replace("，", ",").split(",") if x.strip()}
-        inter = tuple(n for n in names if n in agent_subagent.READONLY_TOOLS)
+        inter = tuple(n for n in names if n in agent_subagent.SUB_AGENT_WHITELIST)
         return inter or None
 
     # ---------- 主循环 ----------

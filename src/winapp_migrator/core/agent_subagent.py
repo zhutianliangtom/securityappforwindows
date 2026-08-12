@@ -1,12 +1,12 @@
-"""子 Agent（Sub-Agent）：主 Agent 并发派发只读子任务
+"""子 Agent（Sub-Agent）：主 Agent 并发派发子任务，加速多文件迭代
 
-- run_sub_agent：单个子 Agent 的独立 LLM 循环（独立上下文 + 只读工具白名单）
+- run_sub_agent：单个子 Agent 的独立 LLM 循环（独立上下文 + 工具白名单）
 - dispatch_sub_agents：多子任务并发执行并汇总（线程池，最多 4 并发，按任务顺序输出）
 - explore_goal / search_goal：Explorer / Search 子 Agent 的任务指令模板
 
-设计约束：子 Agent 只能使用只读工具（读文件/列目录/搜索/系统信息），
-杜绝子任务未经主流程确认就修改文件或执行命令；每个子 Agent 上下文独立，
-只把最终总结返回主 Agent，避免大规模探索/搜索撑爆主对话上下文。
+设计约束：子 Agent 可读写项目文件（创建/编辑/删除），用于并行迭代代码；
+不暴露命令执行工具（run_command），并发执行无法逐条向用户确认，避免危险命令。
+每个子 Agent 上下文独立，只把最终总结返回主 Agent，避免大规模探索/搜索撑爆主对话上下文。
 """
 
 import json
@@ -14,21 +14,23 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from winapp_migrator.core import agent_llm, agent_tools
 
-# 子 Agent 可用工具白名单（全部只读）
-READONLY_TOOLS = ("read_file", "list_directory", "search_files", "find_app",
-                  "system_info", "get_time", "env_var")
+# 子 Agent 可用工具白名单：读 + 编辑/创建/删除（迭代项目需要改代码）
+SUB_AGENT_WHITELIST = ("read_file", "write_file", "edit_file", "delete_file",
+                       "list_directory", "search_files", "find_app",
+                       "system_info", "get_time", "env_var")
 
-_SUB_SYSTEM = """你是子 Agent：负责独立完成一项聚焦、只读的子任务，结果会被主 Agent 汇总使用。
+_SUB_SYSTEM = """你是子 Agent：负责独立完成一项聚焦的子任务，结果会被主 Agent 汇总使用。
 规则：
-1. 只使用提供的只读工具（读文件 / 列目录 / 搜索 / 系统信息），禁止修改任何文件或执行命令。
-2. 先快速了解范围再动手，避免重复搜索或重复读取同一文件。
-3. 输出精炼总结：关键路径与关键结论，不要整篇贴原文。
-4. 找不到或无法完成时，明确说明已尝试的范围与原因。"""
+1. 使用提供的工具完成子任务：可读取/列目录/搜索，也可创建、编辑、删除项目文件（write_file / edit_file / delete_file）。
+2. 禁止执行任何命令（run_command 不可用）；修改文件前先读取相关内容，避免破坏已有逻辑。
+3. 先快速了解范围再动手，避免重复搜索或重复读取同一文件。
+4. 输出精炼总结：关键路径、关键结论与所做的修改，不要整篇贴原文。
+5. 找不到或无法完成时，明确说明已尝试的范围与原因。"""
 
 
 def _sub_tools(allowed=None) -> list:
-    """子 Agent 可用工具 schema（与只读白名单取交集）"""
-    names = set(allowed or READONLY_TOOLS) & set(READONLY_TOOLS)
+    """子 Agent 可用工具 schema（与白名单取交集）"""
+    names = set(allowed or SUB_AGENT_WHITELIST) & set(SUB_AGENT_WHITELIST)
     return [t for t in agent_tools.tool_schemas()
             if t["function"]["name"] in names]
 
@@ -54,8 +56,8 @@ def run_sub_agent(llm, goal, allowed=None, stop=None, on_status=None) -> str:
     messages = [{"role": "system", "content": _SUB_SYSTEM},
                 {"role": "user", "content": agent_llm.build_content(goal)}]
     tools = _sub_tools(allowed)
-    # 实际可执行白名单 = 只读白名单 ∩ 允许集：模型幻觉调用非白名单工具时直接拒绝
-    whitelist = set(allowed or READONLY_TOOLS) & set(READONLY_TOOLS)
+    # 实际可执行白名单 = 子 Agent 白名单 ∩ 允许集：模型幻觉调用非白名单工具时直接拒绝
+    whitelist = set(allowed or SUB_AGENT_WHITELIST) & set(SUB_AGENT_WHITELIST)
     while True:
         if stop and stop():
             return "（子任务已停止）"

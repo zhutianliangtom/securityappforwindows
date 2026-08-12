@@ -501,8 +501,8 @@ TOOLS = [
         "function": {
             "name": "dispatch_sub_agents",
             "description": "把多个互不依赖的子任务分发给并行运行的子 Agent，各自独立执行后汇总返回。"
-                           "适合大规模读取/搜索/探索类工作（子 Agent 仅只读，不会修改文件）。"
-                           "子任务建议 1-8 个；任务越多总体耗时越长。",
+                           "适合大规模读取/搜索/探索、以及多文件并行迭代（子 Agent 可创建/编辑/删除项目文件，"
+                           "但不能执行命令）。子任务建议 1-8 个；任务越多总体耗时越长。",
             "parameters": {"type": "object",
                            "properties": {
                                "tasks": {"type": "array",

@@ -1955,6 +1955,7 @@ class AgentPanel(QDialog):
             row.addWidget(bubble, 0, Qt.AlignmentFlag.AlignLeft)
             row.addStretch(1)
         self.msg_lay.insertLayout(self.msg_lay.count() - 1, row)
+        self._place_spinner_bottom()   # 新气泡加入后动画行移到最底部（AI 气泡下方外侧）
         if animate:
             self._fade_in(bubble, self)   # 历史批量加载跳过动画，避免逐条淡入造成卡顿
         self._scroll_bottom()
@@ -1968,6 +1969,7 @@ class AgentPanel(QDialog):
         row.addWidget(lbl)
         row.addStretch(1)
         self.msg_lay.insertLayout(self.msg_lay.count() - 1, row)
+        self._place_spinner_bottom()   # 动画行始终保持在消息流最底部
         self._scroll_bottom()
 
     def _add_badge(self, text: str, color: str):
@@ -1981,7 +1983,18 @@ class AgentPanel(QDialog):
         row.addWidget(lbl)
         row.addStretch(1)
         self.msg_lay.insertLayout(self.msg_lay.count() - 1, row)
+        self._place_spinner_bottom()   # 动画行始终保持在消息流最底部
         self._scroll_bottom()
+
+    def _place_spinner_bottom(self):
+        """把任务动画行移到消息流最底部（AI 气泡在下方滚动不会盖住它）"""
+        if self._spinner_row is None:
+            return
+        for i in range(self.msg_lay.count()):
+            if self.msg_lay.itemAt(i).layout() is self._spinner_row:
+                self.msg_lay.takeAt(i)
+                break
+        self.msg_lay.insertLayout(self.msg_lay.count() - 1, self._spinner_row)
 
     # ---------- 发送/停止按钮转圈动画 ----------
     @staticmethod

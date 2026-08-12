@@ -174,7 +174,8 @@ def _to_responses_input(messages: list) -> list:
     """把 Chat Completions 格式的 messages 转为 Responses API 的 input 项数组。
 
     - system → 单独走 instructions 参数，不放入 input
-    - assistant：只保留文本内容（function_call 项不回放），空内容跳过
+    - assistant：文本内容 → message 项；工具调用 → function_call 项（必须回放，
+      否则后续 function_call_output 因找不到对应 call_id 报 400）
     - tool → {"type":"function_call_output","call_id","output"}
     - user/assistant 文本/图片 → {"type":"message","role","content":[...]}
     """
@@ -211,6 +212,17 @@ def _to_responses_input(messages: list) -> list:
             if text:
                 items.append({"type": "message", "role": role,
                               "content": [{"type": "input_text", "text": text}]})
+        # assistant 的工具调用回放为 function_call 项（保留 call_id 供 function_call_output 匹配）
+        if role == "assistant":
+            for tc in m.get("tool_calls") or []:
+                if not isinstance(tc, dict):
+                    continue
+                fn = tc.get("function") or {}
+                items.append({"type": "function_call",
+                              "call_id": str(tc.get("id") or ""),
+                              "name": str(fn.get("name") or ""),
+                              "arguments": str(fn.get("arguments") or "{}"),
+                              "status": "completed"})
     return items
 
 

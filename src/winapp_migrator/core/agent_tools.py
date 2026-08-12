@@ -879,7 +879,7 @@ def _run_command(command: str, wait: int = 5, force_quit: bool = False) -> dict:
     reader 线程持续排空 stdout/stderr，轮询期间可拿到增量进度。
     """
     try:
-        wait = max(0, min(int(wait), 600))
+        wait = max(0, int(wait))   # 不做上限：长命令可无限等待，由 stop/转后台机制兜底
         # 控制台程序按 OEM 代码页输出（中文系统 GBK，英文 cp437），
         # 用 text=True 默认 UTF-8 会解码失败导致 reader 线程崩溃、输出丢失
         proc = subprocess.Popen(command, shell=True, stdout=subprocess.PIPE,

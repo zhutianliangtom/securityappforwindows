@@ -339,8 +339,10 @@ class AgentEngine:
         if name in self._builtin_names:
             # 内置工具（run_command 等）同样可能长时间阻塞 → 用带超时/可中断封装
             try:
+                # run_command 不设时间上限：长命令持续到完成或用户停止；
                 # 下载不设 40s 放弃：长任务由 UI 轮询快照渲染进度条，停止按钮可取消
-                timeout = 3600.0 if name == "fast_download" else 40.0
+                timeout = None if name == "run_command" else \
+                    (3600.0 if name == "fast_download" else 40.0)
                 res = _call_with_stop(
                     lambda: agent_tools.execute_tool(name, args, allow_dangerous=allow_dangerous),
                     self._stop, timeout=timeout)

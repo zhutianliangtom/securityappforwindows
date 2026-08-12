@@ -16,6 +16,8 @@ SAFE_COMMANDS = {
     "set", "route", "arp", "nslookup", "tracert", "getmac",
     # 普通文件操作：新建/复制/移动/重命名/删除单文件或空目录
     "mkdir", "md", "copy", "move", "ren", "rename", "del", "erase", "rd", "rmdir",
+    # curl：HTTP 请求/下载（管道/重定向等组合仍会降级为 risky 需确认）
+    "curl",
     # git：常规提交/推送/拉取/查看（危险子命令由 DANGEROUS_KW 先行拒绝）
     "git",
 }

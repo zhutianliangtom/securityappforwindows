@@ -20,6 +20,7 @@ import sys
 import threading
 import time
 import uuid
+import webbrowser
 from pathlib import Path
 
 from PyQt6.QtCore import (Qt, QTimer, QSettings, QPropertyAnimation, pyqtSignal,
@@ -51,6 +52,7 @@ BORDER = "#1E2A44"        # 边框
 TEXT = "#E6EDF7"          # 主文本
 TEXT_DIM = "#8A9BB8"      # 次要文本
 ACCENT = "#22D3EE"        # 强调（青）
+LINK_COLOR = "#4B89FF"    # 可点击链接（蓝）
 USER_BG = "#0EA5E9"       # 用户气泡/发送按钮底色（纯色）
 AI_BG = "#1A2540"         # AI 气泡底色
 OK = "#34D399"
@@ -128,8 +130,35 @@ def _formula_to_html(s: str) -> str:
     return s
 
 
+def _linkify(s: str) -> str:
+    """把（已转义的）文本中的裸 URL / Windows 路径转为蓝色可点击链接。
+    文件路径统一用 file:/// 前缀，便于 _on_bubble_link 识别后 os.startfile 打开。"""
+    pattern = re.compile(
+        r"(?<![\"'\w])("
+        r"https?://[^\s<>\"']+|"          # 裸 URL
+        r"[A-Za-z]:[\\/][^\s<>\"']*|"     # 盘符绝对路径 C:\... / C:/...
+        r"\\\\[^\s<>\"']*"                # UNC 路径 \\server\share
+        r")")
+    # URL 尾部非法字符（全角标点、中文文本等），ASCII URL 字符白名单
+    _tail = re.compile(r"[^A-Za-z0-9/_\-?=&.%#:@+~]+$")
+
+    def _to(m):
+        token = m.group(1)
+        if token.startswith(("http://", "https://")):
+            token = _tail.sub("", token)
+            href = token
+        elif token.startswith("file://"):
+            href = token
+        else:
+            token = token.rstrip(".,;:!)]}，。；：！？】\"'")
+            href = "file:///" + token.replace("\\", "/")
+        return (f'<a href="{href}" style="color:{LINK_COLOR};'
+                f'text-decoration:underline;">{token}</a>')
+    return pattern.sub(_to, s)
+
+
 def _inline_md(s: str) -> str:
-    """行内样式：数学公式 $...$、`code`、**bold**、[text](url)"""
+    """行内样式：数学公式 $...$、`code`、**bold**、[text](url)、裸 URL/文件路径"""
     # 先提取行内公式为占位符，避免被转义/加粗等逻辑破坏
     formulas = {}
 
@@ -145,8 +174,18 @@ def _inline_md(s: str) -> str:
                r"<code style='background:#0B1220;color:#22D3EE;padding:1px 5px;"
                r"border-radius:4px;font-family:Consolas;'>\1</code>", s)
     s = re.sub(r"\*\*([^*]+)\*\*", r"<b>\1</b>", s)
-    s = re.sub(r"\[([^\]]+)\]\((https?://[^)\s]+)\)",
-               r'<a href="\2" style="color:#22D3EE;">\1</a>', s)
+    # [text](url) 先占位，避免其 href/文字被 _linkify 二次加工
+    links = {}
+
+    def _cap_link(m):
+        idx = f"\x00L{len(links)}\x00"
+        links[idx] = (f'<a href="{m.group(2)}" style="color:{LINK_COLOR};'
+                      f'text-decoration:underline;">{m.group(1)}</a>')
+        return idx
+    s = re.sub(r"\[([^\]]+)\]\((https?://[^)\s]+)\)", _cap_link, s)
+    s = _linkify(s)
+    for idx, html in links.items():
+        s = s.replace(idx, html)
     return s
 
 
@@ -281,7 +320,7 @@ def _md_to_html(raw: str) -> str:
 def _render_text(raw: str) -> str:
     """AI 正文渲染：Markdown 解析；流式中代码块未闭合时回退为纯文本"""
     if raw.count("```") % 2 == 1:
-        return _esc(raw).replace("\n", "<br/>")
+        return _linkify(_esc(raw)).replace("\n", "<br/>")
     return _md_to_html(raw)
 
 
@@ -2232,7 +2271,7 @@ class AgentPanel(QDialog):
                 parts.append(f'<div style="color:{TEXT_DIM};font-size:{f_op}px;font-family:Consolas;'
                              f'border-left:3px solid {BORDER};padding:2px 10px;'
                              'margin:16px 0 4px 14px;">'
-                             f'{seg["html"]}</div>')
+                             f'{_linkify(seg["html"])}</div>')
             elif t == "progress":
                 # 下载进度条：AI 气泡内实时渲染（面板轮询快照更新）
                 pct = max(0, min(100, int(seg.get("pct") or 0)))
@@ -2257,7 +2296,8 @@ class AgentPanel(QDialog):
                 parts.append(f'<div style="color:{TEXT};font-size:{f_main}px;">'
                              f'{_render_text(seg["raw"])}</div>')
             elif t == "mark":
-                parts.append(f'<div style="color:{TEXT_DIM};font-size:{f_sm}px;">{seg["html"]}</div>')
+                parts.append(f'<div style="color:{TEXT_DIM};font-size:{f_sm}px;">'
+                             f'{_linkify(seg["html"])}</div>')
         return "".join(parts)
 
     def _segments_full(self) -> list:
@@ -2337,20 +2377,36 @@ class AgentPanel(QDialog):
 
     def _on_bubble_link(self, url: str):
         """气泡内链接点击：折叠/展开思考过程（仅局部重渲染该气泡）"""
-        if url != "think:toggle":
+        if url == "think:toggle":
+            bubble = self.sender()
+            segs = self._bubble_segs.get(id(bubble)) if bubble is not None else None
+            if not segs:
+                return
+            for seg in segs:
+                if seg.get("type") == "think":
+                    seg["collapsed"] = not seg.get("collapsed", False)
+                    break
+            try:
+                bubble.setText(self._build_ai_html(segs))
+            except RuntimeError:
+                pass
             return
-        bubble = self.sender()
-        segs = self._bubble_segs.get(id(bubble)) if bubble is not None else None
-        if not segs:
-            return
-        for seg in segs:
-            if seg.get("type") == "think":
-                seg["collapsed"] = not seg.get("collapsed", False)
-                break
+        # 普通链接：URL 打开浏览器；文件路径用系统默认程序/资源管理器打开
+        url = _html.unescape(url)
         try:
-            bubble.setText(self._build_ai_html(segs))
-        except RuntimeError:
-            pass
+            if url.startswith(("http://", "https://")):
+                webbrowser.open(url)
+            elif url.startswith("file://"):
+                s = url[len("file://"):]
+                k = len(s) - len(s.lstrip("/"))
+                s = s.lstrip("/")
+                # UNC（开头 ≥2 个 /）→ \\server\share；盘符 /C:/x → C:\x
+                path = ("\\\\" + s.replace("/", os.sep)) if k >= 2 else s.replace("/", os.sep)
+                os.startfile(path)
+            else:
+                os.startfile(url)
+        except Exception as e:
+            print(f"[agent] 打开链接失败: {url} → {e}")
 
     def _refresh_ai_html(self):
         """节流刷新 AI 气泡：流式 token 高频调用时合并为每 60ms 批量 setText 一次，

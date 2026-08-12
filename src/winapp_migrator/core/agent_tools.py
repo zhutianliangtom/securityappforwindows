@@ -1496,10 +1496,39 @@ def _extract_text(path: str) -> dict:
         return _blocked(f"[extract_text] 解析失败: {e}")
 
 
+# 商务专业风主题色（深蓝 + 深灰）
+_DOC_NAVY = "1F3864"          # 主色：深蓝
+_DOC_NAVY_SOFT = "8EAADB"     # 浅蓝（副标题/辅助）
+_DOC_DARK = "404040"          # 正文深灰
+_DOC_FONT = "微软雅黑"
+
+
+def _docx_set_font(run, size=None, bold=None, color=None):
+    """设置 run 字体（含东亚字体微软雅黑）"""
+    from docx.shared import Pt, RGBColor
+    run.font.name = _DOC_FONT
+    from docx.oxml.ns import qn
+    rPr = run._element.get_or_add_rPr()
+    rFonts = rPr.find(qn("w:rFonts"))
+    if rFonts is None:
+        rFonts = rPr.makeelement(qn("w:rFonts"), {})
+        rPr.insert(0, rFonts)
+    rFonts.set(qn("w:eastAsia"), _DOC_FONT)
+    if size:
+        run.font.size = Pt(size)
+    if bold is not None:
+        run.font.bold = bold
+    if color:
+        run.font.color.rgb = RGBColor.from_string(color)
+
+
 def _create_docx(path: str, title: str, paragraphs: list) -> dict:
-    """生成 Word 文档（python-docx）：标题 + 段落文本"""
+    """生成 Word 文档（python-docx）：商务专业风（微软雅黑 + 深蓝主题）。
+    段落支持轻量标记：'# '/'## ' 为标题层级，'- '/'* ' 为项目符号，其余为正文。"""
     try:
         from docx import Document
+        from docx.shared import Pt, RGBColor
+        from docx.enum.text import WD_ALIGN_PARAGRAPH, WD_LINE_SPACING
     except ImportError:
         return _blocked("[create_docx] 缺少 python-docx：run_command 执行 pip install python-docx")
     p = _resolve(path)
@@ -1507,40 +1536,134 @@ def _create_docx(path: str, title: str, paragraphs: list) -> dict:
         p.parent.mkdir(parents=True, exist_ok=True)
         doc = Document()
         if (title or "").strip():
-            doc.add_heading(str(title), level=0)
+            h = doc.add_paragraph()
+            h.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            r = h.add_run(str(title))
+            _docx_set_font(r, size=22, bold=True, color=_DOC_NAVY)
+            h.paragraph_format.space_after = Pt(14)
         for para in (paragraphs or []):
-            para = str(para)
-            doc.add_paragraph(para) if para.strip() else doc.add_paragraph()
+            para = str(para).strip()
+            if not para:
+                doc.add_paragraph()
+                continue
+            # 轻量标记：标题层级 / 项目符号 / 正文
+            if para.startswith("### "):
+                h = doc.add_paragraph()
+                r = h.add_run(para[4:])
+                _docx_set_font(r, size=12, bold=True, color=_DOC_DARK)
+                h.paragraph_format.space_before, h.paragraph_format.space_after = Pt(8), Pt(4)
+            elif para.startswith("## "):
+                h = doc.add_paragraph()
+                r = h.add_run(para[3:])
+                _docx_set_font(r, size=13, bold=True, color=_DOC_NAVY_SOFT)
+                h.paragraph_format.space_before, h.paragraph_format.space_after = Pt(10), Pt(4)
+            elif para.startswith("# "):
+                h = doc.add_paragraph()
+                r = h.add_run(para[2:])
+                _docx_set_font(r, size=16, bold=True, color=_DOC_NAVY)
+                h.paragraph_format.space_before, h.paragraph_format.space_after = Pt(12), Pt(6)
+            elif para.startswith(("- ", "* ")):
+                li = doc.add_paragraph()
+                r = li.add_run(para[2:])
+                _docx_set_font(r, size=11, color=_DOC_DARK)
+                li.paragraph_format.left_indent = Pt(18)
+                li.paragraph_format.line_spacing_rule = WD_LINE_SPACING.ONE_POINT_FIVE
+                # 手工项目符号圆点（避免依赖样式模板缺失）
+                li.style = doc.styles["List Bullet"] if "List Bullet" in doc.styles else li.style
+            else:
+                body = doc.add_paragraph()
+                r = body.add_run(para)
+                _docx_set_font(r, size=11, color=_DOC_DARK)
+                pf = body.paragraph_format
+                pf.space_after = Pt(6)
+                pf.line_spacing_rule = WD_LINE_SPACING.ONE_POINT_FIVE
         doc.save(str(p))
     except Exception as e:
         return _blocked(f"[create_docx] 生成失败: {e}")
     return {"text": f"已生成 Word 文档：{p}", "images": []}
 
 
+def _pptx_font(run, size, bold=False, color="404040"):
+    """设置 pptx run 字体（拉丁 + 东亚均为微软雅黑）"""
+    from pptx.util import Pt
+    from pptx.dml.color import RGBColor
+    run.font.name = _DOC_FONT
+    run.font.size = Pt(size)
+    run.font.bold = bold
+    run.font.color.rgb = RGBColor.from_string(color)
+    from pptx.oxml.ns import qn
+    rPr = run._r.get_or_add_rPr()
+    ea = rPr.find(qn("a:ea"))
+    if ea is None:
+        ea = rPr.makeelement(qn("a:ea"), {})
+        rPr.append(ea)
+    ea.set("typeface", _DOC_FONT)
+
+
 def _create_pptx(path: str, title: str, slides: list) -> dict:
-    """生成 PowerPoint（python-pptx）：首页标题 + 每页标题与要点"""
+    """生成 PowerPoint（python-pptx）：16:9 商务专业风。
+    标题页深蓝底白字；内容页白底深蓝标题条 + 深灰要点。"""
     try:
         from pptx import Presentation
+        from pptx.util import Inches, Pt
+        from pptx.dml.color import RGBColor
+        from pptx.enum.text import PP_ALIGN
+        from pptx.enum.shapes import MSO_SHAPE
     except ImportError:
         return _blocked("[create_pptx] 缺少 python-pptx：run_command 执行 pip install python-pptx")
     p = _resolve(path)
     try:
         p.parent.mkdir(parents=True, exist_ok=True)
         prs = Presentation()
+        prs.slide_width = Inches(13.333)   # 16:9
+        prs.slide_height = Inches(7.5)
+        blank = prs.slide_layouts[6]
+        # 标题页：深蓝全屏 + 居中白字
         if (title or "").strip():
-            s = prs.slides.add_slide(prs.slide_layouts[0])   # 标题页
-            s.shapes.title.text = str(title)
-        for item in (slides or []):
+            s = prs.slides.add_slide(blank)
+            bg = s.shapes.add_shape(MSO_SHAPE.RECTANGLE, 0, 0, prs.slide_width, prs.slide_height)
+            bg.fill.solid()
+            bg.fill.fore_color.rgb = RGBColor.from_string(_DOC_NAVY)
+            bg.line.fill.background()
+            tb = s.shapes.add_textbox(Inches(1), Inches(2.6), Inches(11.333), Inches(1.6))
+            tf = tb.text_frame
+            tf.word_wrap = True
+            r = tf.paragraphs[0].add_run()
+            r.text = str(title)
+            _pptx_font(r, 40, bold=True, color="FFFFFF")
+            tf.paragraphs[0].alignment = PP_ALIGN.CENTER
+        # 内容页
+        for i, item in enumerate(slides or [], 1):
             if not isinstance(item, dict):
                 continue
-            slide = prs.slides.add_slide(prs.slide_layouts[1])   # 标题 + 内容
-            slide.shapes.title.text = str(item.get("title") or "")
-            tf = slide.placeholders[1].text_frame
-            first = True
-            for b in (item.get("bullets") or []):
-                para = tf.paragraphs[0] if first else tf.add_paragraph()
-                first = False
-                para.text = str(b)
+            slide = prs.slides.add_slide(blank)
+            # 标题 + 底部深蓝分隔线
+            tb = slide.shapes.add_textbox(Inches(0.6), Inches(0.35), Inches(12.1), Inches(0.8))
+            r = tb.text_frame.paragraphs[0].add_run()
+            r.text = str(item.get("title") or "")
+            _pptx_font(r, 26, bold=True, color=_DOC_NAVY)
+            line = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, Inches(0.6), Inches(1.18),
+                                          Inches(12.1), Pt(2.5))
+            line.fill.solid()
+            line.fill.fore_color.rgb = RGBColor.from_string(_DOC_NAVY)
+            line.line.fill.background()
+            # 要点正文
+            body = slide.shapes.add_textbox(Inches(0.6), Inches(1.45), Inches(12.1), Inches(5.4))
+            tf = body.text_frame
+            tf.word_wrap = True
+            bullets = item.get("bullets") or []
+            for j, b in enumerate(bullets):
+                para = tf.paragraphs[0] if j == 0 else tf.add_paragraph()
+                para.space_after = Pt(10)
+                r = para.add_run()
+                r.text = ("•  " if str(b).strip() else "") + str(b).strip()
+                _pptx_font(r, 18, bold=(j == 0), color=_DOC_DARK)
+            # 页脚页码
+            foot = slide.shapes.add_textbox(Inches(11.9), Inches(7.0), Inches(1.0), Inches(0.4))
+            fr = foot.text_frame.paragraphs[0].add_run()
+            fr.text = str(i)
+            _pptx_font(fr, 10, color=_DOC_NAVY_SOFT)
+            foot.text_frame.paragraphs[0].alignment = PP_ALIGN.RIGHT
         prs.save(str(p))
     except Exception as e:
         return _blocked(f"[create_pptx] 生成失败: {e}")
@@ -1559,10 +1682,18 @@ def _xlsx_cell(v):
         return s
 
 
+def _xlsx_col_width(texts) -> float:
+    """估算列宽：中文按 2 字符宽计，带最小/最大限制"""
+    w = max((sum(2 if ord(ch) > 127 else 1 for ch in str(t)) for t in texts), default=4)
+    return max(8, min(w + 2, 40))
+
+
 def _create_xlsx(path: str, sheets: list) -> dict:
-    """生成 Excel 工作簿（openpyxl）：多工作表二维数组"""
+    """生成 Excel 工作簿（openpyxl）：商务专业风。
+    首行深蓝表头白字 + 细边框 + 隔行浅蓝 + 自动列宽 + 冻结首行 + 自动筛选。"""
     try:
         from openpyxl import Workbook
+        from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
     except ImportError:
         return _blocked("[create_xlsx] 缺少 openpyxl：run_command 执行 pip install openpyxl")
     p = _resolve(path)
@@ -1570,13 +1701,40 @@ def _create_xlsx(path: str, sheets: list) -> dict:
         p.parent.mkdir(parents=True, exist_ok=True)
         wb = Workbook()
         wb.remove(wb.active)
+        thin = Side(style="thin", color="D9D9D9")
+        border = Border(left=thin, right=thin, top=thin, bottom=thin)
         for sheet in (sheets or []):
             if not isinstance(sheet, dict):
                 continue
-            ws = wb.create_sheet(title=str(sheet.get("name") or "Sheet"))
-            for row in (sheet.get("rows") or []):
-                if isinstance(row, (list, tuple)):
-                    ws.append([_xlsx_cell(v) for v in row])
+            ws = wb.create_sheet(title=str(sheet.get("name") or "Sheet")[:31])
+            ws.sheet_properties.tabColor = _DOC_NAVY
+            rows = [r for r in (sheet.get("rows") or []) if isinstance(r, (list, tuple))]
+            for row in rows:
+                ws.append([_xlsx_cell(v) for v in row])
+            if not rows:
+                continue
+            # 表头：深蓝底白字加粗居中
+            for c in ws[1]:
+                c.font = Font(name=_DOC_FONT, size=11, bold=True, color="FFFFFF")
+                c.fill = PatternFill("solid", fgColor=_DOC_NAVY)
+                c.alignment = Alignment(horizontal="center", vertical="center")
+                c.border = border
+            ws.row_dimensions[1].height = 22
+            # 数据行：微软雅黑 + 边框 + 隔行浅蓝 + 数字右对齐
+            for r_idx, row in enumerate(ws.iter_rows(min_row=2), 2):
+                for c in row:
+                    c.font = Font(name=_DOC_FONT, size=10, color=_DOC_DARK)
+                    c.border = border
+                    c.alignment = Alignment(horizontal=("right" if isinstance(c.value, (int, float))
+                                                        else "left"), vertical="center")
+                    if r_idx % 2 == 0:
+                        c.fill = PatternFill("solid", fgColor="F2F6FC")
+            # 自动列宽 + 冻结首行 + 自动筛选
+            for col in ws.columns:
+                ws.column_dimensions[col[0].column_letter].width = \
+                    _xlsx_col_width([c.value for c in col])
+            ws.freeze_panes = "A2"
+            ws.auto_filter.ref = ws.dimensions
         wb.save(str(p))
     except Exception as e:
         return _blocked(f"[create_xlsx] 生成失败: {e}")

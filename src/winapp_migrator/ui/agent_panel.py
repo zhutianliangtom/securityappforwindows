@@ -13,6 +13,7 @@ import base64
 import ctypes
 import html as _html
 import json
+import math
 import os
 import re
 import sys
@@ -284,24 +285,21 @@ def _render_text(raw: str) -> str:
 
 
 class _TypingDots(QWidget):
-    """任务执行中 AI 气泡下方的「•••」来回滑动动画（随消息流滚动，无 emoji）"""
+    """任务执行中 AI 气泡下方的打字指示器动画（iMessage 风格：三点依次弹起，
+    相位错开 1/3 循环，随消息流滚动，无 emoji）"""
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setFixedSize(46, 16)
-        self._phase = 0.0      # 往返相位 0→1→0
-        self._forward = True
+        self._phase = 0.0      # 循环相位 0→1（每点激活时刻错开 1/3）
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._tick)
         self._timer.start(35)
 
     def _tick(self):
-        step = 0.07
-        self._phase += step if self._forward else -step
+        self._phase += 0.045
         if self._phase >= 1.0:
-            self._phase, self._forward = 1.0, False
-        elif self._phase <= 0.0:
-            self._phase, self._forward = 0.0, True
+            self._phase -= 1.0
         self.update()
 
     def paintEvent(self, event):
@@ -309,12 +307,13 @@ class _TypingDots(QWidget):
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
         p.setPen(Qt.PenStyle.NoPen)
         p.setBrush(QColor(ACCENT))
-        base = int(self._phase * 8)   # 三点整体左右往返滑动
         for i in range(3):
-            d = abs(self._phase - i / 2)          # 首尾点随相位淡出，形成流动感
-            alpha = int(100 + 155 * max(0.0, 1 - d * 1.8))
-            p.setOpacity(alpha / 255)
-            p.drawEllipse(QPointF(5 + i * 13 + base, 8), 3.2, 3.2)
+            # 相位错开 1/3：三点从左到右依次"弹起放大再回落"，形成打字节奏
+            t = (self._phase - i / 3.0) % 1.0
+            amp = max(0.0, math.sin(t * math.pi))   # t=0.5 时最大
+            r = 2.2 + 2.8 * amp                     # 半径随节奏放大
+            p.setOpacity((90 + 165 * amp) / 255)    # 同步淡入淡出
+            p.drawEllipse(QPointF(5 + i * 13, 8), r, r)
         p.setOpacity(1.0)
         p.end()
 

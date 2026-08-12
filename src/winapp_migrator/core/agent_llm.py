@@ -212,6 +212,38 @@ def build_content(text: str = "", images: Optional[List[str]] = None) -> list:
     return parts or [{"type": "text", "text": ""}]
 
 
+def _sanitize_messages(messages: list) -> list:
+    """发送前统一清洗消息：剔除内容数组里的空文本/空图部分、空数组补占位文本、
+    空 content 补空串，避免上游校验器报 'message content parts cannot be empty'"""
+    out = []
+    for m in messages or []:
+        if not isinstance(m, dict):
+            continue
+        c = m.get("content")
+        if isinstance(c, list):
+            kept = []
+            for x in c:
+                if not isinstance(x, dict):
+                    kept.append(x)
+                    continue
+                t = x.get("type")
+                if t == "text":
+                    if str(x.get("text") or "").strip():
+                        kept.append(x)
+                elif t == "image_url":
+                    if (x.get("image_url") or {}).get("url"):
+                        kept.append(x)
+                else:
+                    kept.append(x)
+            if not kept:
+                kept = [{"type": "text", "text": "（内容已忽略）"}]
+            m = dict(m, content=kept)
+        elif c is None:
+            m = dict(m, content="")
+        out.append(m)
+    return out
+
+
 def _to_responses_input(messages: list) -> list:
     """把 Chat Completions 格式的 messages 转为 Responses API 的 input 项数组。
 
@@ -395,7 +427,7 @@ class LLMClient:
             return self._responses_stream(messages, tools, on_delta, on_reasoning, stop)
         payload = {
             "model": self.model,
-            "messages": messages,
+            "messages": _sanitize_messages(messages),
             "stream": True,
             "stream_options": {"include_usage": True},
         }
@@ -511,7 +543,7 @@ class LLMClient:
         """
         payload = {
             "model": self.model,
-            "input": _to_responses_input(messages),
+            "input": _to_responses_input(_sanitize_messages(messages)),
             "stream": True,
             "store": False,
         }

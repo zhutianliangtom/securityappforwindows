@@ -245,7 +245,9 @@ class AgentEngine:
                 else:
                     keep.append(x)
             if drop:
-                m["content"] = keep
+                # 纯图片消息被全部剥离后会成为空数组，补占位文本防上游拒绝
+                m["content"] = keep if keep else \
+                    [{"type": "text", "text": "（截图已忽略）"}]
 
     @staticmethod
     def _strip_images(messages: list):

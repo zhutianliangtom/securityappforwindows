@@ -28,7 +28,7 @@ from PyQt6.QtCore import (Qt, QTimer, QSettings, QPropertyAnimation, pyqtSignal,
                           QAbstractNativeEventFilter)
 from PyQt6.QtGui import (QIcon, QFont, QPainter, QPen, QColor, QPixmap, QImage,
                          QPainterPath, QKeySequence, QTextOption,
-                         QDragEnterEvent, QDragMoveEvent, QDropEvent)
+                         QDragEnterEvent, QDragMoveEvent, QDropEvent, QCursor)
 from PyQt6.QtWidgets import (
     QDialog, QLabel, QLineEdit, QPushButton, QComboBox, QScrollArea,
     QVBoxLayout, QHBoxLayout, QMessageBox, QFormLayout, QWidget,
@@ -1162,15 +1162,16 @@ class _AdminDropFilter(QAbstractNativeEventFilter):
             pt = _POINT()
             ctypes.windll.shell32.DragQueryPoint(hdrop, ctypes.byref(pt))
             ctypes.windll.shell32.DragFinish(hdrop)
+            print(f"[dnd] DragQueryPoint=({pt.x},{pt.y}) 光标屏幕={QCursor.pos()}", flush=True)
             if paths:
                 # 延迟到主循环投递，避免在原生消息处理中重入 Qt 事件循环
-                QTimer.singleShot(0, lambda x=pt.x, y=pt.y, p=paths:
-                                  self._on_received(x, y, p))
+                QTimer.singleShot(0, lambda: self._on_received(paths, pt.x, pt.y))
             return True, 0
-        except Exception:
+        except Exception as e:
+            print("[dnd] nativeEventFilter 异常:", repr(e), flush=True)
             return False, 0
 
-    def _on_received(self, x: int, y: int, paths: list):
+    def _on_received(self, paths: list, x: int, y: int):
         """收到系统 WM_DROPFILES：显示诊断状态并投递（证明 OS 已把拖放送达应用）"""
         panel = self._panel
         if panel is not None and hasattr(panel, "_add_status"):
@@ -1178,31 +1179,38 @@ class _AdminDropFilter(QAbstractNativeEventFilter):
         self._deliver(x, y, paths)
 
     def _deliver(self, x: int, y: int, paths: list):
-        """主循环内投递：定位鼠标下方第一个可接收拖放的控件并发送 Qt 拖放事件"""
+        """主循环内投递：用鼠标屏幕坐标定位控件（不依赖 DragQueryPoint 坐标语义），
+        找不到可接收控件时回退面板自身；异常打印便于定位"""
         panel = self._panel
         try:
             if panel is None or not paths:
                 return
-            w = panel.childAt(QPoint(x, y))
+            screen = QCursor.pos()
+            w = QApplication.instance().widgetAt(screen)
+            if w is None:   # 兜底：按 DragQueryPoint 坐标在面板内查找
+                w = panel.childAt(QPoint(x, y))
             while w is not None and not w.acceptDrops():
                 w = w.parentWidget()
             if w is None:
                 w = panel
+            print(f"[dnd] 投递目标: {type(w).__name__} acceptDrops={w.acceptDrops()}", flush=True)
             md = QMimeData()
             md.setUrls([QUrl.fromLocalFile(p) for p in paths])
-            local = w.mapFrom(panel, QPoint(x, y))
+            local = w.mapFromGlobal(screen)
             app = QApplication.instance()
-            app.sendEvent(w, QDragEnterEvent(
-                local, Qt.DropAction.CopyAction, md, Qt.MouseButton.LeftButton,
-                Qt.KeyboardModifier.NoModifier))
-            app.sendEvent(w, QDragMoveEvent(
-                local, Qt.DropAction.CopyAction, md, Qt.MouseButton.LeftButton,
-                Qt.KeyboardModifier.NoModifier))
-            app.sendEvent(w, QDropEvent(
-                QPointF(local), Qt.DropAction.CopyAction, md, Qt.MouseButton.LeftButton,
-                Qt.KeyboardModifier.NoModifier))
-        except Exception:
-            pass
+            for evt in (QDragEnterEvent(local, Qt.DropAction.CopyAction, md,
+                                        Qt.MouseButton.LeftButton,
+                                        Qt.KeyboardModifier.NoModifier),
+                        QDragMoveEvent(local, Qt.DropAction.CopyAction, md,
+                                       Qt.MouseButton.LeftButton,
+                                       Qt.KeyboardModifier.NoModifier),
+                        QDropEvent(QPointF(local), Qt.DropAction.CopyAction, md,
+                                   Qt.MouseButton.LeftButton,
+                                   Qt.KeyboardModifier.NoModifier)):
+                app.sendEvent(w, evt)
+            print("[dnd] 已投递 Qt 拖放事件", flush=True)
+        except Exception as e:
+            print("[dnd] 投递异常:", repr(e), flush=True)
 
 
 class _POINT(ctypes.Structure):

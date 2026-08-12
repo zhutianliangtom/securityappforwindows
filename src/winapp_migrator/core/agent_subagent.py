@@ -42,15 +42,21 @@ def _compress(messages: list) -> list:
     return messages[:2] + messages[start:]
 
 
-def run_sub_agent(llm, goal, allowed=None, max_rounds=8, stop=None, on_status=None) -> str:
-    """运行一个子 Agent，返回其最终文本总结"""
+def run_sub_agent(llm, goal, allowed=None, stop=None, on_status=None) -> str:
+    """运行一个子 Agent，返回其最终文本总结。
+
+    不做轮数限制：任务持续到完成或被用户停止（stop），与主 Agent 一致；
+    上下文过长由 _compress 自动压缩并保留任务目标，防止长任务遗忘开头。
+    """
     goal = (goal or "").strip()
     if not goal:
         return "（空任务）"
     messages = [{"role": "system", "content": _SUB_SYSTEM},
                 {"role": "user", "content": agent_llm.build_content(goal)}]
     tools = _sub_tools(allowed)
-    for _ in range(max(int(max_rounds or 8), 1)):
+    # 实际可执行白名单 = 只读白名单 ∩ 允许集：模型幻觉调用非白名单工具时直接拒绝
+    whitelist = set(allowed or READONLY_TOOLS) & set(READONLY_TOOLS)
+    while True:
         if stop and stop():
             return "（子任务已停止）"
         try:
@@ -72,7 +78,15 @@ def run_sub_agent(llm, goal, allowed=None, max_rounds=8, stop=None, on_status=No
                 if not isinstance(args, dict):
                     args = {}
             except json.JSONDecodeError:
-                args = {}
+                # 参数非法 JSON：把错误回给模型重新生成，避免以空参误调用
+                messages.append({"role": "tool", "tool_call_id": c["id"],
+                                 "content": ("[工具参数错误] tool_calls.arguments 不是合法 JSON，"
+                                             "请检查参数格式（字符串需正确转义引号）并重新发起该工具调用。")})
+                continue
+            if name not in whitelist:
+                messages.append({"role": "tool", "tool_call_id": c["id"],
+                                 "content": f"[沙盒] 子 Agent 只允许只读工具，已拒绝调用 {name}"})
+                continue
             if on_status:
                 on_status(f"子Agent: {name}")
             try:
@@ -82,7 +96,6 @@ def run_sub_agent(llm, goal, allowed=None, max_rounds=8, stop=None, on_status=No
             messages.append({"role": "tool", "tool_call_id": c["id"], "content": text})
             if len(messages) > 30:
                 messages = _compress(messages)
-    return "（子 Agent 达到最大轮数，以上为部分结果）"
 
 
 def dispatch_sub_agents(llm, tasks, stop=None, on_status=None, max_workers=4) -> str:
@@ -97,7 +110,6 @@ def dispatch_sub_agents(llm, tasks, stop=None, on_status=None, max_workers=4) ->
         try:
             return i, t, run_sub_agent(llm, t.get("goal", ""),
                                        allowed=t.get("allowed"),
-                                       max_rounds=t.get("max_rounds", 8),
                                        stop=stop, on_status=on_status)
         except Exception as e:
             return i, t, f"子 Agent 异常: {e}"

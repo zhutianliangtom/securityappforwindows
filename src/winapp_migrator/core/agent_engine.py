@@ -61,6 +61,7 @@ def _call_with_stop(fn, stop_event, timeout: float = 30.0):
     """在独立 daemon 线程中执行 fn；超时或 stop 触发时放弃（线程后台自动回收）。
 
     解决 MCP 等无超时阻塞调用导致引擎线程无法中断、AI 无法停止的问题。
+    timeout=None 表示不做时间上限：只有 stop 可中断，长任务持续到完成（如子 Agent）。
     """
     box = {}
 
@@ -72,11 +73,13 @@ def _call_with_stop(fn, stop_event, timeout: float = 30.0):
 
     t = threading.Thread(target=run, daemon=True)
     t.start()
-    deadline = time.time() + timeout
-    while time.time() < deadline:
+    deadline = None if timeout is None else time.time() + timeout
+    while True:
         if not t.is_alive():
             break
         if stop_event.is_set():
+            break
+        if deadline is not None and time.time() >= deadline:
             break
         time.sleep(0.1)
     if t.is_alive():
@@ -318,15 +321,14 @@ class AgentEngine:
                 return {"text": self.ask_user(args), "images": []}
             return {"text": "[ask_user] 未接入提问面板", "images": []}
         if name in agent_tools.SUB_AGENT_TOOLS:
-            # 子 Agent 工具：并发派发只读子任务，耗时较长 → 240s 超时
+            # 子 Agent 工具：并发派发只读子任务；不做轮数与时间上限，
+            # 长任务持续到完成或被用户停止（stop），与主 Agent 无轮数上限一致
             try:
                 res = _call_with_stop(lambda: self._run_subagent_tool(name, args),
-                                      self._stop, timeout=240.0)
+                                      self._stop, timeout=None)
                 if res is None:   # stop 触发已放弃等待（子 Agent 仍在后台执行）
                     return {"text": "[已停止等待] 子 Agent 仍在后台执行，本轮已跳过", "images": []}
                 return res
-            except TimeoutError:
-                return {"text": f"[子Agent超时] {name} 超过 240 秒未完成，已放弃", "images": []}
             except Exception as e:
                 return {"text": f"[子Agent错误] {name}: {e}", "images": []}
         if name in self._builtin_names:
@@ -381,7 +383,6 @@ class AgentEngine:
                         "title": str(t.get("title") or f"子任务 {i}"),
                         "goal": str(t["goal"]),
                         "allowed": self._sub_allowed(str(t.get("tools") or "")),
-                        "max_rounds": self._to_int(t.get("max_rounds"), 8),
                     })
         if not tasks:
             return {"text": f"[{name}] 缺少任务参数，无法派发子 Agent", "images": []}

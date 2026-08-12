@@ -2414,8 +2414,12 @@ class AgentPanel(QDialog):
 
     # ---------- 工作力度 / 模型路由 ----------
     def _refresh_text_only(self):
-        """纯文本模型识别：全部已配置模型均为纯文本时才全局禁用视觉（
-        混配模型时按本次实际使用的模型逐次判断，见 _send）"""
+        """纯文本模型识别：手动指定模型时以该模型为准；自动模式全部已配置模型
+        均为纯文本时才全局禁用视觉（混配模型时按本次实际使用的模型逐次判断）"""
+        m = self._model_override
+        if m:
+            self._text_only = agent_llm.is_text_only_model(m)
+            return
         cfg = self._model_cfg
         models = cfg.get("models") or [cfg.get("model") or agent_llm.DEFAULT_MODEL]
         self._text_only = all(agent_llm.is_text_only_model(x) for x in models)
@@ -2484,6 +2488,7 @@ class AgentPanel(QDialog):
             return
         val = self.model_combo.itemData(idx)
         self._model_override = val if val else None
+        self._refresh_text_only()   # 切换模型立即更新纯文本判断（粘贴图片/附件过滤实时生效）
         self._refresh_route_label()
 
     def _reconnect_mcp(self):
@@ -3112,12 +3117,15 @@ class AgentPanel(QDialog):
             buf = QBuffer(ba)
             buf.open(QIODevice.OpenModeFlag.WriteOnly)
             img.save(buf, "JPEG", 80)
-            self._pending_images.append(
-                "data:image/jpeg;base64," + base64.b64encode(bytes(ba)).decode())
-            self._attach_thumb(QPixmap(path), path)
+            data_url = ("data:image/jpeg;base64,"
+                        + base64.b64encode(bytes(ba)).decode())
+            self._pending_images.append(data_url)
+            self._attach_thumb(QPixmap(path), path, remove=("img", data_url))
         else:
             self._pending_files.append(path)
-            self._attach_thumb(self._file_thumb(path), path, name=os.path.basename(path))
+            self._attach_thumb(self._file_thumb(path), path,
+                               name=os.path.basename(path),
+                               remove=("file", path))
 
     @staticmethod
     def _file_thumb(path: str, size: int = 56) -> QPixmap:
@@ -3167,9 +3175,11 @@ class AgentPanel(QDialog):
         buf = QBuffer(ba)
         buf.open(QIODevice.OpenModeFlag.WriteOnly)
         img.save(buf, "JPEG", 80)
-        self._pending_images.append(
-            "data:image/jpeg;base64," + base64.b64encode(bytes(ba)).decode())
-        self._attach_thumb(QPixmap.fromImage(img), "剪贴板截图（Ctrl+V 粘贴）")
+        data_url = ("data:image/jpeg;base64,"
+                    + base64.b64encode(bytes(ba)).decode())
+        self._pending_images.append(data_url)
+        self._attach_thumb(QPixmap.fromImage(img), "剪贴板截图（Ctrl+V 粘贴）",
+                           remove=("img", data_url))
         return True
 
     def eventFilter(self, obj, event):
@@ -3218,8 +3228,10 @@ class AgentPanel(QDialog):
             return f"{n / 1024:.1f} KB"
         return f"{n / 1024 / 1024:.1f} MB"
 
-    def _attach_thumb(self, pixmap: QPixmap, tooltip: str, name: str = ""):
-        """附件条缩略图卡片：圆角方形缩略图 + 文件名，hover 边框高亮（深色精密卡片风）"""
+    def _attach_thumb(self, pixmap: QPixmap, tooltip: str, name: str = "",
+                      remove: tuple = None):
+        """附件条缩略图卡片：圆角方形缩略图 + 文件名，右上角 × 可单独取消上传。
+        remove: (kind, value) —— kind ∈ img/file，value 为 data_url 或文件路径，用于取消时移除"""
         box = QWidget()
         box.setObjectName("attCard")
         box.setToolTip(tooltip)
@@ -3242,9 +3254,37 @@ class AgentPanel(QDialog):
             nl.setAlignment(Qt.AlignmentFlag.AlignCenter)
             nl.setToolTip(tooltip)
             v.addWidget(nl, 0, Qt.AlignmentFlag.AlignCenter)
+        # 右上角取消按钮：手动定位（不加入布局），点击移除该附件
+        if remove:
+            rm = QPushButton("×")
+            rm.setFixedSize(18, 18)
+            rm.setCursor(Qt.CursorShape.PointingHandCursor)
+            rm.setToolTip("取消上传")
+            rm.setStyleSheet(
+                "QPushButton { background: #2A3A5C; color: #AEB9D0; border: none;"
+                " border-radius: 9px; font-size: 12px; font-weight: 700; }"
+                "QPushButton:hover { background: #E74C3C; color: white; }")
+            rm.clicked.connect(lambda: self._remove_attachment(box, remove[0], remove[1]))
+            rm.setParent(box)
+            rm.move(57, 3)
         # 插入到 stretch 之前
         self._attach_lay.addWidget(box)
         self._attach_bar.setVisible(True)
+
+    def _remove_attachment(self, box: QWidget, kind: str, value):
+        """取消单个附件：从附件条移除缩略图并从待发送列表剔除"""
+        for i in range(self._attach_lay.count()):
+            it = self._attach_lay.itemAt(i)
+            if it and it.widget() is box:
+                self._attach_lay.takeAt(i)
+                break
+        box.deleteLater()
+        if kind == "img":
+            self._pending_images = [x for x in self._pending_images if x != value]
+        else:
+            self._pending_files = [x for x in self._pending_files if x != value]
+        if not self._pending_images and not self._pending_files:
+            self._attach_bar.setVisible(False)
 
     def _clear_attachments(self):
         while self._attach_lay.count() > 0:

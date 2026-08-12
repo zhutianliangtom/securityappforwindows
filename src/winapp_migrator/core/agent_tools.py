@@ -5,6 +5,7 @@
 - images 中的截图 data URL 由引擎并入下一轮视觉输入（截图验证闭环）
 """
 
+import html as _html
 import itertools
 import json
 import locale
@@ -1322,8 +1323,10 @@ def cancel_active_download():
 
 def _http_request(url: str, timeout: int = 15, max_bytes: int = 512 * 1024,
                   method: str = "GET", headers: dict = None, body: str = None) -> str:
-    """真实 HTTP 请求：urllib 标准库，支持 GET/POST/PUT/DELETE/PATCH + 请求头/请求体"""
+    """真实 HTTP 请求：urllib 标准库，支持 GET/POST/PUT/DELETE/PATCH + 请求头/请求体。
+    自动探测响应编码（响应头 charset → HTML meta → utf-8），保证中文页（含 GBK）解码准确。"""
     import gzip
+    import re as _re
     import urllib.request
     method = (method or "GET").upper()
     hdrs = {
@@ -1344,18 +1347,55 @@ def _http_request(url: str, timeout: int = 15, max_bytes: int = 512 * 1024,
     req = urllib.request.Request(url, data=data, headers=hdrs, method=method)
     with urllib.request.urlopen(req, timeout=timeout) as resp:
         raw = resp.read(max_bytes + 1)
+        # 编码探测 1：响应头 Content-Type charset
+        charset = None
+        try:
+            m = _re.search(r"charset=([\w-]+)",
+                           resp.headers.get("Content-Type", ""), _re.I)
+            if m:
+                charset = m.group(1)
+        except Exception:
+            pass
     if len(raw) > max_bytes:
         raw = raw[:max_bytes]
     # 少数服务器无视 Accept-Encoding 仍返回 gzip：按魔数判断解压
     if raw[:2] == b"\x1f\x8b":
         raw = gzip.decompress(raw)
-    return raw.decode("utf-8", errors="replace")
+    # 编码探测 2：HTML <meta charset>（GBK 等老站点常见，硬编码 utf-8 会乱码）
+    if not charset:
+        m = _re.search(rb'<meta[^>]+charset=["\']?([\w-]+)', raw[:2048], _re.I)
+        if m:
+            charset = m.group(1).decode("ascii", "ignore")
+    try:
+        return raw.decode(charset or "utf-8", errors="replace")
+    except LookupError:
+        return raw.decode("utf-8", errors="replace")
+
+
+def _html_to_text(html: str, max_chars: int = 8000) -> str:
+    """HTML → 可读文本：提取标题 + 剥离 script/style/nav 等噪音 + 去标签压缩空白，
+    让截断窗口内尽量是有效正文信息。"""
+    import re as _re
+    m = _re.search(r"<title[^>]*>(.*?)</title>", html, _re.S | _re.I)
+    title = _re.sub(r"<[^>]+>", "", m.group(1)).strip() if m else ""
+    body = _re.sub(r"(?is)<(script|style|nav|footer|header|aside|iframe|svg|noscript)[^>]*>.*?</\1>",
+                   " ", html)
+    body = _re.sub(r"(?s)<!--.*?-->", " ", body)
+    body = _re.sub(r"(?i)</(p|div|h[1-6]|li|tr|br|section|article)>", "\n", body)
+    body = _re.sub(r"<[^>]+>", "", body)
+    body = _html.unescape(body)
+    body = _re.sub(r"[ \t\r\f\v]+", " ", body)
+    body = _re.sub(r"\n\s*\n+", "\n", body).strip()
+    out = title if title else ""
+    if body:
+        out = (out + "\n" if out else "") + body
+    return out[:max_chars]
 
 
 def _web_fetch(url: str, method: str = "GET", headers: dict = None,
                body: str = "", max_chars: int = 8000) -> dict:
-    """联网请求 URL 文本内容（网页/JSON/raw/REST API），截断后返回给模型阅读"""
-    import html as _html_mod
+    """联网请求 URL 文本内容（网页/JSON/raw/REST API）。
+    HTML 页面自动提取标题+正文文本（去脚本/标签噪音），JSON/纯文本按原样返回。"""
     url = (url or "").strip()
     if not url:
         return _blocked("[web_fetch] 缺少 URL")
@@ -1365,11 +1405,16 @@ def _web_fetch(url: str, method: str = "GET", headers: dict = None,
         text = _http_request(url, method=method, headers=headers, body=body or None)
     except Exception as e:
         return _blocked(f"[web_fetch] 请求失败: {e}")
-    text = _html_mod.unescape(text).strip()
+    text = text.strip()
     if not text:
         return _blocked("[web_fetch] 返回内容为空")
-    if len(text) > max_chars:
-        text = text[:max_chars] + f"\n…（内容过长，已截断至 {max_chars} 字符）"
+    # HTML 页面：提取正文文本，确保截断窗口内是有效信息
+    if text.lstrip().startswith(("<",)):
+        text = _html_to_text(text, max_chars=max_chars)
+    else:
+        text = _html.unescape(text)
+        if len(text) > max_chars:
+            text = text[:max_chars] + f"\n…（内容过长，已截断至 {max_chars} 字符）"
     return {"text": f"[web_fetch] {method} {url}\n{text}", "images": []}
 
 

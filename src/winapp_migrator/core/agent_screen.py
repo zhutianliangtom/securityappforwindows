@@ -149,6 +149,124 @@ def capture_zoom_data_url(cx: int, cy: int, region: int = 400, zoom: int = 3,
     return "data:image/png;base64," + base64.b64encode(bytes(ba)).decode()
 
 
+def _print_window_bitmap(hwnd: int) -> QImage:
+    """PrintWindow 抓取指定窗口内容位图（含被其他窗口遮挡的部分），
+    实现"只截目标窗口、避免其他窗口干扰"。返回窗口位图 QImage（32bpp）。"""
+    rect = wintypes.RECT()
+    if not user32.GetWindowRect(hwnd, ctypes.byref(rect)):
+        raise RuntimeError("无法获取窗口区域")
+    w, h = rect.right - rect.left, rect.bottom - rect.top
+    if w <= 0 or h <= 0 or w > 8192 or h > 8192:
+        raise RuntimeError("窗口尺寸无效")
+    gdi32 = ctypes.WinDLL("gdi32")
+
+    class BITMAPINFOHEADER(ctypes.Structure):
+        _fields_ = [("biSize", wintypes.DWORD), ("biWidth", wintypes.LONG),
+                    ("biHeight", wintypes.LONG), ("biPlanes", wintypes.WORD),
+                    ("biBitCount", wintypes.WORD), ("biCompression", wintypes.DWORD),
+                    ("biSizeImage", wintypes.DWORD), ("biXPelsPerMeter", wintypes.LONG),
+                    ("biYPelsPerMeter", wintypes.LONG), ("biClrUsed", wintypes.DWORD),
+                    ("biClrImportant", wintypes.DWORD)]
+
+    hwnd_dc = user32.GetWindowDC(hwnd)
+    mem_dc = gdi32.CreateCompatibleDC(hwnd_dc)
+    bmp = gdi32.CreateCompatibleBitmap(hwnd_dc, w, h)
+    old = gdi32.SelectObject(mem_dc, bmp)
+    try:
+        user32.PrintWindow(hwnd, mem_dc, 2)   # PW_RENDERFULLCONTENT（Win8.1+，抓完整内容）
+        bmi = BITMAPINFOHEADER()
+        bmi.biSize = ctypes.sizeof(BITMAPINFOHEADER)
+        bmi.biWidth = w
+        bmi.biHeight = -h            # 自顶向下
+        bmi.biPlanes = 1
+        bmi.biBitCount = 32
+        bmi.biCompression = 0        # BI_RGB
+        buf = ctypes.create_string_buffer(w * h * 4)
+        if not gdi32.GetDIBits(mem_dc, bmp, 0, h, buf, ctypes.byref(bmi), 0):
+            raise RuntimeError("GetDIBits 失败")
+        img = QImage(bytes(buf), w, h, w * 4, QImage.Format.Format_RGB32).copy()
+        if img.isNull():
+            raise RuntimeError("窗口位图转换失败")
+        return img
+    finally:
+        gdi32.SelectObject(mem_dc, old)
+        gdi32.DeleteObject(bmp)
+        gdi32.DeleteDC(mem_dc)
+        user32.ReleaseDC(hwnd, hwnd_dc)
+
+
+def capture_window_png(hwnd: int) -> bytes:
+    """截取指定窗口 → PNG 字节（供 OCR 识别窗口内文字）"""
+    ba = QByteArray()
+    buf = QBuffer(ba)
+    buf.open(QIODevice.OpenModeFlag.WriteOnly)
+    _print_window_bitmap(hwnd).save(buf, "PNG")
+    return bytes(ba)
+
+
+def capture_window_data_url(hwnd: int, grid: bool = True, mark_cursor: bool = True) -> str:
+    """截取指定窗口 → 网格刻度 data URL，并把视觉基准切为窗口态。
+
+    窗口态复用 zoom 态的坐标换算语义：模型在窗口图内读数（刻度与图像同基准），
+    click 时自动换算回屏幕物理坐标；只截目标窗口，不受其他窗口遮挡/干扰。
+    """
+    import base64
+    global _view
+    img = _print_window_bitmap(hwnd)
+    orig_w, orig_h = img.width(), img.height()
+    if grid:
+        if img.width() > _MODEL_W:
+            img = img.scaledToWidth(_MODEL_W, Qt.TransformationMode.SmoothTransformation)
+        _draw_coord_grid(img)
+    rect = wintypes.RECT()
+    user32.GetWindowRect(hwnd, ctypes.byref(rect))
+    sx, sy = screen_scale()
+    # 与 zoom 态一致：x0/y0 = 窗口左上角（原始截图系），region = 窗口位图原始宽
+    _view = {"cx": 0, "cy": 0, "region": orig_w,
+             "img_w": img.width(), "img_h": img.height(),
+             "x0": rect.left / sx if sx else rect.left,
+             "y0": rect.top / sy if sy else rect.top}
+    if mark_cursor:
+        _draw_cursor_marker(img)
+    ba = QByteArray()
+    buf = QBuffer(ba)
+    buf.open(QIODevice.OpenModeFlag.WriteOnly)
+    img.save(buf, "PNG")
+    return "data:image/png;base64," + base64.b64encode(bytes(ba)).decode()
+
+
+def list_windows() -> list:
+    """EnumWindows 枚举可见顶层窗口，返回 [{'hwnd','title','x','y','w','h'}]。
+
+    过滤无标题、尺寸过小（<60×40）的窗口；坐标为屏幕物理像素。
+    """
+    out = []
+    proc = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+
+    def cb(hwnd, _lparam):
+        if not user32.IsWindowVisible(hwnd):
+            return True
+        n = user32.GetWindowTextLengthW(hwnd)
+        if n <= 0:
+            return True
+        buf = ctypes.create_unicode_buffer(n + 1)
+        user32.GetWindowTextW(hwnd, buf, n + 1)
+        title = buf.value.strip()
+        if not title:
+            return True
+        rect = wintypes.RECT()
+        user32.GetWindowRect(hwnd, ctypes.byref(rect))
+        w, h = rect.right - rect.left, rect.bottom - rect.top
+        if w < 60 or h < 40:
+            return True
+        out.append({"hwnd": int(hwnd), "title": title,
+                    "x": rect.left, "y": rect.top, "w": w, "h": h})
+        return True
+
+    user32.EnumWindows(proc(cb), 0)
+    return out
+
+
 def _draw_coord_grid(img: QImage, cells: int = 16):
     """在缩放后的截图上叠加坐标网格、像素刻度与中心十字线，帮助视觉模型精确定位。
 

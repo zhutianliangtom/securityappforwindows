@@ -24,6 +24,32 @@ from winapp_migrator.core import agent_locator
 MEMORY_FILE = Path.home() / ".winapp_migrator" / "agent" / "memory.md"
 
 # ------------------------------------------------------------
+# 工作目录（面板"选择工作目录"设置，QSettings 持久化）：
+# 查找/创建/修改/删除/读取文件与运行命令优先在此目录执行
+# ------------------------------------------------------------
+WORKDIR: str = ""
+
+
+def set_workdir(path: str):
+    global WORKDIR
+    WORKDIR = (path or "").strip()
+
+
+def get_workdir() -> str:
+    return WORKDIR
+
+
+def _resolve(path: str) -> Path:
+    """路径解析：空 → 工作目录；相对 → 工作目录/相对路径；绝对 → 原样"""
+    raw = os.path.expandvars(os.path.expanduser((path or "").strip()))
+    if not raw:
+        return Path(WORKDIR) if WORKDIR else Path.cwd()
+    p = Path(raw)
+    if p.is_absolute():
+        return p
+    return (Path(WORKDIR) / p) if WORKDIR else p
+
+# ------------------------------------------------------------
 # 后台命令注册表：run_command 超时未结束（未开强制退出）的命令转入后台，
 # AI 可用 check_command 轮询进度。reader 线程持续排空管道，防止缓冲填满阻塞进程。
 # ------------------------------------------------------------
@@ -100,6 +126,29 @@ TOOLS = [
             "name": "get_screen_size",
             "description": "获取屏幕分辨率（宽、高像素），用于计算点击/移动坐标。",
             "parameters": {"type": "object", "properties": {}, "required": []},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_windows",
+            "description": "枚举当前可见窗口（标题+编号），供 AI 选择目标窗口聚焦操作，"
+                           "避免全屏截图中其他窗口干扰。",
+            "parameters": {"type": "object", "properties": {}, "required": []},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "capture_window",
+            "description": "截取指定窗口（只截该窗口，避开其他窗口遮挡/干扰），返回截图与窗口内文字元素清单。"
+                           "窗口图带坐标刻度，后续 click 的窗口内读数会自动换算回屏幕坐标。"
+                           "先调用 list_windows 确认目标窗口，window 传标题（模糊）或编号。",
+            "parameters": {"type": "object",
+                           "properties": {
+                               "window": {"type": "string",
+                                          "description": "目标窗口：标题（支持模糊匹配）或 list_windows 返回的编号"}},
+                           "required": ["window"]},
         },
     },
     {
@@ -306,12 +355,24 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "edit_file",
-            "description": "编辑文件：把文件中的 old_text 精确替换为 new_text（仅替换第一处，仅允许用户目录，最大 200KB）。",
+            "description": "编辑文件：把文件中的 old_text 精确替换为 new_text（仅替换第一处，最大 200KB）。",
             "parameters": {"type": "object",
                            "properties": {"path": {"type": "string"},
                                           "old_text": {"type": "string"},
                                           "new_text": {"type": "string"}},
                            "required": ["path", "old_text", "new_text"]},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "delete_file",
+            "description": "删除文件或空目录（工作目录优先）。删除系统关键目录内的内容仍被沙盒拒绝；"
+                           "非空目录请用 run_command 精确处理。",
+            "parameters": {"type": "object",
+                           "properties": {"path": {"type": "string",
+                                                   "description": "要删除的文件或空目录路径（相对路径基于工作目录）"}},
+                           "required": ["path"]},
         },
     },
     {
@@ -425,10 +486,16 @@ def execute_tool(name: str, args: dict, allow_dangerous: bool = False,
                 str(args.get("query", "")),
                 agent_sandbox.to_int(args.get("limit", 10))), "images": []}
         if name == "search_files":
+            folder = str(args.get("folder", "")).strip()
+            if not folder and WORKDIR:
+                folder = WORKDIR   # 未指定目录时默认在工作目录内查找
             return {"text": agent_find.search_files(
-                str(args.get("query", "")),
-                str(args.get("folder", "")),
+                str(args.get("query", "")), folder,
                 agent_sandbox.to_int(args.get("limit", 30))), "images": []}
+        if name == "list_windows":
+            return _list_windows()
+        if name == "capture_window":
+            return _capture_window(str(args.get("window", "")))
         if name == "move_mouse":
             agent_screen.move_mouse(agent_sandbox.to_int(args.get("x")),
                                     agent_sandbox.to_int(args.get("y")))
@@ -479,6 +546,8 @@ def execute_tool(name: str, args: dict, allow_dangerous: bool = False,
             return _edit_file(str(args.get("path", "")),
                               str(args.get("old_text", "")),
                               str(args.get("new_text", "")))
+        if name == "delete_file":
+            return _delete_file(str(args.get("path", "")))
         if name == "list_directory":
             return _list_directory(str(args.get("path", "")))
         if name == "save_memory":
@@ -507,6 +576,7 @@ def _run_command(command: str, wait: int = 5, force_quit: bool = False) -> dict:
                                 stderr=subprocess.PIPE, text=True,
                                 encoding=_console_encoding(),
                                 errors="replace",
+                                cwd=WORKDIR or None,     # 命令默认在工作目录执行
                                 creationflags=_CREATE_NO_WINDOW)
     except Exception as e:
         return _blocked(f"[沙盒] 命令执行失败: {e}")
@@ -596,72 +666,153 @@ def _check_command(cmd_id: int = None) -> dict:
 
 
 def _read_file(path: str) -> dict:
-    level, reason = agent_sandbox.assess_path(path, "read")
+    p = _resolve(path)
+    level, reason = agent_sandbox.assess_path(str(p), "read")
     if level != "safe":
         return _blocked(f"[沙盒拒绝] {reason}")
     try:
-        size = os.path.getsize(path)
+        size = os.path.getsize(p)
         if size > 200 * 1024:
             return _blocked(f"[沙盒] 文件过大（{size} 字节 > 200KB）")
-        with open(path, "r", encoding="utf-8", errors="replace") as f:
+        with open(p, "r", encoding="utf-8", errors="replace") as f:
             return {"text": f.read()[:30000], "images": []}
     except Exception as e:
         return _blocked(f"[沙盒] 读取失败: {e}")
 
 
 def _write_file(path: str, content: str) -> dict:
-    """创建/覆盖写入文件（系统目录也可写，删除系统目录仍被拒）"""
-    level, reason = agent_sandbox.assess_path(path, "write")
+    """创建/覆盖写入文件（工作目录优先；系统目录也可写，删除系统目录仍被拒）"""
+    p = _resolve(path)
+    level, reason = agent_sandbox.assess_path(str(p), "write")
     if level != "safe":
         return _blocked(f"[沙盒拒绝] {reason}")
     if len(content) > 500 * 1024:
         return _blocked("[沙盒] 内容过大（>500KB）")
     try:
-        os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
-        with open(path, "w", encoding="utf-8") as f:
+        os.makedirs(os.path.dirname(os.path.abspath(p)), exist_ok=True)
+        with open(p, "w", encoding="utf-8") as f:
             f.write(content)
-        return {"text": f"已写入 {len(content)} 字符到 {path}", "images": []}
+        return {"text": f"已写入 {len(content)} 字符到 {p}", "images": []}
     except Exception as e:
         return _blocked(f"[沙盒] 写入失败: {e}")
 
 
 def _edit_file(path: str, old_text: str, new_text: str) -> dict:
     """编辑文件：精确替换第一处 old_text"""
-    level, reason = agent_sandbox.assess_path(path, "write")
+    p = _resolve(path)
+    level, reason = agent_sandbox.assess_path(str(p), "write")
     if level != "safe":
         return _blocked(f"[沙盒拒绝] {reason}")
     try:
-        if os.path.getsize(path) > 200 * 1024:
+        if os.path.getsize(p) > 200 * 1024:
             return _blocked("[沙盒] 文件过大（>200KB）")
-        with open(path, "r", encoding="utf-8", errors="replace") as f:
+        with open(p, "r", encoding="utf-8", errors="replace") as f:
             data = f.read()
         if old_text not in data:
             return _blocked("[沙盒] 未找到要替换的内容")
         data = data.replace(old_text, new_text, 1)
-        with open(path, "w", encoding="utf-8") as f:
+        with open(p, "w", encoding="utf-8") as f:
             f.write(data)
-        return {"text": f"已替换 1 处内容到 {path}", "images": []}
+        return {"text": f"已替换 1 处内容到 {p}", "images": []}
     except Exception as e:
         return _blocked(f"[沙盒] 编辑失败: {e}")
 
 
-def _list_directory(path: str) -> dict:
-    """列出目录内容（最多 200 项）"""
-    level, reason = agent_sandbox.assess_path(path, "read")
+def _delete_file(path: str) -> dict:
+    """删除文件或空目录（工作目录优先；删除系统关键目录内容被沙盒拒绝）"""
+    p = _resolve(path)
+    level, reason = agent_sandbox.assess_path(str(p), "delete")
     if level != "safe":
         return _blocked(f"[沙盒拒绝] {reason}")
     try:
-        entries = sorted(os.listdir(path))
+        if not p.exists():
+            return _blocked(f"[沙盒] 路径不存在: {p}")
+        if p.is_dir():
+            if any(p.iterdir()):
+                return _blocked(f"[沙盒] 目录非空，禁止递归删除: {p}（可用 run_command 精确处理）")
+            p.rmdir()
+        else:
+            p.unlink()
+        return {"text": f"已删除: {p}", "images": []}
+    except Exception as e:
+        return _blocked(f"[沙盒] 删除失败: {e}")
+
+
+def _list_directory(path: str) -> dict:
+    """列出目录内容（工作目录优先，最多 200 项）"""
+    p = _resolve(path)
+    level, reason = agent_sandbox.assess_path(str(p), "read")
+    if level != "safe":
+        return _blocked(f"[沙盒拒绝] {reason}")
+    try:
+        entries = sorted(os.listdir(p))
         lines = []
         for e in entries[:200]:
-            full = os.path.join(path, e)
+            full = os.path.join(p, e)
             mark = "DIR " if os.path.isdir(full) else "FILE"
             lines.append(f"{mark}\t{e}")
-        text = f"{path} 共 {len(entries)} 项" + (f"（仅显示前 200）" if len(entries) > 200 else "") + "：\n"
+        text = f"{p} 共 {len(entries)} 项" + (f"（仅显示前 200）" if len(entries) > 200 else "") + "：\n"
         text += "\n".join(lines)
         return {"text": text, "images": []}
     except Exception as e:
         return _blocked(f"[沙盒] 读取失败: {e}")
+
+
+def _list_windows() -> dict:
+    """枚举可见窗口（标题+编号），供 AI 选择目标窗口"""
+    try:
+        wins = agent_screen.list_windows()
+    except Exception as e:
+        return {"text": f"[list_windows] 枚举失败: {e}", "images": []}
+    if not wins:
+        return {"text": "未发现可见窗口（请先打开目标窗口）", "images": []}
+    lines = [f"{i + 1}. {w['title']}（{w['w']}x{w['h']} @{w['x']},{w['y']}）"
+             for i, w in enumerate(wins[:40])]
+    more = f"\n…共 {len(wins)} 个窗口" if len(wins) > 40 else ""
+    return {"text": "可见窗口：\n" + "\n".join(lines) + more, "images": []}
+
+
+def _capture_window(window: str) -> dict:
+    """截取指定窗口（标题模糊/编号），返回截图与窗口内文字元素清单"""
+    try:
+        wins = agent_screen.list_windows()
+    except Exception as e:
+        return {"text": f"[capture_window] 窗口枚举失败: {e}", "images": []}
+    if not wins:
+        return {"text": "[capture_window] 未发现可见窗口，请先打开目标窗口", "images": []}
+    q = str(window or "").strip().lower()
+    if not q:
+        return {"text": "[capture_window] 缺少 window 参数（窗口标题或 list_windows 编号）", "images": []}
+    target = None
+    try:   # 编号定位
+        idx = int(q) - 1
+        if 0 <= idx < len(wins):
+            target = wins[idx]
+    except ValueError:
+        pass
+    if target is None:   # 标题模糊匹配：全等 → 包含 → 任一分词
+        for w in wins:
+            t = w["title"].lower()
+            if t == q or q in t or any(tok and tok in t for tok in q.split()):
+                target = w
+                break
+    if target is None:
+        cand = "\n".join(f"{i + 1}. {w['title']}" for i, w in enumerate(wins[:30]))
+        return {"text": f"[capture_window] 未找到窗口「{window}」。可见窗口：\n{cand}", "images": []}
+    try:
+        url = agent_screen.capture_window_data_url(target["hwnd"])
+        summary = ""
+        try:   # 窗口内 OCR 元素（窗口内像素坐标，供视觉定位参考）
+            png = agent_screen.capture_window_png(target["hwnd"])
+            elems = agent_locator.ocr_elements(png, target["w"], target["h"])
+            summary = agent_locator.summarize(elems, 40)
+        except Exception:
+            pass
+        return {"text": f"已截取窗口「{target['title']}」（{target['w']}x{target['h']}）"
+                        + (f"。窗口内文字元素：{summary}" if summary else ""),
+                "images": [url]}
+    except Exception as e:
+        return {"text": f"[capture_window] 截取失败: {e}", "images": []}
 
 
 _MEMORY_MAX_TOTAL = 50 * 1024   # 记忆文件总上限 50KB（超出后截断旧部分）

@@ -27,7 +27,7 @@ from PyQt6.QtWidgets import (
     QVBoxLayout, QHBoxLayout, QMessageBox, QFormLayout, QWidget,
     QApplication, QStyle, QListWidget, QGraphicsOpacityEffect,
     QCompleter, QRadioButton, QCheckBox, QFileIconProvider, QListWidgetItem,
-    QStackedWidget, QMenu,
+    QStackedWidget, QMenu, QFileDialog,
 )
 
 from winapp_migrator.core import agent_llm, agent_engine, agent_skills, agent_sandbox, agent_tools, agent_screen
@@ -672,7 +672,6 @@ class AgentPanel(QDialog):
         self._ask_evt = threading.Event()
         self._ask_result = ""
         self._mcp = McpManager()
-        self._agents = agent_skills.load_agents()
 
         # 拖入的附件：图片（data URL，发给模型）与非图片文件（路径文本）
         self._pending_images: list = []
@@ -716,6 +715,7 @@ class AgentPanel(QDialog):
 
         self._build_ui()
         self._connect_signals()
+        self._restore_workdir()   # 恢复上次选择的工作目录（QSettings 持久化）
         self._init_sessions()   # 加载会话列表，默认恢复最近对话（上下文隔离）
 
         self._timer = QTimer(self)
@@ -765,14 +765,19 @@ class AgentPanel(QDialog):
         self.new_btn.clicked.connect(self._new_session)
         top.addWidget(self.new_btn)
 
-        self.agent_combo = QComboBox()
-        for a in self._agents:
-            self.agent_combo.addItem(a.get("name", "?"), a.get("name", ""))
-        if self.agent_combo.count() == 0:
-            self.agent_combo.addItem("桌面助手", "桌面助手")
-        self.agent_combo.setMinimumWidth(100)
-        self.agent_combo.setMaximumWidth(140)
-        top.addWidget(self.agent_combo)
+        # 工作目录：AI 的文件查找/创建/修改/删除/读取与命令优先在此目录执行
+        # （选择后 QSettings 持久化，重启自动恢复）
+        self.workdir_btn = QPushButton(_std_icon(QStyle.StandardPixmap.SP_DirOpenIcon), "选择工作目录")
+        self.workdir_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.workdir_btn.setAutoDefault(False)
+        self.workdir_btn.setToolTip(
+            "选择 AI 工作目录：文件查找/创建/修改/删除/读取与命令默认在此目录执行，重启后自动恢复")
+        self.workdir_btn.setStyleSheet(
+            f"QPushButton {{ background: {PANEL}; color: {TEXT}; border: 1px solid {BORDER};"
+            "border-radius: 8px; padding: 6px 10px; font-size: 12px; font-weight: 600; }}"
+            f"QPushButton:hover {{ border-color: {ACCENT}; color: {ACCENT}; }}")
+        self.workdir_btn.clicked.connect(self._choose_workdir)
+        top.addWidget(self.workdir_btn)
 
         # 执行模式：AskBeforeEdit（默认，每步确认） / YOLO（无确认直行）
         self.mode_combo = QComboBox()
@@ -1153,6 +1158,35 @@ class AgentPanel(QDialog):
         else:
             self._add_status("AskBeforeEdit 模式：每步操作弹窗确认", OK)
 
+    # ---------- 工作目录（QSettings 持久化，重启恢复） ----------
+    def _restore_workdir(self):
+        """启动时恢复上次选择的工作目录；无有效目录则显示默认提示"""
+        saved = str(self._settings.value("agent_workdir", ""))
+        if saved and os.path.isdir(saved):
+            self._apply_workdir(saved)
+        else:
+            self._apply_workdir("")
+
+    def _choose_workdir(self):
+        """弹出目录选择框，设置 AI 工作目录并持久化"""
+        start = agent_tools.get_workdir() or str(Path.home())
+        d = QFileDialog.getExistingDirectory(self, "选择 AI 工作目录", start)
+        if not d:
+            return
+        self._apply_workdir(d)
+        self._settings.setValue("agent_workdir", d)
+        self._add_status(f"工作目录已设置为 {d}，AI 的文件/搜索/命令将优先在此目录执行", OK)
+
+    def _apply_workdir(self, d: str):
+        """应用工作目录：写入 agent_tools 全局 + 更新按钮文本"""
+        agent_tools.set_workdir(d)
+        if d:
+            name = os.path.basename(d.rstrip("\\/")) or d
+            self.workdir_btn.setText(f"📁 {name}"[:24])
+        else:
+            self.workdir_btn.setText("选择工作目录")
+        self.workdir_btn.setToolTip(d or "选择 AI 工作目录")
+
     # ---------- 消息气泡 ----------
     @staticmethod
     def _fade_in(widget: QWidget, parent: QWidget):
@@ -1189,8 +1223,7 @@ class AgentPanel(QDialog):
         if wide:
             self.session_combo.setMinimumWidth(180)
             self.session_combo.setMaximumWidth(260)
-            self.agent_combo.setMinimumWidth(130)
-            self.agent_combo.setMaximumWidth(200)
+            self.workdir_btn.setMaximumWidth(300)
             self.mode_combo.setMinimumWidth(190)
             self.mode_combo.setMaximumWidth(240)
             self.mode_combo.setItemText(0, "AskBeforeEdit（每步确认）")
@@ -1198,8 +1231,7 @@ class AgentPanel(QDialog):
         else:
             self.session_combo.setMinimumWidth(110)
             self.session_combo.setMaximumWidth(180)
-            self.agent_combo.setMinimumWidth(100)
-            self.agent_combo.setMaximumWidth(140)
+            self.workdir_btn.setMaximumWidth(180)
             self.mode_combo.setMinimumWidth(110)
             self.mode_combo.setMaximumWidth(140)
             self.mode_combo.setItemText(0, "每步确认")
@@ -1718,9 +1750,8 @@ class AgentPanel(QDialog):
         self._start_send_anim()   # 发送按钮转圈动画
 
         self._clear_attachments()   # 发送后清空附件条
-        agent_name = self.agent_combo.currentData() or "桌面助手"
         self._task_active = True
-        engine.start(text, agent_name, send_images)
+        engine.start(text, "桌面助手", send_images)
 
     def _stop(self):
         if self._engine:

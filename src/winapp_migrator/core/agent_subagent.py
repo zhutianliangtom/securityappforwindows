@@ -77,6 +77,9 @@ def run_sub_agent(llm, goal, allowed=None, stop=None, on_status=None) -> str:
     tools = _sub_tools(allowed)
     # 实际可执行白名单 = 子 Agent 白名单 ∩ 允许集：模型幻觉调用非白名单工具时直接拒绝
     whitelist = set(allowed or SUB_AGENT_WHITELIST) & set(SUB_AGENT_WHITELIST)
+    # 开发类工具：动手改代码前必须先确认用户开发规则（首次调用被拦截，确认后下轮放行）
+    dev_tools = frozenset({"write_file", "edit_file", "delete_file"})
+    rules_confirmed = False
     while True:
         if stop and stop():
             return "（子任务已停止）"
@@ -90,10 +93,25 @@ def run_sub_agent(llm, goal, allowed=None, stop=None, on_status=None) -> str:
             return res["text"] or "（子 Agent 无输出）"
         messages.append({"role": "assistant",
                          "content": res["text"] or None, "tool_calls": calls})
+        rules_just = False   # 本轮是否触发过规则确认（全部拦截后统一置位）
         for c in calls:
             if stop and stop():
                 return "（子任务已停止）"
             name = c["function"]["name"]
+            if name in dev_tools and not rules_confirmed:
+                # 动手开发前的强制规则读取：首次调用开发类工具不放行，
+                # 真实读取规则文本回给模型确认，下一轮重新发起再正常执行
+                rules_just = True
+                from winapp_migrator.core import agent_skills
+                rules = [str(r).strip()
+                         for r in (agent_skills.load_settings().get("custom_rules") or [])
+                         if str(r).strip()]
+                block = "\n".join(f"- {r}" for r in rules) if rules else "（当前未设置自定义开发规则）"
+                messages.append({"role": "tool", "tool_call_id": c["id"],
+                                 "content": ("[开发前规则确认] 动手开发前必须先确认用户开发规则，"
+                                             "已读取规则文件，请严格遵守：\n" + block
+                                             + "\n规则已确认。现在重新发起你刚才的开发工具调用。")})
+                continue
             try:
                 args = json.loads(c["function"]["arguments"] or "{}")
                 if not isinstance(args, dict):
@@ -117,6 +135,8 @@ def run_sub_agent(llm, goal, allowed=None, stop=None, on_status=None) -> str:
             messages.append({"role": "tool", "tool_call_id": c["id"], "content": text})
             if len(messages) > 30:
                 messages = _compress(messages)
+        if rules_just:
+            rules_confirmed = True   # 本轮已确认规则，下轮开发工具正常放行
 
 
 def dispatch_sub_agents(llm, tasks, stop=None, on_status=None, max_workers=4) -> str:

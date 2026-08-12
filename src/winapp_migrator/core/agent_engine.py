@@ -26,6 +26,10 @@ _SCREEN_CHANGING = {"click", "click_text", "drag", "scroll", "press_key", "type_
 # 完整内容由 AI 按需用 read_file/check_command 查看，避免上下文无限膨胀烧 tokens
 _TOOL_TEXT_MAX = 3000
 
+# 开发类工具：动手开发/修改代码前必须先确认用户开发规则（首次调用被拦截，规则确认后下一轮放行）
+_DEV_TOOLS = frozenset({"write_file", "edit_file", "delete_file",
+                        "run_command", "create_skill", "dispatch_sub_agents"})
+
 # 对话上下文持久化路径
 CONTEXT_FILE = agent_skills.CONFIG_DIR / "context.json"
 
@@ -127,6 +131,7 @@ class AgentEngine:
         self._stop = threading.Event()
         self._thread: threading.Thread = None
         self._builtin_names = {t["function"]["name"] for t in agent_tools.TOOLS}
+        self._rules_confirmed = False   # 当前任务是否已确认开发规则
 
     # ---------- 控制 ----------
     def stop(self):
@@ -417,9 +422,20 @@ class AgentEngine:
                                                 text_only=self.text_only,
                                                 memory_enabled=self.memory_enabled)
 
+    @staticmethod
+    def _rules_text() -> str:
+        """真实读取用户自定义开发规则文本（settings.json 的 custom_rules）"""
+        rules = [str(r).strip()
+                 for r in (agent_skills.load_settings().get("custom_rules") or [])
+                 if str(r).strip()]
+        if not rules:
+            return "（当前未设置自定义开发规则）"
+        return "\n".join(f"- {r}" for r in rules)
+
     def run(self, user_input: str, agent_name: str = "", images: list = None,
             skills: list = None):
         self.end_state = ""
+        self._rules_confirmed = False   # 每个新任务重新强制规则确认
         if not self._messages or self._messages[0].get("role") != "system":
             self._messages.insert(0, {"role": "system",
                                       "content": self._system_prompt(agent_name, skills)})
@@ -486,6 +502,7 @@ class AgentEngine:
                 last_images = []
                 last_failed = False
                 answered = set()
+                rules_just = False   # 本轮是否触发过开发规则确认（全部拦截后统一置位）
                 for call in calls:
                     if self._stop.is_set():
                         # 补齐未执行工具的回复，保持 tool_calls 配对完整，防下一轮发送 400
@@ -497,6 +514,19 @@ class AgentEngine:
                         self.end_state = "stopped"
                         return
                     name = call["function"]["name"]
+                    if name in _DEV_TOOLS and not self._rules_confirmed:
+                        # 动手开发前的强制规则读取：首次调用开发类工具不放行，
+                        # 真实读取规则文本回给模型确认，下一轮重新发起再正常执行
+                        rules_just = True
+                        text = ("[开发前规则确认] 动手开发前必须先确认用户开发规则，"
+                                "已读取规则文件，请严格遵守：\n" + self._rules_text()
+                                + "\n规则已确认。现在重新发起你刚才的开发工具调用。")
+                        self._messages.append({"role": "tool", "tool_call_id": call["id"],
+                                               "content": text})
+                        answered.add(call["id"])
+                        if self.on_result:
+                            self.on_result(name, text, [])
+                        continue
                     try:
                         args = json.loads(call["function"]["arguments"] or "{}")
                         if not isinstance(args, dict):
@@ -553,6 +583,8 @@ class AgentEngine:
                     answered.add(call["id"])
                     if imgs:
                         last_images = imgs   # 本轮全部截图喂给下一轮视觉验证，不做裁剪
+                if rules_just:
+                    self._rules_confirmed = True   # 本轮已确认规则，下轮开发工具正常放行
                 if last_images:
                     prompt = ("请观察最新屏幕截图，验证上一步操作结果并继续。"
                               if not last_failed else

@@ -283,28 +283,39 @@ def _render_text(raw: str) -> str:
     return _md_to_html(raw)
 
 
-class _Spinner(QWidget):
-    """自绘转圈动画（矢量，无 emoji）：QTimer 驱动圆弧旋转"""
+class _TypingDots(QWidget):
+    """任务执行中 AI 气泡下方的「•••」来回滑动动画（随消息流滚动，无 emoji）"""
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self._angle = 0
-        self.setFixedSize(18, 18)
+        self.setFixedSize(46, 16)
+        self._phase = 0.0      # 往返相位 0→1→0
+        self._forward = True
         self._timer = QTimer(self)
-        self._timer.timeout.connect(self._rotate)
-        self._timer.start(50)
+        self._timer.timeout.connect(self._tick)
+        self._timer.start(35)
 
-    def _rotate(self):
-        self._angle = (self._angle + 30) % 360
+    def _tick(self):
+        step = 0.07
+        self._phase += step if self._forward else -step
+        if self._phase >= 1.0:
+            self._phase, self._forward = 1.0, False
+        elif self._phase <= 0.0:
+            self._phase, self._forward = 0.0, True
         self.update()
 
     def paintEvent(self, event):
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
-        pen = QPen(QColor(ACCENT), 2.5)
-        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
-        p.setPen(pen)
-        p.drawArc(2, 2, 14, 14, -self._angle * 16, 270 * 16)
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(QColor(ACCENT))
+        base = int(self._phase * 8)   # 三点整体左右往返滑动
+        for i in range(3):
+            d = abs(self._phase - i / 2)          # 首尾点随相位淡出，形成流动感
+            alpha = int(100 + 155 * max(0.0, 1 - d * 1.8))
+            p.setOpacity(alpha / 255)
+            p.drawEllipse(QPointF(5 + i * 13 + base, 8), 3.2, 3.2)
+        p.setOpacity(1.0)
         p.end()
 
 
@@ -2204,12 +2215,12 @@ class AgentPanel(QDialog):
         except RuntimeError:
             self._ai_bubble = None
 
-    # ---------- 转圈动画 + 思考过程（思考内容在 AI 气泡开头，完成后折叠） ----------
+    # ---------- 滑动动画 + 思考过程（思考内容在 AI 气泡开头，完成后折叠） ----------
     def _ensure_spinner(self):
-        """创建/显示转圈行：仅转圈 + 状态文字（思考全文在 AI 气泡内展示）"""
+        """创建/显示任务行：••• 来回滑动动画 + 状态文字（位于 AI 气泡底部外侧，随消息流滚动）"""
         if self._spinner_row is not None:
             return
-        self._spinner = _Spinner()
+        self._spinner = _TypingDots()
         self._spinner_lbl = QLabel("AI 思考中…")
         self._spinner_lbl.setStyleSheet(f"color: {TEXT_DIM}; font-size: 12px;")
         top = QHBoxLayout()
@@ -2690,11 +2701,21 @@ class AgentPanel(QDialog):
         self.eval_signal.emit(effort)
 
     def _on_assess_done(self, effort: str):
-        """评估完成：按难度路由模型并启动任务（不显示评估文字，保持思考转圈）"""
+        """评估完成：按难度路由模型并启动任务（不显示评估文字，保持滑动动画）"""
         if not self._eval_pending:
             return
         ai_text, send_images, skill_names = self._eval_pending
         self._eval_pending = None
+        if self._user_stopped:
+            # 用户已在评估期间点击停止：放弃启动并复位按钮
+            self._task_active = False
+            self.send_btn.setText("发送")
+            self.send_btn.setEnabled(True)
+            self.stop_btn.setText("停止")
+            self.stop_btn.setEnabled(False)
+            self._hide_spinner()
+            self._stop_button_anim()
+            return
         self._launch_task(ai_text, send_images, skill_names, effort)
 
     def _stop(self):
@@ -3145,9 +3166,14 @@ class AgentPanel(QDialog):
                     f"已用 {used} tokens（输入 {t['prompt']} / 输出 {t['completion']}{cache_txt}）")
             else:
                 self.token_label.setText(f"{used} tk")
-        running = bool(self._engine and self._engine._thread and self._engine._thread.is_alive())
+        # 评估阶段（引擎线程未启动）同样视为任务进行中，避免误清理禁用停止按钮
+        running = bool(self._eval_pending is not None
+                       or (self._engine and self._engine._thread
+                           and self._engine._thread.is_alive()))
         # 卡死兜底：任务进行中超过 60 秒无任何输出/状态 → 强制停止
-        if running and self._last_activity and not self._stalled_stop \
+        # （评估阶段跳过：assess_effort 自带 30 秒超时与本地回退）
+        if running and self._eval_pending is None and self._last_activity \
+                and not self._stalled_stop \
                 and time.time() - self._last_activity > 60:
             self._stalled_stop = True
             self._add_status("AI 长时间无响应（>60 秒），已自动停止（卡死兜底）", WARN)

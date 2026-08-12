@@ -6,6 +6,7 @@
 """
 
 import ctypes
+import os
 import struct
 import time
 from ctypes import wintypes
@@ -85,15 +86,21 @@ def map_to_screen(x: int, y: int) -> tuple:
 
 
 def capture_screen_data_url(grid: bool = True, mark_cursor: bool = True) -> str:
-    """全屏截图 → data URL（OpenAI 兼容 image_url 输入）。
+    """截取当前前台应用窗口 → data URL（OpenAI 兼容 image_url 输入）。
 
+    优先截取"对应的进程窗口"（前台应用窗口，PrintWindow 抓取不受遮挡干扰），
+    前台为桌面/本程序自身或窗口不可用时回退全屏。
     grid=True 时先等比缩放到统一宽度 _MODEL_W，再叠加坐标网格与像素刻度。
-    mark_cursor=True 时叠加红色准星标记当前鼠标位置（物理坐标标注），
-    模型凭"准星是否套住目标"对齐，比读刻度猜坐标更可靠。
-    全屏截图会重置视觉基准回全屏态。
+    mark_cursor=True 时叠加红色准星标记当前鼠标位置（物理坐标标注）。
     """
     import base64
     global _model_size, _view
+    hwnd = _foreground_window_hwnd()
+    if hwnd:
+        try:
+            return capture_window_data_url(hwnd, grid=grid, mark_cursor=mark_cursor)
+        except Exception:
+            pass
     _view = None   # 回到全屏视觉基准
     png = capture_screen_png()
     img = QImage.fromData(png)
@@ -111,6 +118,31 @@ def capture_screen_data_url(grid: bool = True, mark_cursor: bool = True) -> str:
     buf.open(QIODevice.OpenModeFlag.WriteOnly)
     img.save(buf, "PNG")
     return "data:image/png;base64," + base64.b64encode(bytes(ba)).decode()
+
+
+def _foreground_window_hwnd() -> int:
+    """当前前台应用窗口句柄；前台为桌面/本程序自身或窗口不可用（无标题/过小）时返回 0。
+
+    AI 交互的目标应用通常位于前台，截取它比全屏更聚焦、且不受其他窗口遮挡。
+    """
+    hwnd = user32.GetForegroundWindow()
+    if not hwnd:
+        return 0
+    if not user32.IsWindowVisible(hwnd):
+        return 0
+    if user32.GetWindowTextLengthW(hwnd) <= 0:   # 桌面/任务栏等无标题窗口
+        return 0
+    pid = wintypes.DWORD()
+    user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+    if pid.value == os.getpid():   # 本程序自己的窗口（如 Agent 面板前台时）回退全屏
+        return 0
+    rect = wintypes.RECT()
+    if not user32.GetWindowRect(hwnd, ctypes.byref(rect)):
+        return 0
+    w, h = rect.right - rect.left, rect.bottom - rect.top
+    if w < 100 or h < 60:          # 过小窗口（如某些托盘气泡）无截取价值
+        return 0
+    return int(hwnd)
 
 
 def capture_zoom_data_url(cx: int, cy: int, region: int = 400, zoom: int = 3,

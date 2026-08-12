@@ -821,6 +821,23 @@ def skill_instructions(skill_names: list) -> str:
     return "\n".join(parts)
 
 
+def _skill_router_block() -> str:
+    """技能路由段：列出全部可用技能（name：description），
+    强制 AI 任务命中技能时先 read_file 读取对应 SKILL.md 完整流程再执行，
+    禁止跳过技能直接裸调工具（保证规范流程优先于裸工具调用）。"""
+    skills = [s for s in load_skills()
+              if s.get("name") and s.get("description")]
+    if not skills:
+        return ""
+    lines = [f"- {s['name']}：{s['description']}" for s in skills]
+    return ("\n\n技能路由（必须遵守）：执行任务前先判断下方技能列表是否有匹配项；"
+            "命中时必须先用 read_file 读取技能目录 "
+            "~/.winapp_migrator/agent/skills/<技能名>/SKILL.md 获取完整流程"
+            "（找不到该文件时用 list_directory/search_files 在 skills 目录定位），"
+            "严格按其 instruction 组织步骤后再调用底层工具，禁止跳过技能直接裸调工具：\n"
+            + "\n".join(lines))
+
+
 def build_system_prompt(agent_name: str = "", extra_skills: list = None,
                         text_only: bool = False, memory_enabled: bool = True) -> str:
     """构造 system prompt：人设 persona + 基础提示 + 严格规则 + 工具执行规范 + 技能说明 + 工具列表
@@ -866,6 +883,7 @@ def build_system_prompt(agent_name: str = "", extra_skills: list = None,
     if extra_skills:
         prompt += ("\n\n本次任务要求严格按上述指定技能（/技能名 手动调用）的流程执行，"
                    "先按其 instruction 组织步骤再行动。")
+    prompt += _skill_router_block()
     prompt += ("\n\n可用内置工具：screenshot(截屏观察)、list_windows/capture_window(枚举并只截指定窗口，"
                "避免其他窗口干扰)、get_screen_size(分辨率)、"
                "ask_user(需求不明确时向用户提问)、"

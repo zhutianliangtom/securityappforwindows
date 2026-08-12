@@ -1131,8 +1131,10 @@ class _AdminDropFilter(QAbstractNativeEventFilter):
             msg = ctypes.cast(int(message), ctypes.POINTER(_MSG)).contents
             if msg.message != _WM_DROPFILES:
                 return False, 0
+            print("[dnd] 收到 WM_DROPFILES", flush=True)
             hdrop = ctypes.c_void_p(msg.wParam)
             paths = _drag_query_files(hdrop)
+            print("[dnd] 文件列表:", paths, flush=True)
             pt = _POINT()
             ctypes.windll.shell32.DragQueryPoint(hdrop, ctypes.byref(pt))
             ctypes.windll.shell32.DragFinish(hdrop)
@@ -1924,8 +1926,12 @@ class AgentPanel(QDialog):
             self._maximized_once = True
             QTimer.singleShot(0, self.showMaximized)
         # 管理员权限：Windows UIPI 拦截普通 Explorer 的 OLE 拖放，改用 WM_DROPFILES 原生通道
-        if not self._admin_dnd and is_admin():
+        print(f"[dnd] showEvent is_admin={is_admin()} _admin_dnd={self._admin_dnd}", flush=True)
+        if is_admin() and not self._admin_dnd:
             QTimer.singleShot(150, self._setup_admin_dnd)
+            QTimer.singleShot(600, self._setup_admin_dnd)   # 兜底重试：窗口完全就绪后再注册一次
+        else:
+            print("[dnd] 非管理员运行：走 Qt 原生拖放", flush=True)
 
     def _add_bubble(self, text: str, align: str, rich: bool = False,
                     animate: bool = True) -> QLabel:
@@ -3010,6 +3016,9 @@ class AgentPanel(QDialog):
 
     def _setup_admin_dnd(self):
         """管理员权限下启用 WM_DROPFILES 原生拖放通道（UIPI 拦截 OLE 拖放的绕行方案）"""
+        if self._admin_dnd:
+            return
+        print(f"[dnd] 管理员拖放通道 setup（hwnd={int(self.winId())}）", flush=True)
         try:
             hwnd = int(self.winId())
             user32 = ctypes.windll.user32
@@ -3019,19 +3028,24 @@ class AgentPanel(QDialog):
                 _ex = user32.ChangeWindowMessageFilterEx
                 _ex.argtypes = [ctypes.c_void_p, ctypes.c_uint, ctypes.c_uint,
                                 ctypes.c_void_p]
-                _ex(hwnd, _WM_DROPFILES, _MSGFLT_ADD, None)
-            except Exception:
-                pass
-            ctypes.windll.shell32.DragAcceptFiles(hwnd, True)
+                print("[dnd] ChangeWindowMessageFilterEx:",
+                      _ex(hwnd, _WM_DROPFILES, _MSGFLT_ADD, None), flush=True)
+            except Exception as e:
+                print("[dnd] ChangeWindowMessageFilterEx 不可用:", e, flush=True)
+            print("[dnd] DragAcceptFiles:",
+                  ctypes.windll.shell32.DragAcceptFiles(hwnd, True), flush=True)
             # 移除 Qt 的 OLE 拖放注册，让 Explorer 回退到 WM_DROPFILES 消息通道
-            ctypes.windll.ole32.RevokeDragDrop(hwnd)
+            print("[dnd] RevokeDragDrop:",
+                  ctypes.windll.ole32.RevokeDragDrop(hwnd), flush=True)
             self._admin_drop_filter = _AdminDropFilter(self)
             QApplication.instance().installNativeEventFilter(self._admin_drop_filter)
             self._admin_dnd = True
             self._add_status("已启用管理员拖放通道（系统限制，拖拽图标不可见）", TEXT_DIM)
+            print("[dnd] 管理员拖放通道启用成功", flush=True)
         except Exception as e:
             self._admin_dnd = False
             self._add_status(f"管理员拖放通道启用失败：{e}", WARN)
+            print("[dnd] 启用失败:", repr(e), flush=True)
 
     def _on_input_files_dropped(self, paths: list):
         """输入框文件拖入：逐个加入附件（图片/文件，纯文本模型自动过滤图片）"""

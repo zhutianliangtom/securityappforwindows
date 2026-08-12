@@ -483,14 +483,47 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "web_fetch",
-            "description": "联网抓取指定 URL 的内容（网页 HTML / JSON 接口 / raw 文件文本），"
-                           "返回文本供阅读分析。需要访问网络上的页面、接口或文件时使用。",
+            "description": "联网请求指定 URL（网页 HTML / JSON 接口 / raw 文件 / REST API），返回响应文本。"
+                           "默认 GET；可指定 method/headers/body 发起 POST/PUT/DELETE 等调用 API。"
+                           "需要访问网络上的页面、接口或调用 API 时使用。",
             "parameters": {"type": "object",
                            "properties": {
                                "url": {"type": "string", "description": "http/https 地址"},
+                               "method": {"type": "string",
+                                          "description": "请求方法：GET/POST/PUT/DELETE/PATCH，默认 GET"},
+                               "headers": {"type": "object",
+                                           "description": "请求头字典，如 {\"Authorization\": \"Bearer xxx\"}"},
+                               "body": {"type": "string",
+                                        "description": "请求体（POST/PUT/PATCH 时使用），JSON 字符串或原始文本"},
                                "max_chars": {"type": "integer",
                                              "description": "返回内容最大字符数，默认 8000"}},
                            "required": ["url"]},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "clipboard",
+            "description": "读写系统剪贴板：read 读取当前剪贴板文本，write 把指定文本写入剪贴板"
+                           "（复制/粘贴场景，或读取用户已复制的内容）。",
+            "parameters": {"type": "object",
+                           "properties": {
+                               "action": {"type": "string", "description": "read 读取 / write 写入"},
+                               "text": {"type": "string", "description": "action=write 时要写入的文本"}},
+                           "required": ["action"]},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "extract_text",
+            "description": "提取文档纯文本：支持 txt/md/log/json/csv/docx/xlsx"
+                           "（docx/xlsx 直接解析 zip+XML，无需第三方库），PDF 需先 pip install pypdf。"
+                           "读取文档内容、分析表格数据时使用。",
+            "parameters": {"type": "object",
+                           "properties": {
+                               "path": {"type": "string", "description": "文档文件路径（相对路径基于工作目录）"}},
+                           "required": ["path"]},
         },
     },
     {
@@ -746,10 +779,17 @@ def execute_tool(name: str, args: dict, allow_dangerous: bool = False,
             return _fast_download(str(args.get("url", "")), str(args.get("dest_dir", "")))
         if name == "web_fetch":
             return _web_fetch(str(args.get("url", "")),
+                              str(args.get("method", "GET")),
+                              args.get("headers") if isinstance(args.get("headers"), dict) else None,
+                              str(args.get("body", "")),
                               agent_sandbox.to_int(args.get("max_chars", 8000)))
         if name == "web_search":
             return _web_search(str(args.get("query", "")),
                                agent_sandbox.to_int(args.get("max_results", 8)))
+        if name == "clipboard":
+            return _clipboard(str(args.get("action", "read")), str(args.get("text", "")))
+        if name == "extract_text":
+            return _extract_text(str(args.get("path", "")))
         if name == "create_skill":
             return _create_skill(str(args.get("name", "")),
                                  str(args.get("description", "")),
@@ -1211,19 +1251,28 @@ def cancel_active_download():
             pass
 
 
-def _http_get(url: str, timeout: int = 15, max_bytes: int = 512 * 1024) -> str:
-    """真实 HTTP GET：urllib 标准库请求，带浏览器 UA，超时与大小限制，返回响应文本"""
+def _http_request(url: str, timeout: int = 15, max_bytes: int = 512 * 1024,
+                  method: str = "GET", headers: dict = None, body: str = None) -> str:
+    """真实 HTTP 请求：urllib 标准库，支持 GET/POST/PUT/DELETE/PATCH + 请求头/请求体"""
     import gzip
     import urllib.request
-    req = urllib.request.Request(
-        url, headers={
-            "User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                           "AppleWebKit/537.36 (KHTML, like Gecko) "
-                           "Chrome/126.0 Safari/537.36"),
-            "Accept": "text/html,application/json,text/plain,*/*",
-            "Accept-Encoding": "identity",
-            "Accept-Language": "zh-CN,zh;q=0.9",
-        })
+    method = (method or "GET").upper()
+    hdrs = {
+        "User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                       "AppleWebKit/537.36 (KHTML, like Gecko) "
+                       "Chrome/126.0 Safari/537.36"),
+        "Accept": "text/html,application/json,text/plain,*/*",
+        "Accept-Encoding": "identity",
+        "Accept-Language": "zh-CN,zh;q=0.9",
+    }
+    if headers:
+        hdrs.update({str(k): str(v) for k, v in headers.items()
+                     if k and v is not None})
+    data = None
+    if body:
+        data = body.encode("utf-8")
+        hdrs.setdefault("Content-Type", "application/json")
+    req = urllib.request.Request(url, data=data, headers=hdrs, method=method)
     with urllib.request.urlopen(req, timeout=timeout) as resp:
         raw = resp.read(max_bytes + 1)
     if len(raw) > max_bytes:
@@ -1234,8 +1283,9 @@ def _http_get(url: str, timeout: int = 15, max_bytes: int = 512 * 1024) -> str:
     return raw.decode("utf-8", errors="replace")
 
 
-def _web_fetch(url: str, max_chars: int = 8000) -> dict:
-    """联网抓取 URL 文本内容（网页/JSON/raw），截断后返回给模型阅读"""
+def _web_fetch(url: str, method: str = "GET", headers: dict = None,
+               body: str = "", max_chars: int = 8000) -> dict:
+    """联网请求 URL 文本内容（网页/JSON/raw/REST API），截断后返回给模型阅读"""
     import html as _html_mod
     url = (url or "").strip()
     if not url:
@@ -1243,7 +1293,7 @@ def _web_fetch(url: str, max_chars: int = 8000) -> dict:
     if not url.lower().startswith(("http://", "https://")):
         return _blocked("[web_fetch] 仅支持 http/https 地址")
     try:
-        text = _http_get(url)
+        text = _http_request(url, method=method, headers=headers, body=body or None)
     except Exception as e:
         return _blocked(f"[web_fetch] 请求失败: {e}")
     text = _html_mod.unescape(text).strip()
@@ -1251,7 +1301,117 @@ def _web_fetch(url: str, max_chars: int = 8000) -> dict:
         return _blocked("[web_fetch] 返回内容为空")
     if len(text) > max_chars:
         text = text[:max_chars] + f"\n…（内容过长，已截断至 {max_chars} 字符）"
-    return {"text": f"[web_fetch] {url}\n{text}", "images": []}
+    return {"text": f"[web_fetch] {method} {url}\n{text}", "images": []}
+
+
+def _clipboard(action: str = "read", text: str = "") -> dict:
+    """读写系统剪贴板（真实 Win32 API，Unicode 文本）"""
+    import ctypes
+    user32 = ctypes.windll.user32
+    kernel32 = ctypes.windll.kernel32
+    # 64 位句柄必须显式声明类型，否则默认 c_int 会截断 HGLOBAL 导致访问无效内存
+    user32.OpenClipboard.argtypes = [ctypes.c_void_p]
+    user32.OpenClipboard.restype = ctypes.c_int
+    user32.EmptyClipboard.argtypes = []
+    user32.GetClipboardData.argtypes = [ctypes.c_uint]
+    user32.GetClipboardData.restype = ctypes.c_void_p
+    user32.SetClipboardData.argtypes = [ctypes.c_uint, ctypes.c_void_p]
+    user32.SetClipboardData.restype = ctypes.c_void_p
+    user32.CloseClipboard.argtypes = []
+    kernel32.GlobalAlloc.argtypes = [ctypes.c_uint, ctypes.c_size_t]
+    kernel32.GlobalAlloc.restype = ctypes.c_void_p
+    kernel32.GlobalLock.argtypes = [ctypes.c_void_p]
+    kernel32.GlobalLock.restype = ctypes.c_void_p
+    kernel32.GlobalUnlock.argtypes = [ctypes.c_void_p]
+
+    CF_UNICODETEXT = 13
+    if not user32.OpenClipboard(None):
+        return _blocked("[clipboard] 打开剪贴板失败（可能被其他程序占用）")
+    try:
+        if action == "write":
+            data = (text or "").encode("utf-16-le") + b"\x00\x00"
+            user32.EmptyClipboard()
+            h = kernel32.GlobalAlloc(0x0042, len(data))
+            if not h:
+                return _blocked("[clipboard] 内存分配失败")
+            ptr = kernel32.GlobalLock(h)
+            ctypes.memmove(ptr, data, len(data))
+            kernel32.GlobalUnlock(h)
+            user32.SetClipboardData(CF_UNICODETEXT, h)
+            return {"text": f"已写入剪贴板（{len(text)} 字符）", "images": []}
+        h = user32.GetClipboardData(CF_UNICODETEXT)
+        if not h:
+            return {"text": "（剪贴板为空或非文本内容）", "images": []}
+        ptr = kernel32.GlobalLock(h)
+        value = ctypes.wstring_at(ptr)
+        kernel32.GlobalUnlock(h)
+        return {"text": f"[clipboard] 当前剪贴板内容：\n{value[:4000]}", "images": []}
+    finally:
+        user32.CloseClipboard()
+
+
+def _extract_text(path: str) -> dict:
+    """提取文档纯文本：txt/md/log/json/csv 直接读，docx/xlsx 解析 zip+XML（标准库），
+    pdf 提示先 pip install pypdf"""
+    import csv as _csv
+    import re as _re
+    import zipfile
+    p = _resolve(path)
+    if not p.is_file():
+        return _blocked(f"[extract_text] 文件不存在: {p}")
+    suffix = p.suffix.lower()
+    try:
+        if suffix in (".txt", ".md", ".log", ".json"):
+            return {"text": p.read_text(encoding="utf-8", errors="replace")[:8000], "images": []}
+        if suffix == ".csv":
+            with p.open(encoding="utf-8-sig", errors="replace", newline="") as f:
+                rows = list(_csv.reader(f))
+            return {"text": "\n".join(" | ".join(r) for r in rows)[:8000], "images": []}
+        if suffix == ".docx":
+            # docx = zip + word/document.xml，段落 <w:p> 内 <w:t> 为文本
+            with zipfile.ZipFile(p) as z:
+                xml = z.read("word/document.xml").decode("utf-8", errors="replace")
+            paras = ["".join(_re.findall(r"<w:t[^>]*>(.*?)</w:t>", seg, _re.S))
+                     for seg in xml.split("</w:p>")]
+            return {"text": "\n".join(x for x in paras if x.strip())[:8000], "images": []}
+        if suffix == ".xlsx":
+            # xlsx = zip + xl/sharedStrings.xml（共享字符串）+ xl/worksheets/sheetN.xml（单元格）
+            with zipfile.ZipFile(p) as z:
+                names = z.namelist()
+                shared = []
+                if "xl/sharedStrings.xml" in names:
+                    sx = z.read("xl/sharedStrings.xml").decode("utf-8", errors="replace")
+                    shared = ["".join(_re.findall(r"<t[^>]*>(.*?)</t>", seg, _re.S))
+                              for seg in sx.split("</si>")]
+                out = []
+                for sh in sorted(n for n in names
+                                 if n.startswith("xl/worksheets/sheet") and n.endswith(".xml")):
+                    wx = z.read(sh).decode("utf-8", errors="replace")
+                    out.append(f"[{sh}]")
+                    for row in wx.split("</row>"):
+                        cells = []
+                        for cm in _re.finditer(r'<c r="([A-Z]+\d+)"([^>]*)>(.*?)</c>', row, _re.S):
+                            ref, attrs, inner = cm.group(1), cm.group(2), cm.group(3)
+                            vm = _re.search(r"<v>(.*?)</v>", inner, _re.S)
+                            val = vm.group(1) if vm else ""
+                            if 't="s"' in attrs and val:
+                                try:
+                                    val = shared[int(val)]
+                                except (ValueError, IndexError):
+                                    pass
+                            elif 't="inlineStr"' in attrs:
+                                ism = _re.search(r"<t[^>]*>(.*?)</t>", inner, _re.S)
+                                val = ism.group(1) if ism else ""
+                            cells.append(f"{ref}:{val}")
+                        if cells:
+                            out.append(" ".join(cells))
+                return {"text": "\n".join(out)[:8000], "images": []}
+        if suffix == ".pdf":
+            return _blocked("[extract_text] PDF 文本提取需 pypdf：先 run_command 执行 "
+                            "pip install pypdf 后重试（pip 已在命令白名单）")
+        return _blocked(f"[extract_text] 不支持格式 {suffix}（支持 txt/csv/docx/xlsx，pdf 需装 pypdf）")
+    except Exception as e:
+        return _blocked(f"[extract_text] 解析失败: {e}")
 
 
 def _web_search(query: str, max_results: int = 8) -> dict:
@@ -1264,7 +1424,7 @@ def _web_search(query: str, max_results: int = 8) -> dict:
     max_results = max(1, min(int(max_results or 8), 10))
     url = f"https://cn.bing.com/search?q={urllib.parse.quote(query)}&mkt=zh-CN"
     try:
-        html = _http_get(url)
+        html = _http_request(url)
     except Exception as e:
         return _blocked(f"[web_search] 搜索请求失败: {e}")
     # Bing 结果条目 <li class="b_algo"> 内 <h2><a href> 标题 + <p> 摘要

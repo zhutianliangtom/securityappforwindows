@@ -140,15 +140,50 @@ def _inline_md(s: str) -> str:
     return s
 
 
+def _md_table_to_html(lines: list) -> str:
+    """Markdown 表格行列表 → HTML 表格；非表格（无分隔行）返回空串"""
+    rows = []
+    for line in lines:
+        body = line.strip()
+        if body.startswith("|"):
+            body = body[1:]
+        if body.endswith("|"):
+            body = body[:-1]
+        rows.append([c.strip() for c in body.split("|")])
+    if len(rows) < 2:
+        return ""
+    sep = rows[1]
+    if not all(re.match(r"^:?-+:?$", c) for c in sep):
+        return ""
+    ncol = max(len(rows[0]), len(sep), max(len(r) for r in rows[2:])) if rows[2:] else \
+        max(len(rows[0]), len(sep))
+    th = ("border:1px solid #1E2A44;padding:4px 8px;background:#0B1220;"
+          "color:#E6EDF7;font-weight:600;")
+    td = "border:1px solid #1E2A44;padding:4px 8px;color:#C9D6EA;"
+    out = ["<table style='border-collapse:collapse;margin:6px 0;font-size:13px;'>"]
+    out.append("<tr>")
+    for c in range(ncol):
+        out.append(f"<th style='{th}'>{_inline_md(rows[0][c] if c < len(rows[0]) else '')}</th>")
+    out.append("</tr>")
+    for r in rows[2:]:
+        out.append("<tr>")
+        for c in range(ncol):
+            out.append(f"<td style='{td}'>{_inline_md(r[c] if c < len(r) else '')}</td>")
+        out.append("</tr>")
+    out.append("</table>")
+    return "".join(out)
+
+
 def _md_to_html(raw: str) -> str:
-    """块级 Markdown → HTML：代码块、标题、列表、段落"""
+    """块级 Markdown → HTML：代码块、标题、列表、段落、表格"""
     lines = raw.split("\n")
     out = []
     in_code = False
     in_list = False
     code_buf = []
-    for line in lines:
-        s = line.strip()
+    i, n = 0, len(lines)
+    while i < n:
+        s = lines[i].strip()
         if s.startswith("```"):
             if in_code:
                 out.append("<pre style='background:#0B1220;color:#E6EDF7;padding:8px;"
@@ -158,14 +193,37 @@ def _md_to_html(raw: str) -> str:
                 in_code = False
             else:
                 in_code = True
+            i += 1
             continue
         if in_code:
-            code_buf.append(line)
+            code_buf.append(lines[i])
+            i += 1
             continue
         if not s:
             if in_list:
                 out.append("</ul>")
                 in_list = False
+            i += 1
+            continue
+        # Markdown 表格：| 单元格 | ... + 分隔行 + 数据行
+        if s.startswith("|") and s.count("|") >= 3:
+            tbl = [s]
+            i += 1
+            while i < n and lines[i].strip().startswith("|"):
+                tbl.append(lines[i].strip())
+                i += 1
+            table = _md_table_to_html(tbl)
+            if table:
+                if in_list:
+                    out.append("</ul>")
+                    in_list = False
+                out.append(table)
+            else:   # 不是表格，按普通段落逐行渲染
+                if in_list:
+                    out.append("</ul>")
+                    in_list = False
+                for ln in tbl:
+                    out.append("<p style='margin:4px 0;'>" + _inline_md(ln) + "</p>")
             continue
         # 块级数学公式 $$...$$（单行）→ 居中展示
         m = re.match(r"^\$\$(.+)\$\$\s*$", s)
@@ -176,6 +234,7 @@ def _md_to_html(raw: str) -> str:
             out.append(f"<div style='text-align:center;margin:8px 0;"
                        f"font-family:Georgia,'Times New Roman',serif;font-size:16px;"
                        f"color:{TEXT};'>{_formula_to_html(m.group(1))}</div>")
+            i += 1
             continue
         m = re.match(r"^(#{1,6})\s+(.*)", s)
         if m:
@@ -185,6 +244,7 @@ def _md_to_html(raw: str) -> str:
             lvl = len(m.group(1))
             out.append(f"<h{lvl} style='margin:8px 0 4px;color:#E6EDF7;"
                        f"font-size:{max(13, 20 - lvl)}px;'>{_inline_md(m.group(2))}</h{lvl}>")
+            i += 1
             continue
         if re.match(r"^[-*+]\s+", s) or re.match(r"^\d+[.)]\s+", s):
             if not in_list:
@@ -192,11 +252,13 @@ def _md_to_html(raw: str) -> str:
                 in_list = True
             item = re.sub(r"^[-*+]\s+|^\d+[.)]\s+", "", s)
             out.append("<li>" + _inline_md(item) + "</li>")
+            i += 1
             continue
         if in_list:
             out.append("</ul>")
             in_list = False
         out.append("<p style='margin:4px 0;'>" + _inline_md(s) + "</p>")
+        i += 1
     if in_code:
         out.append("<pre style='background:#0B1220;color:#E6EDF7;padding:8px;"
                    "border-radius:6px;font-family:Consolas;font-size:12px;"

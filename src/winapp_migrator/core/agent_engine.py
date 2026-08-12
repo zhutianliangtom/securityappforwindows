@@ -120,7 +120,7 @@ class AgentEngine:
         self._messages: list = []
         self.tokens = {"prompt": 0, "completion": 0}
         self.last_estimate = 0       # 最近一次请求前的预计算（输入 tokens）
-        self.end_state = ""          # 本轮结束状态: done|stopped|error|max_rounds
+        self.end_state = ""          # 本轮结束状态: done|stopped|error
         self._stop = threading.Event()
         self._thread: threading.Thread = None
         self._builtin_names = {t["function"]["name"] for t in agent_tools.TOOLS}
@@ -421,7 +421,9 @@ class AgentEngine:
             except Exception:
                 switched = False
         try:
-            for _ in range(50):  # 最多 50 轮工具循环（配合自动压缩支持长任务），防死循环
+            # 工具循环不设轮数上限：用户可随时点击停止，上下文自动压缩防遗忘；
+            # 每轮都检查 _stop，长任务可一直执行下去
+            while True:
                 if self._stop.is_set():
                     self.end_state = "stopped"
                     if self.on_status:
@@ -532,9 +534,6 @@ class AgentEngine:
                         "role": "user",
                         "content": agent_llm.build_content(prompt, last_images),
                     })
-            if self.on_status:
-                self.on_status("已达到最大工具轮数，自动结束")
-            self.end_state = "max_rounds"
         except agent_llm.AgentLLMError as e:
             # 用户主动停止（含 LLM 层"已停止"）优先识别为 stopped，而不是 error
             stopped = self._stop.is_set()

@@ -1140,10 +1140,17 @@ class _AdminDropFilter(QAbstractNativeEventFilter):
             if paths:
                 # 延迟到主循环投递，避免在原生消息处理中重入 Qt 事件循环
                 QTimer.singleShot(0, lambda x=pt.x, y=pt.y, p=paths:
-                                  self._deliver(x, y, p))
+                                  self._on_received(x, y, p))
             return True, 0
         except Exception:
             return False, 0
+
+    def _on_received(self, x: int, y: int, paths: list):
+        """收到系统 WM_DROPFILES：显示诊断状态并投递（证明 OS 已把拖放送达应用）"""
+        panel = self._panel
+        if panel is not None and hasattr(panel, "_add_status"):
+            panel._add_status(f"已接收系统拖放（{len(paths)} 个文件）", TEXT_DIM)
+        self._deliver(x, y, paths)
 
     def _deliver(self, x: int, y: int, paths: list):
         """主循环内投递：定位鼠标下方第一个可接收拖放的控件并发送 Qt 拖放事件"""
@@ -3010,8 +3017,9 @@ class AgentPanel(QDialog):
             QApplication.instance().installNativeEventFilter(self._admin_drop_filter)
             self._admin_dnd = True
             self._add_status("已启用管理员拖放通道（系统限制，拖拽图标不可见）", TEXT_DIM)
-        except Exception:
+        except Exception as e:
             self._admin_dnd = False
+            self._add_status(f"管理员拖放通道启用失败：{e}", WARN)
 
     def _on_input_files_dropped(self, paths: list):
         """输入框文件拖入：逐个加入附件（图片/文件，纯文本模型自动过滤图片）"""
@@ -3238,7 +3246,7 @@ class AgentPanel(QDialog):
             self._add_badge("Stop by user", WARN)
         elif state == "done":
             self._add_badge("Successfully", OK)
-        else:   # error / max_rounds 视为异常
+        else:   # error 视为异常
             self._add_badge("Error", ERR)
 
     # ---------- 引擎回调（信号槽，主线程） ----------
@@ -3302,7 +3310,7 @@ class AgentPanel(QDialog):
             self._scroll_bottom()
         elif s == "完成":
             self._hide_spinner()   # 任务结束，停掉转圈
-        elif s == "已达到最大工具轮数，自动结束" or s.startswith("错误"):
+        elif s.startswith("错误"):
             self._hide_spinner()
             self._ensure_ai_bubble()
             self._segments.append({"type": "mark", "html": _esc(s)})

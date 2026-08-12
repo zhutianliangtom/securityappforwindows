@@ -410,16 +410,21 @@ class AgentEngine:
         return inter or None
 
     # ---------- 主循环 ----------
+    def _system_prompt(self, agent_name: str = "", skills: list = None) -> str:
+        """构建系统提示词：每次都重新读取 settings.json，
+        用户中途新增/修改的自定义规则在下一轮立即生效"""
+        return agent_skills.build_system_prompt(agent_name, extra_skills=skills,
+                                                text_only=self.text_only,
+                                                memory_enabled=self.memory_enabled)
+
     def run(self, user_input: str, agent_name: str = "", images: list = None,
             skills: list = None):
         self.end_state = ""
-        system = agent_skills.build_system_prompt(agent_name, extra_skills=skills,
-                                                  text_only=self.text_only,
-                                                  memory_enabled=self.memory_enabled)
         if not self._messages or self._messages[0].get("role") != "system":
-            self._messages.insert(0, {"role": "system", "content": system})
+            self._messages.insert(0, {"role": "system",
+                                      "content": self._system_prompt(agent_name, skills)})
         else:
-            self._messages[0]["content"] = system  # 切换 Agent 时更新系统提示
+            self._messages[0]["content"] = self._system_prompt(agent_name, skills)
         self._messages.append({"role": "user",
                                "content": agent_llm.build_content(user_input, images)})
         # 静默虚拟桌面：任务开始切到独立桌面，结束自动返回主桌面（finally 兜底所有结束路径）
@@ -441,6 +446,8 @@ class AgentEngine:
                     if self.on_status:
                         self.on_status("已停止")
                     return
+                # 每轮重建系统提示词：用户中途新增/修改的规则在下一轮立即生效
+                self._messages[0]["content"] = self._system_prompt(agent_name, skills)
                 if self.on_status:
                     self.on_status("正在思考…")
                 self._prune_images(2)  # 历史截图只保留最近 2 张，其余剥离成纯文本，控制视觉输入 tokens

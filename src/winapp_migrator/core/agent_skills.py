@@ -475,7 +475,8 @@ def build_system_prompt(agent_name: str = "", extra_skills: list = None,
     rules = settings.get("custom_rules") or []
     valid = [str(r).strip() for r in rules if str(r).strip()]
     if valid:
-        prompt += "\n\n用户自定义规则（必须遵守）：\n" + "\n".join(f"- {r}" for r in valid)
+        prompt += ("\n\n用户自定义规则（每次执行操作前必须查看并严格遵守）：\n"
+                   + "\n".join(f"- {r}" for r in valid))
     extra_prompt = (settings.get("custom_system_prompt") or "").strip()
     if extra_prompt:
         prompt += "\n\n用户自定义系统提示词补充：\n" + extra_prompt

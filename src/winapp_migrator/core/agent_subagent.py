@@ -44,6 +44,19 @@ def _compress(messages: list) -> list:
     return messages[:2] + messages[start:]
 
 
+def _sub_system_prompt() -> str:
+    """子 Agent 系统提示词：基础规则 + 用户自定义规则（每次派发时读取，保证及时生效）"""
+    from winapp_migrator.core import agent_skills
+    rules = [str(r).strip()
+             for r in (agent_skills.load_settings().get("custom_rules") or [])
+             if str(r).strip()]
+    if not rules:
+        return _SUB_SYSTEM
+    return (_SUB_SYSTEM
+            + "\n\n用户自定义规则（每次执行操作前必须查看并严格遵守）：\n"
+            + "\n".join(f"- {r}" for r in rules))
+
+
 def run_sub_agent(llm, goal, allowed=None, stop=None, on_status=None) -> str:
     """运行一个子 Agent，返回其最终文本总结。
 
@@ -53,7 +66,7 @@ def run_sub_agent(llm, goal, allowed=None, stop=None, on_status=None) -> str:
     goal = (goal or "").strip()
     if not goal:
         return "（空任务）"
-    messages = [{"role": "system", "content": _SUB_SYSTEM},
+    messages = [{"role": "system", "content": _sub_system_prompt()},
                 {"role": "user", "content": agent_llm.build_content(goal)}]
     tools = _sub_tools(allowed)
     # 实际可执行白名单 = 子 Agent 白名单 ∩ 允许集：模型幻觉调用非白名单工具时直接拒绝

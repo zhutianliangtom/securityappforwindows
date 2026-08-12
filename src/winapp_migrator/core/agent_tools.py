@@ -495,7 +495,63 @@ TOOLS = [
                            "required": ["name", "description", "instruction"]},
         },
     },
+    # ---------- 子 Agent 工具（主 Agent 派发只读子任务，执行由引擎调度） ----------
+    {
+        "type": "function",
+        "function": {
+            "name": "dispatch_sub_agents",
+            "description": "把多个互不依赖的子任务分发给并行运行的子 Agent，各自独立执行后汇总返回。"
+                           "适合大规模读取/搜索/探索类工作（子 Agent 仅只读，不会修改文件）。"
+                           "子任务建议 1-8 个；任务越多总体耗时越长。",
+            "parameters": {"type": "object",
+                           "properties": {
+                               "tasks": {"type": "array",
+                                         "description": "子任务列表（每项含 title 标题与 goal 目标）",
+                                         "items": {"type": "object",
+                                                   "properties": {
+                                                       "title": {"type": "string",
+                                                                 "description": "子任务标题"},
+                                                       "goal": {"type": "string",
+                                                                "description": "子任务目标与要求（写清要做什么、输出什么）"},
+                                                       "max_rounds": {"type": "integer",
+                                                                      "description": "可选：最大工具轮数，默认 8"}},
+                                                   "required": ["title", "goal"]}}},
+                           "required": ["tasks"]},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "explore_project",
+            "description": "探索并理解一个项目/目录（Explorer 子 Agent）：生成目录结构、读取 README 与关键入口文件，"
+                           "输出项目概览（用途、技术栈、模块结构、入口、构建/运行方式）。接手新项目时先用它快速了解。",
+            "parameters": {"type": "object",
+                           "properties": {
+                               "directory": {"type": "string",
+                                             "description": "要探索的项目目录（绝对路径）"}},
+                           "required": ["directory"]},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "search_large",
+            "description": "大规模搜索（Search 子 Agent）：在多个目录范围内搜索关键词并汇总命中（跨目录、多轮搜索、"
+                           "重要命中读取上下文确认）。比 search_files 更适合范围大、文件多的搜索。",
+            "parameters": {"type": "object",
+                           "properties": {
+                               "query": {"type": "string", "description": "搜索关键词"},
+                               "directories": {"type": "array", "items": {"type": "string"},
+                                               "description": "可选：搜索目录列表；留空用工作目录/用户常用目录"},
+                               "max_results": {"type": "integer",
+                                               "description": "可选：最多保留命中条数，默认 20"}},
+                           "required": ["query"]},
+        },
+    },
 ]
+
+# 子 Agent 工具名（由 agent_engine 拦截调度，携带 LLM 客户端执行；不在此直接实现）
+SUB_AGENT_TOOLS = ("dispatch_sub_agents", "explore_project", "search_large")
 
 # 沙盒拒绝返回（无截图）
 def _blocked(text: str) -> dict:
@@ -531,6 +587,8 @@ def execute_tool(name: str, args: dict, allow_dangerous: bool = False,
     args = args or {}
     if name == "ask_user":
         return _ask_user(args, ask_user_cb)
+    if name in SUB_AGENT_TOOLS:
+        return _blocked(f"[{name}] 子 Agent 工具由主引擎调度执行")
     level, reason = agent_sandbox.assess_tool(name, args)
     if level == "dangerous" and not allow_dangerous:
         return _blocked(f"[沙盒拒绝] {reason}")

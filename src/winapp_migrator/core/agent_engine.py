@@ -15,7 +15,7 @@ from pathlib import Path
 from PyQt6.QtCore import Qt, QByteArray, QBuffer, QIODevice
 from PyQt6.QtGui import QImage
 
-from winapp_migrator.core import agent_llm, agent_tools, agent_skills
+from winapp_migrator.core import agent_llm, agent_tools, agent_skills, agent_subagent
 from winapp_migrator.core.agent_screen import capture_screen_data_url, virtual_desktop
 
 # 会改变屏幕、需要执行后自动截图验证的工具
@@ -292,6 +292,18 @@ class AgentEngine:
             if self.ask_user:
                 return {"text": self.ask_user(args), "images": []}
             return {"text": "[ask_user] 未接入提问面板", "images": []}
+        if name in agent_tools.SUB_AGENT_TOOLS:
+            # 子 Agent 工具：并发派发只读子任务，耗时较长 → 240s 超时
+            try:
+                res = _call_with_stop(lambda: self._run_subagent_tool(name, args),
+                                      self._stop, timeout=240.0)
+                if res is None:   # stop 触发已放弃等待（子 Agent 仍在后台执行）
+                    return {"text": "[已停止等待] 子 Agent 仍在后台执行，本轮已跳过", "images": []}
+                return res
+            except TimeoutError:
+                return {"text": f"[子Agent超时] {name} 超过 240 秒未完成，已放弃", "images": []}
+            except Exception as e:
+                return {"text": f"[子Agent错误] {name}: {e}", "images": []}
         if name in self._builtin_names:
             # 内置工具（run_command 等）同样可能长时间阻塞 → 用带超时/可中断封装
             try:
@@ -316,6 +328,56 @@ class AgentEngine:
             except Exception as e:
                 return {"text": f"[MCP 错误] {e}", "images": []}
         return {"text": f"[未知工具] {name}", "images": []}
+
+    # ---------- 子 Agent 工具（explorer / 搜索 / 通用并发分发） ----------
+    def _run_subagent_tool(self, name: str, args: dict) -> dict:
+        """子 Agent 工具执行：复用同一 LLM 客户端，派发只读子任务并汇总结果"""
+        args = args or {}
+        tasks = []
+        if name == "explore_project":
+            tasks = [{"title": "探索项目",
+                      "goal": agent_subagent.explore_goal(str(args.get("directory", ""))),
+                      "allowed": ("list_directory", "read_file", "search_files")}]
+        elif name == "search_large":
+            dirs = [str(d) for d in (args.get("directories") or []) if str(d).strip()]
+            tasks = [{"title": f"搜索「{args.get('query', '')}」",
+                      "goal": agent_subagent.search_goal(
+                          str(args.get("query", "")), dirs,
+                          self._to_int(args.get("max_results"), 20)),
+                      "allowed": ("search_files", "read_file", "list_directory")}]
+        else:   # dispatch_sub_agents
+            for i, t in enumerate((args.get("tasks") or []), 1):
+                if isinstance(t, dict) and str(t.get("goal") or "").strip():
+                    tasks.append({
+                        "title": str(t.get("title") or f"子任务 {i}"),
+                        "goal": str(t["goal"]),
+                        "allowed": self._sub_allowed(str(t.get("tools") or "")),
+                        "max_rounds": self._to_int(t.get("max_rounds"), 8),
+                    })
+        if not tasks:
+            return {"text": f"[{name}] 缺少任务参数，无法派发子 Agent", "images": []}
+        if self.on_status:
+            self.on_status(f"正在派发 {len(tasks)} 个子 Agent 并发执行…")
+        text = agent_subagent.dispatch_sub_agents(
+            self.llm, tasks, stop=lambda: self._stop.is_set(),
+            on_status=self.on_status)
+        return {"text": text, "images": []}
+
+    @staticmethod
+    def _to_int(v, default: int) -> int:
+        try:
+            return int(v)
+        except (TypeError, ValueError):
+            return default
+
+    @staticmethod
+    def _sub_allowed(tools_str: str):
+        """子任务可用工具：与只读白名单取交集；空则用全部只读工具"""
+        if not tools_str:
+            return None
+        names = {x.strip() for x in str(tools_str).replace("，", ",").split(",") if x.strip()}
+        inter = tuple(n for n in names if n in agent_subagent.READONLY_TOOLS)
+        return inter or None
 
     # ---------- 主循环 ----------
     def run(self, user_input: str, agent_name: str = "", images: list = None,

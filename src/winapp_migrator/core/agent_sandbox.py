@@ -136,4 +136,7 @@ def assess_tool(name: str, args: dict) -> tuple:
                 return "risky", f"坐标越界 ({x},{y})，屏幕 {w}x{h}"
     if name == "click_text" and not str(args.get("text", "")).strip():
         return "risky", "缺少要点击的文字参数"
+    # 重量级操作：卸载/迁移/内存优化涉及删改系统与应用，需用户确认
+    if name in ("uninstall_app", "migrate_app", "optimize_memory"):
+        return "risky", f"{name} 为重量级操作，需用户确认"
     return "safe", ""

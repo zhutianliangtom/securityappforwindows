@@ -405,6 +405,80 @@ TOOLS = [
             "parameters": {"type": "object", "properties": {}, "required": []},
         },
     },
+    # ---------- 系统信息（原 MCP server 工具内置化） ----------
+    {
+        "type": "function",
+        "function": {
+            "name": "system_info",
+            "description": "获取本机系统信息：主机名、系统版本（可区分 Win10/Win11）、CPU 核心数、物理内存、Python 版本。",
+            "parameters": {"type": "object", "properties": {}, "required": []},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_time",
+            "description": "获取当前系统时间（YYYY-MM-DD HH:MM:SS）。",
+            "parameters": {"type": "object", "properties": {}, "required": []},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "env_var",
+            "description": "读取指定环境变量的值（如 PATH、SystemRoot）。",
+            "parameters": {"type": "object",
+                           "properties": {"name": {"type": "string", "description": "环境变量名"}},
+                           "required": ["name"]},
+        },
+    },
+    # ---------- WinAppMigrator 能力内置化 ----------
+    {
+        "type": "function",
+        "function": {
+            "name": "optimize_memory",
+            "description": "一键清理系统内存：终止可安全退出的后台进程、压缩工作集并清理内存。"
+                           "属于重量级操作，执行前会请用户确认。",
+            "parameters": {"type": "object", "properties": {}, "required": []},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "uninstall_app",
+            "description": "卸载已安装应用（优先调用应用自带卸载器，再清理数据目录/注册表/快捷方式）。"
+                           "需要先扫描已安装应用并匹配名称；属于重量级操作，执行前会请用户确认。",
+            "parameters": {"type": "object",
+                           "properties": {"name": {"type": "string", "description": "应用名称（支持模糊匹配）"}},
+                           "required": ["name"]},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "migrate_app",
+            "description": "把已安装应用迁移到其他盘符（移动主目录/数据目录并更新注册表、快捷方式）。"
+                           "需要先扫描应用匹配名称；属于重量级操作，执行前会请用户确认。",
+            "parameters": {"type": "object",
+                           "properties": {
+                               "name": {"type": "string", "description": "应用名称（支持模糊匹配）"},
+                               "target": {"type": "string", "description": "目标路径，如 D:\\Apps\\微信"}},
+                           "required": ["name", "target"]},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "fast_download",
+            "description": "多段并发高速下载文件到指定目录（自动探测文件名，支持断点续传）。",
+            "parameters": {"type": "object",
+                           "properties": {
+                               "url": {"type": "string", "description": "下载地址"},
+                               "dest_dir": {"type": "string",
+                                            "description": "保存目录，留空用工作目录"}},
+                           "required": ["url"]},
+        },
+    },
 ]
 
 # 沙盒拒绝返回（无截图）
@@ -554,6 +628,22 @@ def execute_tool(name: str, args: dict, allow_dangerous: bool = False,
             return _save_memory(str(args.get("content", "")))
         if name == "load_memory":
             return _load_memory()
+        # 系统信息（原 MCP server 工具内置化）
+        if name == "system_info":
+            return _system_info()
+        if name == "get_time":
+            return _get_time()
+        if name == "env_var":
+            return _env_var(str(args.get("name", "")))
+        # WinAppMigrator 能力
+        if name == "optimize_memory":
+            return _optimize_memory()
+        if name == "uninstall_app":
+            return _uninstall_app(str(args.get("name", "")))
+        if name == "migrate_app":
+            return _migrate_app(str(args.get("name", "")), str(args.get("target", "")))
+        if name == "fast_download":
+            return _fast_download(str(args.get("url", "")), str(args.get("dest_dir", "")))
     except Exception as e:
         return _blocked(f"[工具执行错误] {name}: {e}")
     return _blocked(f"[未知工具] {name}")
@@ -857,6 +947,150 @@ def _load_memory() -> dict:
         return {"text": text, "images": []}
     except Exception as e:
         return _blocked(f"[记忆] 读取失败: {e}")
+
+
+# ---------- 系统信息（原 MCP server 工具内置化，真实 API） ----------
+
+def _os_name() -> str:
+    """注册表读取真实系统产品名（Win10/Win11 内核同为 10.0，按 build>=22000 修正为 Win11）"""
+    try:
+        import platform
+        import winreg
+        with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE,
+                            r"SOFTWARE\Microsoft\Windows NT\CurrentVersion") as k:
+            name = winreg.QueryValueEx(k, "ProductName")[0]
+            display = winreg.QueryValueEx(k, "DisplayVersion")[0]
+            build = int(winreg.QueryValueEx(k, "CurrentBuildNumber")[0])
+        if build >= 22000 and name.startswith("Windows 10"):
+            name = name.replace("Windows 10", "Windows 11")
+        return f"{name}（{display}，内部版本 {build}）"
+    except (OSError, ValueError):
+        import platform
+        return f"{platform.system()} {platform.release()}"
+
+
+def _total_memory_mb() -> int:
+    """读取物理内存总量（MB）"""
+    try:
+        import ctypes
+        class _MS(ctypes.Structure):
+            _fields_ = [
+                ("dwLength", ctypes.c_ulong), ("dwMemoryLoad", ctypes.c_ulong),
+                ("ullTotalPhys", ctypes.c_ulonglong), ("ullAvailPhys", ctypes.c_ulonglong),
+                ("ullTotalPageFile", ctypes.c_ulonglong), ("ullAvailPageFile", ctypes.c_ulonglong),
+                ("ullTotalVirtual", ctypes.c_ulonglong), ("ullAvailVirtual", ctypes.c_ulonglong),
+                ("ullAvailExtendedVirtual", ctypes.c_ulonglong),
+            ]
+        ms = _MS()
+        ms.dwLength = ctypes.sizeof(_MS)
+        if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(ms)):
+            return ms.ullTotalPhys // (1024 * 1024)
+    except Exception:
+        pass
+    return 0
+
+
+def _system_info() -> dict:
+    import platform
+    import socket
+    import sys
+    text = (f"主机名: {socket.gethostname()}\n"
+            f"系统: {_os_name()}\n"
+            f"架构: {platform.machine()}\n"
+            f"CPU 核心数: {os.cpu_count()}\n"
+            f"物理内存: {_total_memory_mb()} MB\n"
+            f"Python: {sys.version.split()[0]}")
+    return {"text": text, "images": []}
+
+
+def _get_time() -> dict:
+    return {"text": time.strftime("%Y-%m-%d %H:%M:%S"), "images": []}
+
+
+def _env_var(name: str) -> dict:
+    name = (name or "").strip()
+    if not name:
+        return _blocked("[env_var] 缺少环境变量名（name）")
+    v = os.environ.get(name)
+    return {"text": f"{name} = {v}" if v is not None else f"环境变量 {name} 不存在",
+            "images": []}
+
+
+# ---------- WinAppMigrator 能力内置化 ----------
+
+def _fmt_size(n: int) -> str:
+    n = int(n or 0)
+    for unit in ("B", "KB", "MB", "GB"):
+        if n < 1024:
+            return f"{n:.1f} {unit}"
+        n /= 1024
+    return f"{n:.1f} TB"
+
+
+def _find_app(name: str):
+    """按名称模糊匹配已安装应用；返回 AppInfo 或 None"""
+    from winapp_migrator.core.app_scanner import AppScanner
+    key = (name or "").strip().lower()
+    apps = AppScanner().scan_all()
+    for a in apps:
+        if key in a.name.lower():
+            return a
+    return None
+
+
+def _optimize_memory() -> dict:
+    from winapp_migrator.core.memory_optimizer import optimize_memory
+    result = optimize_memory()
+    details = result.get("details") or []
+    text = f"内存优化完成：{result.get('message', '')}"
+    if details:
+        text += "\n" + "\n".join(f"  - {d}" for d in details[:20])
+    return {"text": text, "images": []}
+
+
+def _uninstall_app(name: str) -> dict:
+    from winapp_migrator.core.uninstaller import Uninstaller
+    if not (name or "").strip():
+        return _blocked("[uninstall_app] 缺少应用名称（name）")
+    app = _find_app(name)
+    if not app:
+        return _blocked(f"未找到应用「{name}」。可先用 find_app 或 /screenshot 查看已装应用")
+    plan = Uninstaller().build_plan(app)
+    result = Uninstaller().uninstall(plan)
+    return {"text": f"应用「{app.name}」卸载：{result.get('message', '')}", "images": []}
+
+
+def _migrate_app(name: str, target: str) -> dict:
+    from winapp_migrator.core.orchestrator import MigrationOrchestrator
+    if not (name or "").strip() or not (target or "").strip():
+        return _blocked("[migrate_app] 需要 name 与 target 参数")
+    app = _find_app(name)
+    if not app:
+        return _blocked(f"未找到应用「{name}」。可先用 find_app 查询")
+    result = MigrationOrchestrator().migrate(app, Path(target))
+    state = "成功" if result.get("success") else "失败"
+    return {"text": f"应用「{app.name}」迁移{state}：{result.get('message', '')}", "images": []}
+
+
+def _fast_download(url: str, dest_dir: str) -> dict:
+    from winapp_migrator.core.fast_download import DownloadTask
+    url = (url or "").strip()
+    if not url:
+        return _blocked("[fast_download] 缺少下载地址（url）")
+    dest = (dest_dir or "").strip() or WORKDIR or os.getcwd()
+    try:
+        os.makedirs(dest, exist_ok=True)
+        task = DownloadTask(url, dest)
+        task.start()
+        task.join(timeout=60)
+        snap = task.snapshot()
+        if snap.get("status") == "done":
+            return {"text": f"下载完成：{snap.get('path')}（{_fmt_size(snap.get('total'))}）",
+                    "images": []}
+        err = snap.get("error") or "进行中（可稍后重试）"
+        return {"text": f"下载未完成：状态 {snap.get('status')}，{err}", "images": []}
+    except Exception as e:
+        return _blocked(f"[fast_download] 下载失败: {e}")
 
 
 def tool_schemas() -> list:

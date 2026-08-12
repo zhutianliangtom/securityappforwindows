@@ -1398,7 +1398,7 @@ class AgentPanel(QDialog):
             f"QComboBox::drop-down {{ border: none; width: 22px; }}"
             f"QComboBox QAbstractItemView {{ background: {PANEL}; color: {TEXT};"
             "border: 1px solid #4B6BD6; selection-background-color: #16233C; }}")
-        self.model_combo.setToolTip("手动切换本次使用的模型；「自动」= 按工作力度路由")
+        self.model_combo.setToolTip("手动切换本次使用的模型；「自动选择」= 按工作力度路由")
         self.model_combo.currentIndexChanged.connect(self._on_model_combo)
         self.model_combo.setAcceptDrops(False)   # 文件拖放由面板统一接收
         bottom.addWidget(self.model_combo)
@@ -2268,27 +2268,19 @@ class AgentPanel(QDialog):
         return self._effort
 
     def _refresh_route_label(self, *_):
-        """显示当前路由模型（手动指定显示指定模型；自动模式随输入实时估算）"""
-        cfg = self._model_cfg
+        """路由状态显示：手动指定显示模型名；自动模式统一显示「自动选择」（不带模型后缀）"""
         if self._model_override:
             self.route_model_label.setText(f"模型: {self._model_override}")
-            return
-        effort = self._resolve_effort(self.input.toPlainText())
-        model = agent_llm.resolve_model(cfg, effort)
-        tag = "自动·" if self._auto_effort else ""
-        self.route_model_label.setText(f"{tag}模型: {model}")
-        # 输入框右侧下拉首项同步显示当前路由模型（仅自动模式）
-        if not self._model_override and self.model_combo.count():
-            self.model_combo.setItemText(0, f"自动 · {model}")
+        else:
+            self.route_model_label.setText("自动选择")
 
-    def _sync_model_combo(self, routed: str = None):
-        """重建输入框右侧模型下拉：首项「自动(按力度)」+ 全部模型名"""
+    def _sync_model_combo(self):
+        """重建输入框右侧模型下拉：首项「自动选择」+ 全部模型名"""
         cfg = self._model_cfg
         models = cfg.get("models") or [cfg.get("model") or agent_llm.DEFAULT_MODEL]
-        routed = routed or agent_llm.resolve_model(cfg, self._resolve_effort(self.input.toPlainText()))
         self.model_combo.blockSignals(True)
         self.model_combo.clear()
-        self.model_combo.addItem("自动", None)
+        self.model_combo.addItem("自动选择", None)
         for x in models:
             self.model_combo.addItem(x, x)
         if self._model_override:
@@ -2545,7 +2537,8 @@ class AgentPanel(QDialog):
         # 评估完成后再按难度选合适模型启动；手动指定模型/关闭自动则直接启动
         if self._auto_effort and not self._model_override:
             self._eval_pending = (ai_text, send_images, skill_names)
-            self._add_status("正在用轻量模型评估任务难度…", ACCENT)
+            # 评估过程不显示任何文字提示，直接以「AI 思考中…」转圈呈现
+            self._start_think()
             threading.Thread(target=self._assess_worker, daemon=True).start()
         else:
             self._launch_task(ai_text, send_images, skill_names,
@@ -2559,26 +2552,22 @@ class AgentPanel(QDialog):
         model = self._model_override or agent_llm.resolve_model(cfg, effort)
         base_url = cfg.get("base_url") or agent_llm.DEFAULT_BASE_URL
         api_key = cfg.get("api_key") or agent_llm.DEFAULT_API_KEY
-        # 自动模式（下拉选「自动」）：agnes-2.5-flash 只在内置默认服务可用。
-        # 1) 带图片时：路由模型为纯文本，或路由到 agnes 但客户端指向自定义服务商
-        #    （如 DeepSeek，消息 schema 只接受 text，含 image_url 必 400）→
-        #    整体切到内置默认 agnes 服务处理图片（评估同样由 agnes 完成）；
-        # 2) 纯文本任务：自定义服务商路由到 agnes（其服务不了）时回退用户主模型。
-        # 手动指定模型时不做自动切换。
-        if not self._model_override:
-            if send_images and (agent_llm.is_text_only_model(model)
-                                or (model == agent_llm.DEFAULT_MODEL
-                                    and base_url != agent_llm.DEFAULT_BASE_URL)):
-                self._add_status(
-                    f"路由模型 {model} 不支持图片，已改用视觉模型 "
-                    f"{agent_llm.DEFAULT_MODEL}（内置默认服务）处理图片", WARN)
-                model = agent_llm.DEFAULT_MODEL
-                base_url = agent_llm.DEFAULT_BASE_URL
-                api_key = agent_llm.DEFAULT_API_KEY
-            elif (not send_images
-                  and base_url != agent_llm.DEFAULT_BASE_URL
-                  and model == agent_llm.DEFAULT_MODEL):
-                model = str(cfg.get("model") or model)
+        # agnes-2.5-flash 只在内置默认服务可用：无论手动/自动选中，只要当前连接
+        # 不是默认 agnes 服务就同步切过去（否则把该模型名/图片发给不支持的服务器，
+        # 如 DeepSeek 的消息 schema 只接受 text，含 image_url 必 400）
+        if model == agent_llm.DEFAULT_MODEL and base_url != agent_llm.DEFAULT_BASE_URL:
+            base_url = agent_llm.DEFAULT_BASE_URL
+            api_key = agent_llm.DEFAULT_API_KEY
+        # 自动模式（下拉选「自动选择」）+ 图片：路由模型为纯文本 → 改用
+        # agnes 视觉模型（内置默认服务）处理图片而非丢弃
+        if (not self._model_override and send_images
+                and agent_llm.is_text_only_model(model)):
+            self._add_status(
+                f"路由模型 {model} 不支持图片，已改用视觉模型 "
+                f"{agent_llm.DEFAULT_MODEL} 处理图片", WARN)
+            model = agent_llm.DEFAULT_MODEL
+            base_url = agent_llm.DEFAULT_BASE_URL
+            api_key = agent_llm.DEFAULT_API_KEY
         # 同步客户端连接参数（模型可能来自不同服务商）
         engine.llm.base_url = base_url.rstrip("/")
         engine.llm.api_key = api_key
@@ -2602,10 +2591,9 @@ class AgentPanel(QDialog):
         self.eval_signal.emit(effort)
 
     def _on_assess_done(self, effort: str):
-        """评估完成：按难度路由模型并启动任务"""
+        """评估完成：按难度路由模型并启动任务（不显示评估文字，保持思考转圈）"""
         if not self._eval_pending:
             return
-        self._add_status(f"任务难度评估：{effort}", TEXT_DIM)
         ai_text, send_images, skill_names = self._eval_pending
         self._eval_pending = None
         self._launch_task(ai_text, send_images, skill_names, effort)

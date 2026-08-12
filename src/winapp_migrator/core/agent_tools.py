@@ -5,9 +5,13 @@
 - images 中的截图 data URL 由引擎并入下一轮视觉输入（截图验证闭环）
 """
 
+import itertools
 import json
+import locale
 import os
 import subprocess
+import threading
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -18,6 +22,66 @@ from winapp_migrator.core import agent_locator
 
 # 本地记忆文件（AI 长期记忆，markdown 格式）
 MEMORY_FILE = Path.home() / ".winapp_migrator" / "agent" / "memory.md"
+
+# ------------------------------------------------------------
+# 后台命令注册表：run_command 超时未结束（未开强制退出）的命令转入后台，
+# AI 可用 check_command 轮询进度。reader 线程持续排空管道，防止缓冲填满阻塞进程。
+# ------------------------------------------------------------
+_running_cmds: dict = {}          # cmd_id -> 记录
+_cmd_seq = itertools.count(1)     # 自增命令编号
+_COMMAND_OUTPUT_MAX = 60000       # 单次返回的输出上限（字符）
+_CREATE_NO_WINDOW = 0x08000000
+
+
+def _console_encoding() -> str:
+    """控制台程序输出编码：GetOEMCP 获取 cmd 实际代码页（中文系统 cp936），
+    避免 Python UTF-8 模式下按 utf-8 解码 GBK 输出导致乱码/解码异常"""
+    try:
+        import ctypes
+        cp = ctypes.windll.kernel32.GetOEMCP()
+        if cp:
+            return f"cp{cp}"
+    except Exception:
+        pass
+    return locale.getpreferredencoding(False)
+
+
+def _kill_process_tree(pid: int) -> bool:
+    """taskkill /T 结束整个进程树（shell 启动的进程常有子进程）"""
+    try:
+        subprocess.run(f"taskkill /PID {pid} /T /F", shell=True,
+                       capture_output=True, text=True, timeout=15)
+        return True
+    except Exception:
+        return False
+
+
+def _drain_pipe(pipe, lines: list, lock: threading.Lock):
+    """后台线程逐行读取管道并存入共享缓冲（防管道填满导致进程阻塞）"""
+    try:
+        for line in iter(pipe.readline, ""):
+            with lock:
+                lines.append(line)
+    except Exception:
+        pass
+    finally:
+        try:
+            pipe.close()
+        except Exception:
+            pass
+
+
+def _collect(rec: dict) -> str:
+    """汇总后台命令的已收集输出（stdout + stderr，带截断）"""
+    with rec["lock"]:
+        out = "".join(rec["out"]).strip()
+        err = "".join(rec["err"]).strip()
+    text = out
+    if err:
+        text += f"\n[stderr] {err[:8000]}" if text else f"[stderr] {err[:8000]}"
+    if len(text) > _COMMAND_OUTPUT_MAX:
+        text = "（输出过长，已截断）\n" + text[-_COMMAND_OUTPUT_MAX:]
+    return text
 
 # ---------- 工具定义（LLM 可见） ----------
 TOOLS = [
@@ -188,19 +252,40 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "run_command",
-            "description": "在系统终端执行命令（受沙盒白名单约束）。只读诊断命令放行，"
-                           "危险命令（删除/格式化/关机等）会被拒绝。"
-                           "启动 GUI 应用/常驻程序时会立即返回，不等待其退出。",
+            "description": "在系统终端执行命令（受沙盒约束）。危险命令（删除/格式化/关机等）会被拒绝。"
+                           "默认等待 wait 秒（默认 5）：期间持续收集输出；若 wait 秒内未完成，"
+                           "force_quit=true 则强制结束进程树，false 则转入后台运行，返回命令 ID，"
+                           "之后用 check_command 轮询进度。启动 GUI 应用建议 wait=1。",
             "parameters": {"type": "object",
-                           "properties": {"command": {"type": "string"}},
+                           "properties": {
+                               "command": {"type": "string", "description": "要执行的命令"},
+                               "wait": {"type": "integer",
+                                        "description": "等待秒数，默认 5。长任务可调大以等待更多输出"},
+                               "force_quit": {"type": "boolean",
+                                              "description": "是否开启超时强制退出：wait 秒内未完成则强制结束进程树。"
+                                                             "默认 false（转入后台运行，可轮询）。预计会长时间挂起/无输出的命令建议开启"}},
                            "required": ["command"]},
         },
     },
     {
         "type": "function",
         "function": {
+            "name": "check_command",
+            "description": "查询后台运行命令的进度与最新输出（run_command 超时未结束且未开强制退出时转入后台的命令）。"
+                           "返回是否仍在运行、已产生的输出；若已结束则返回最终输出与退出码。"
+                           "不传 cmd_id 时列出全部后台命令。",
+            "parameters": {"type": "object",
+                           "properties": {
+                               "cmd_id": {"type": "integer",
+                                          "description": "后台命令 ID（run_command 返回的 id），不传则列出全部"}},
+                           "required": []},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "read_file",
-            "description": "读取文本文件内容（仅允许用户目录，最大 200KB）。",
+            "description": "读取文本文件内容（最大 200KB）。",
             "parameters": {"type": "object",
                            "properties": {"path": {"type": "string"}},
                            "required": ["path"]},
@@ -210,7 +295,7 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "write_file",
-            "description": "创建或覆盖写入文本文件（仅允许用户目录，目录不存在自动创建，最大 500KB）。",
+            "description": "创建或覆盖写入文本文件（目录不存在自动创建，最大 500KB）。",
             "parameters": {"type": "object",
                            "properties": {"path": {"type": "string"},
                                           "content": {"type": "string"}},
@@ -381,7 +466,11 @@ def execute_tool(name: str, args: dict, allow_dangerous: bool = False,
             agent_screen.type_text(str(args["text"]))
             return {"text": f"已输入文本（{len(str(args['text']))} 字符）", "images": []}
         if name == "run_command":
-            return _run_command(str(args.get("command", "")))
+            return _run_command(str(args.get("command", "")),
+                                agent_sandbox.to_int(args.get("wait", 5)),
+                                bool(args.get("force_quit", False)))
+        if name == "check_command":
+            return _check_command(agent_sandbox.to_int(args.get("cmd_id", 0)) or None)
         if name == "read_file":
             return _read_file(str(args.get("path", "")))
         if name == "write_file":
@@ -401,31 +490,113 @@ def execute_tool(name: str, args: dict, allow_dangerous: bool = False,
     return _blocked(f"[未知工具] {name}")
 
 
-def _run_command(command: str) -> dict:
+def _run_command(command: str, wait: int = 5, force_quit: bool = False) -> dict:
+    """执行命令，AI 自主选择等待/强制退出策略。
+
+    - wait 秒内完成：返回完整输出与退出码
+    - wait 秒内未完成：
+      · force_quit=True  → taskkill /T 强制结束进程树，返回已收集输出
+      · force_quit=False → 转入后台注册表（可 check_command 轮询进度），返回命令 ID
+    reader 线程持续排空 stdout/stderr，轮询期间可拿到增量进度。
+    """
     try:
+        wait = max(0, min(int(wait), 600))
+        # 控制台程序按 OEM 代码页输出（中文系统 GBK，英文 cp437），
+        # 用 text=True 默认 UTF-8 会解码失败导致 reader 线程崩溃、输出丢失
         proc = subprocess.Popen(command, shell=True, stdout=subprocess.PIPE,
                                 stderr=subprocess.PIPE, text=True,
-                                creationflags=0x08000000)  # CREATE_NO_WINDOW
-        try:
-            out, err = proc.communicate(timeout=5)
-        except subprocess.TimeoutExpired:
-            # GUI/常驻程序：5 秒内未退出则不再阻塞等待，进程保持后台运行
-            return {"text": "命令已启动并在后台运行（5 秒内未结束，判定为 GUI/常驻程序）。"
-                            "如需确认效果请截图查看。", "images": []}
-        out = (out or "").strip()
-        err = (err or "").strip()
-        text = out[:30000]
-        if err:
-            text += f"\n[stderr] {err[:8000]}"
-        if not text:
-            text = f"（命令完成，退出码 {proc.returncode}）"
-        return {"text": text, "images": []}
+                                encoding=_console_encoding(),
+                                errors="replace",
+                                creationflags=_CREATE_NO_WINDOW)
     except Exception as e:
         return _blocked(f"[沙盒] 命令执行失败: {e}")
 
+    out_lines, err_lines = [], []
+    lock = threading.Lock()
+    threads = [
+        threading.Thread(target=_drain_pipe, args=(proc.stdout, out_lines, lock), daemon=True),
+        threading.Thread(target=_drain_pipe, args=(proc.stderr, err_lines, lock), daemon=True),
+    ]
+    for t in threads:
+        t.start()
+
+    # 轮询等待：wait 秒内每 1s 检查一次进程是否退出（期间输出持续被 reader 线程收集）
+    deadline = time.time() + wait
+    while time.time() < deadline:
+        if proc.poll() is not None:
+            break
+        time.sleep(1.0)
+
+    with lock:
+        out = "".join(out_lines).strip()
+        err = "".join(err_lines).strip()
+    code = proc.poll()
+
+    def _compose() -> str:
+        text = out
+        if err:
+            text += f"\n[stderr] {err[:8000]}" if text else f"[stderr] {err[:8000]}"
+        if not text:
+            text = f"（命令完成，退出码 {code}）"
+        return text[:_COMMAND_OUTPUT_MAX]
+
+    if code is not None:
+        for t in threads:
+            t.join(1.0)   # 等 reader 线程排空剩余输出
+        return {"text": _compose(), "images": []}
+
+    if force_quit:
+        _kill_process_tree(proc.pid)
+        # 留出清理时间后再读一次输出
+        time.sleep(0.8)
+        for t in threads:
+            t.join(1.0)
+        with lock:
+            out = "".join(out_lines).strip()
+            err = "".join(err_lines).strip()
+        code = proc.poll()
+        return {"text": f"命令在 {wait}s 内未完成，已按 force_quit 强制结束（退出码 {code}）。\n" + _compose(),
+                "images": []}
+
+    # 转入后台运行：注册并返回 ID，AI 用 check_command 轮询进度
+    cmd_id = next(_cmd_seq)
+    _running_cmds[cmd_id] = {
+        "proc": proc, "command": command, "out": out_lines, "err": err_lines,
+        "lock": lock, "threads": threads, "start": time.strftime("%H:%M:%S"),
+    }
+    text = (f"命令已转入后台运行（ID {cmd_id}，{wait}s 内未完成）。可用 "
+            f"check_command(cmd_id={cmd_id}) 轮询进度。当前输出：\n" + _compose())
+    return {"text": text, "images": []}
+
+
+def _check_command(cmd_id: int = None) -> dict:
+    """轮询后台命令进度：cmd_id 为空时列出全部；指定 ID 时返回最新输出，
+    已结束则返回最终输出与退出码并从注册表移除。"""
+    if cmd_id is None:
+        # 顺手清理已结束的命令，避免注册表堆积僵尸条目
+        for i in [i for i, r in _running_cmds.items() if r["proc"].poll() is not None]:
+            del _running_cmds[i]
+        if not _running_cmds:
+            return {"text": "当前没有后台运行中的命令", "images": []}
+        lines = [f"ID {i}: {rec['command'][:80]}（{rec['start']} 启动）"
+                 for i, rec in _running_cmds.items()]
+        return {"text": "后台运行中的命令：\n" + "\n".join(lines), "images": []}
+
+    rec = _running_cmds.get(cmd_id)
+    if rec is None:
+        return {"text": f"未找到后台命令 ID {cmd_id}（可能已结束或被清理）", "images": []}
+    code = rec["proc"].poll()
+    if code is None:
+        return {"text": f"命令 ID {cmd_id} 仍在运行（{time.strftime('%H:%M:%S')}）。当前输出：\n"
+                        + _collect(rec), "images": []}
+    for t in rec.get("threads", []):
+        t.join(1.0)   # 等 reader 线程排空剩余输出
+    del _running_cmds[cmd_id]
+    return {"text": f"命令 ID {cmd_id} 已结束，退出码 {code}。最终输出：\n" + _collect(rec), "images": []}
+
 
 def _read_file(path: str) -> dict:
-    level, reason = agent_sandbox.assess_path(path)
+    level, reason = agent_sandbox.assess_path(path, "read")
     if level != "safe":
         return _blocked(f"[沙盒拒绝] {reason}")
     try:
@@ -439,8 +610,8 @@ def _read_file(path: str) -> dict:
 
 
 def _write_file(path: str, content: str) -> dict:
-    """创建/覆盖写入文件（仅允许用户目录，目录不存在自动创建）"""
-    level, reason = agent_sandbox.assess_path(path)
+    """创建/覆盖写入文件（系统目录也可写，删除系统目录仍被拒）"""
+    level, reason = agent_sandbox.assess_path(path, "write")
     if level != "safe":
         return _blocked(f"[沙盒拒绝] {reason}")
     if len(content) > 500 * 1024:
@@ -455,8 +626,8 @@ def _write_file(path: str, content: str) -> dict:
 
 
 def _edit_file(path: str, old_text: str, new_text: str) -> dict:
-    """编辑文件：精确替换第一处 old_text（仅允许用户目录）"""
-    level, reason = agent_sandbox.assess_path(path)
+    """编辑文件：精确替换第一处 old_text"""
+    level, reason = agent_sandbox.assess_path(path, "write")
     if level != "safe":
         return _blocked(f"[沙盒拒绝] {reason}")
     try:
@@ -475,8 +646,8 @@ def _edit_file(path: str, old_text: str, new_text: str) -> dict:
 
 
 def _list_directory(path: str) -> dict:
-    """列出目录内容（仅允许用户目录，最多 200 项）"""
-    level, reason = agent_sandbox.assess_path(path)
+    """列出目录内容（最多 200 项）"""
+    level, reason = agent_sandbox.assess_path(path, "read")
     if level != "safe":
         return _blocked(f"[沙盒拒绝] {reason}")
     try:

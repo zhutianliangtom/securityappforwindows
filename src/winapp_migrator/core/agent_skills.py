@@ -132,11 +132,17 @@ DEFAULT_AGENTS = [
                           "候选多时选择最匹配用户意图的一个"],
          },
          "run_command": {
-             "理解": "在系统终端执行命令（受沙盒白名单约束），返回命令输出。",
+             "理解": "在系统终端执行命令（受沙盒约束）。默认等待 wait 秒（默认5）；超时未结束且 force_quit=true 则强制结束，否则转入后台运行，用 check_command 轮询进度。",
              "执行拆分": ["分析命令安全性（删除/格式化/关机等一律拒绝）",
+                          "长任务自主决定 wait/force_quit：预计挂起或无输出则 force_quit=true，需要看进度则 false+check_command 轮询",
                           "说明意图并等待确认",
                           "执行并读取输出",
                           "截图验证屏幕变化"],
+         },
+         "check_command": {
+             "理解": "轮询后台运行命令（run_command 转入后台的）的进度与最新输出。",
+             "执行拆分": ["上一步 run_command 返回了后台命令 ID 时，用 check_command 持续轮询直到结束",
+                          "不传 cmd_id 可先列出全部后台命令"],
          },
          "write_file": {
              "理解": "创建或覆盖写入文本文件（避开系统关键目录）。",
@@ -270,7 +276,7 @@ def build_system_prompt(agent_name: str = "") -> str:
                "ask_user(需求不明确时向用户提问)、"
                "find_app(秒查已安装应用路径)、search_files(用户目录快速查找文件)、"
                "move_mouse/click/drag/scroll(鼠标)、press_key/type_text(键盘)、"
-               "run_command(白名单命令，启动GUI/常驻程序会立即返回、不等待退出)、read_file/write_file/edit_file(读写编辑文件)、"
+               "run_command(执行命令，可设 wait/force_quit，长任务用 check_command 轮询进度)、read_file/write_file/edit_file(读写编辑文件)、"
                "list_directory(列目录)、save_memory/load_memory(本地长期记忆)。"
                "若连接了 MCP 服务器，其工具同样可用。")
     prompt += ("\n\n提问机制：当用户需求不明确、缺少关键信息时，必须先调用 ask_user 向用户提问。"

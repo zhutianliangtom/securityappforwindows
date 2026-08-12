@@ -2,7 +2,7 @@
 
 - 命令白名单：只读/诊断类命令与普通文件操作（新建/复制/移动/删除）默认放行
 - 危险黑名单：递归/强制删除、格式化/关机/注册表/服务/权限等高风险操作直接拒绝
-- 路径限制：文件类操作拒绝系统关键目录（Windows/Program Files 等），其余路径放行
+- 路径限制：读/写放行系统目录（允许安装/更新到 Program Files），仅禁止删除系统关键目录内的内容
 - 评估结果分级：safe（放行）/ risky（需用户确认）/ dangerous（拒绝）
 """
 
@@ -67,6 +67,14 @@ def assess_command(cmd: str) -> tuple:
     for kw in DANGEROUS_KW:
         if kw in low:
             return "dangerous", f"命令含危险操作: {kw}"
+    # 删除命令 + 目标位于系统关键目录 → 拒绝（如 del C:\Program Files\xxx）
+    first_tok = low.split()[0]
+    del_base = os.path.basename(first_tok.replace("\\", "/"))
+    if del_base in ("del", "erase", "rd", "rmdir", "rm", "deltree"):
+        flat = low.replace("\\", "/").replace('"', "")
+        for d in _system_dirs():
+            if str(d).lower().replace("\\", "/") in flat:
+                return "dangerous", f"禁止删除系统关键目录: {d}"
     first = low.split()[0]
     base = os.path.basename(first.replace("\\", "/"))
     if base in SAFE_COMMANDS:
@@ -77,18 +85,25 @@ def assess_command(cmd: str) -> tuple:
     return "risky", "非白名单命令"
 
 
-def assess_path(path: str) -> tuple:
-    """评估文件路径：拒绝系统关键目录，其余路径放行。返回 (level, reason)"""
+def assess_path(path: str, operation: str = "write") -> tuple:
+    """评估文件路径（operation ∈ read/write/delete）。
+
+    读/写放行系统目录：安装/更新到 Program Files、读取系统配置等属正常需求，
+    不再一刀切拒绝（YOLO/确认模式均可执行）。
+    删除（delete）系统关键目录内的内容仍一律拒绝，守住安全底线。
+    返回 (level, reason)
+    """
     try:
         p = Path(os.path.abspath(os.path.expandvars(os.path.expanduser(path))))
     except Exception:
         return "dangerous", "路径解析失败"
-    for d in _system_dirs():
-        try:
-            p.relative_to(d)
-            return "dangerous", f"系统关键目录禁止操作: {d}"
-        except ValueError:
-            continue
+    if operation == "delete":
+        for d in _system_dirs():
+            try:
+                p.relative_to(d)
+                return "dangerous", f"系统关键目录禁止删除: {d}"
+            except ValueError:
+                continue
     return "safe", ""
 
 

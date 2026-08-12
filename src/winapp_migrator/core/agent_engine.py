@@ -367,7 +367,16 @@ class AgentEngine:
                         if not isinstance(args, dict):
                             args = {}
                     except json.JSONDecodeError:
-                        args = {}
+                        # 工具参数非法 JSON：不静默执行，返回提示让模型重新生成合法参数，
+                        # 避免以空参误调用或直接向上游抛 400
+                        text = ("[工具参数错误] tool_calls.arguments 不是合法 JSON，"
+                                "请检查参数格式（字符串需正确转义引号）并重新发起该工具调用。")
+                        self._messages.append({"role": "tool", "tool_call_id": call["id"],
+                                               "content": text})
+                        if self.on_result:
+                            self.on_result(name, text, [])
+                        last_failed = True
+                        continue
                     if self.on_status:
                         self.on_status(f"待执行工具: {name}")
                     # 每步确认：用户显式确认（AskBeforeEdit）后放行危险操作；YOLO 下危险命令在 confirm 中拒绝。

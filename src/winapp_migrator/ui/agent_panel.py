@@ -338,9 +338,30 @@ _MCP_TEMPLATES = [
 ]
 
 
+def _split_args(s: str) -> list:
+    """按空格拆分命令行参数；引号包裹的空格路径视为单个参数（引号剥离、反斜杠保留）"""
+    out, cur, quote = [], "", None
+    for ch in s:
+        if quote:
+            if ch == quote:
+                quote = None
+            else:
+                cur += ch
+        elif ch in ('"', "'"):
+            quote = ch
+        elif ch.isspace():
+            if cur:
+                out.append(cur)
+                cur = ""
+        else:
+            cur += ch
+    if cur:
+        out.append(cur)
+    return out
+
+
 class _McpServerDialog(QDialog):
     """单个 MCP 服务器配置：stdio（命令+参数）或 SSE（URL）"""
-
     def __init__(self, server: dict = None, parent=None):
         super().__init__(parent)
         self.setWindowTitle("编辑 MCP 服务器" if server else "添加 MCP 服务器")
@@ -442,7 +463,8 @@ class _McpServerDialog(QDialog):
             d["url"] = self.url_edit.text().strip()
         else:
             d["command"] = self.command_edit.text().strip()
-            args = [a for a in self.args_edit.text().split() if a.strip()]
+            # 引号包裹的空格路径视为单个参数（剥离引号、保留反斜杠）
+            args = [a for a in _split_args(self.args_edit.text()) if a.strip()]
             if args:
                 d["args"] = args
         return d

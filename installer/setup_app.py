@@ -263,7 +263,7 @@ class InstallWizard(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle(f"{APP_NAME} 安装向导")
-        self.setMinimumSize(820, 560)
+        self.setMinimumSize(820, 600)
         self.setWindowFlag(Qt.WindowType.WindowCloseButtonHint, True)
 
         self.install_dir = default_install_dir()
@@ -351,6 +351,29 @@ class InstallWizard(QMainWindow):
         h1.setObjectName("hint")
         h1.setWordWrap(True)
         l1.addWidget(h1)
+        l1.addSpacing(10)
+        # 功能简介卡片（保持一贯的轻松风格，介绍本工具能做什么）
+        feat = QFrame()
+        feat.setStyleSheet(
+            "QFrame { background: white; border: 1px solid #E2E8F0; border-radius: 12px; }"
+            "QLabel { color: #1E293B; font-size: 13px; padding: 2px 0; }"
+        )
+        fl = QVBoxLayout(feat)
+        fl.setContentsMargins(16, 12, 16, 12)
+        fl.setSpacing(4)
+        ftitle = QLabel("🛠️ 它能帮你做这些：")
+        ftitle.setStyleSheet("font-size: 14px; font-weight: 700; color: #2563EB;")
+        fl.addWidget(ftitle)
+        for line in [
+            "📦 应用搬家：把 C 盘的应用一键搬到别的盘，绿色无损",
+            "🧹 应用卸载：连根拔起，绝不留下一点垃圾",
+            "⚡ 一键优化内存：卡顿？给你的内存做个大扫除",
+            "🛡️ 静默防护：恶意进程/启动项自动拦截，超凶",
+            "🤖 zhuzhu Copilot：AI 帮你干活，说句话就行",
+            "🚀 高速下载：多线程并发，下载快到飞起",
+        ]:
+            fl.addWidget(QLabel(line))
+        l1.addWidget(feat)
         l1.addStretch(1)
         self.stack.addWidget(p1)
 

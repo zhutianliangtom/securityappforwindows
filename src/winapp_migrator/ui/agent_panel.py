@@ -20,8 +20,9 @@ import time
 import uuid
 from pathlib import Path
 
-from PyQt6.QtCore import Qt, QTimer, QSettings, QPropertyAnimation, pyqtSignal, QByteArray, QBuffer, QIODevice, QFileInfo
-from PyQt6.QtGui import QIcon, QFont, QPainter, QPen, QColor, QPixmap, QImage
+from PyQt6.QtCore import (Qt, QTimer, QSettings, QPropertyAnimation, pyqtSignal,
+                          pyqtProperty, QEasingCurve, QByteArray, QBuffer, QIODevice, QFileInfo)
+from PyQt6.QtGui import QIcon, QFont, QPainter, QPen, QColor, QPixmap, QImage, QPainterPath
 from PyQt6.QtWidgets import (
     QDialog, QLabel, QLineEdit, QPushButton, QComboBox, QScrollArea,
     QVBoxLayout, QHBoxLayout, QMessageBox, QFormLayout, QWidget,
@@ -857,6 +858,85 @@ class _AskUserDialog(QDialog):
         return self._answer or "（用户取消回答）"
 
 
+class _ArrowComboBox(QComboBox):
+    """带旋转动画下拉箭头的 QComboBox：展开时箭头旋转 180° 指向向上，收起时转回向下。
+
+    深色主题下样式表常把原生下拉箭头覆盖消失，此组件在右侧下拉区自绘箭头，
+    并配合 hover/展开状态变色，作为模型选择菜单的微交互点缀。
+    """
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._arrow_angle = 0.0        # 箭头旋转角度：0=收起，180=展开
+        self._arrow_open = False
+        self._arrow_hover = False
+        self._arrow_anim = QPropertyAnimation(self, b"arrowAngle", self)
+        self._arrow_anim.setDuration(160)
+        self._arrow_anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+
+    # ---------- 动画属性 ----------
+    def get_arrowAngle(self) -> float:
+        return self._arrow_angle
+
+    def set_arrowAngle(self, a: float):
+        self._arrow_angle = a
+        self.update()
+
+    arrowAngle = pyqtProperty(float, get_arrowAngle, set_arrowAngle)
+
+    # ---------- 展开/收起触发旋转动画 ----------
+    def showPopup(self):
+        super().showPopup()
+        self._run_arrow(True)
+
+    def hidePopup(self):
+        super().hidePopup()
+        self._run_arrow(False)
+
+    def _run_arrow(self, opening: bool):
+        self._arrow_open = opening
+        self._arrow_anim.stop()
+        self._arrow_anim.setStartValue(self._arrow_angle)
+        self._arrow_anim.setEndValue(180.0 if opening else 0.0)
+        self._arrow_anim.start()
+
+    def enterEvent(self, e):
+        self._arrow_hover = True
+        self.update()
+        super().enterEvent(e)
+
+    def leaveEvent(self, e):
+        self._arrow_hover = False
+        self.update()
+        super().leaveEvent(e)
+
+    def paintEvent(self, e):
+        super().paintEvent(e)
+        # 在右侧下拉区自绘旋转箭头（∨ 形折线，展开后旋转 180° 变为 ∧）
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        arrow_w = 22   # 与样式表 ::drop-down 宽度一致，预留箭头区域
+        cx = self.rect().right() - arrow_w / 2
+        cy = self.rect().center().y()
+        p.save()
+        p.translate(cx, cy)
+        p.rotate(self._arrow_angle)
+        color = ACCENT if (self._arrow_open or self._arrow_hover) else TEXT_DIM
+        pen = QPen(QColor(color))
+        pen.setWidthF(1.6)
+        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+        pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+        p.setPen(pen)
+        s = 4.0
+        path = QPainterPath()
+        path.moveTo(-s, -s * 0.5)
+        path.lineTo(0.0, s * 0.5)
+        path.lineTo(s, -s * 0.5)
+        p.drawPath(path)
+        p.restore()
+        p.end()
+
+
 class AgentPanel(QDialog):
     delta_signal = pyqtSignal(str)
     status_signal = pyqtSignal(str)
@@ -1164,7 +1244,7 @@ class AgentPanel(QDialog):
         bottom.addWidget(self.input, 1)
 
         # 输入框右侧：手动切换本次使用的模型（选「自动」则按工作力度路由）
-        self.model_combo = QComboBox()
+        self.model_combo = _ArrowComboBox()
         self.model_combo.setMinimumWidth(150)
         self.model_combo.setMaximumWidth(230)
         self.model_combo.setStyleSheet(

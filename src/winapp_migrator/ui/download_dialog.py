@@ -240,6 +240,7 @@ class DownloadDialog(QDialog):
                       "服务器不支持 Range 时自动单线程")
         hint.setStyleSheet(f"font-size: 12px; color: {PALETTE['text_secondary']};")
         lay.addWidget(hint)
+        add_brand_footer(self)
 
     # ---------- 任务管理 ----------
     def _pick_dir(self) -> Optional[str]:

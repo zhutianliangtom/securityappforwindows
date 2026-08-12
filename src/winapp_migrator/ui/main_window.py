@@ -554,6 +554,12 @@ class MainWindow(QMainWindow):
         switch_row.addStretch(1)
         layout.addLayout(switch_row)
 
+        about_btn = SecondaryButton("ℹ️ 关于我们")
+        about_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        about_btn.setMinimumHeight(40)
+        about_btn.clicked.connect(self._show_about)
+        layout.addWidget(about_btn)
+
         return card
 
     def _populate_drives(self):
@@ -1086,6 +1092,12 @@ class MainWindow(QMainWindow):
         self._agent_panel.show()
         self._agent_panel.raise_()
         self._agent_panel.activateWindow()
+
+    def _show_about(self):
+        """关于我们弹窗"""
+        QMessageBox.information(
+            self, "关于我们",
+            "开发者是一名14岁的初中生，通过vibe coding开发而来")
 
     def _start_memory_optimize(self):
         """一键优化内存"""

@@ -41,6 +41,7 @@ from PyQt6.QtWidgets import (
 from winapp_migrator.core import agent_llm, agent_engine, agent_skills, agent_sandbox, agent_tools, agent_screen
 from winapp_migrator.core.agent_mcp import McpManager
 from winapp_migrator.core.agent_screen import capture_screen_data_url
+from winapp_migrator.ui.widgets import add_brand_footer
 from winapp_migrator.utils.helpers import is_admin
 
 # ---------- 深色"星际控制台"主题 ----------
@@ -397,6 +398,7 @@ class _ConfirmDialog(QDialog):
         btns.addWidget(deny)
         btns.addWidget(allow)
         lay.addLayout(btns)
+        add_brand_footer(self)
 
     def _allow(self):
         self.result_ok = True
@@ -555,6 +557,7 @@ class _AgentSettingsDialog(QDialog):
         btns.addWidget(ok)
         btns.addWidget(cancel)
         root.addLayout(btns)
+        add_brand_footer(self)
 
     def _save(self):
         base_url = self.base_edit.text().strip()
@@ -662,6 +665,7 @@ class _McpServerDialog(QDialog):
         btns.addWidget(ok)
         btns.addWidget(cancel)
         form.addRow(btns)
+        add_brand_footer(self)
 
         self._sync_type()
         if server and server.get("type") == "sse":
@@ -775,6 +779,7 @@ class _McpManagerDialog(QDialog):
         foot.addWidget(save_b)
         foot.addWidget(cancel_b)
         lay.addLayout(foot)
+        add_brand_footer(self)
 
         self._reload_list()
 
@@ -883,6 +888,7 @@ class _AskUserDialog(QDialog):
         btns.addWidget(ok)
         btns.addWidget(cancel)
         lay.addLayout(btns)
+        add_brand_footer(self)
 
     def _accept_clicked(self):
         sel = [b.text() for b in self._choice_btns if b.isChecked()]
@@ -1608,6 +1614,7 @@ class AgentPanel(QDialog):
                      "skills/agents/MCP 配置见 ~/.winapp_migrator/agent/")
         tip.setStyleSheet(f"color: {TEXT_DIM}; font-size: 11px;")
         root.addWidget(tip)
+        add_brand_footer(self)
 
     def _connect_signals(self):
         self.delta_signal.connect(self._on_delta)

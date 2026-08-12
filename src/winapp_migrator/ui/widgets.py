@@ -8,7 +8,7 @@ from PyQt6.QtWidgets import (
     QFileIconProvider, QApplication
 )
 from PyQt6.QtCore import (
-    Qt, QSize, QRect, QFileInfo, QPoint, QTimer, QPropertyAnimation,
+    Qt, QSize, QRect, QFileInfo, QPoint, QTimer, QObject, QPropertyAnimation,
     QParallelAnimationGroup, QEasingCurve, pyqtSignal, pyqtProperty
 )
 from PyQt6.QtGui import QColor, QPainter, QIcon, QFont, QFontMetrics, QPixmap
@@ -120,6 +120,50 @@ class SecondaryButton(QPushButton):
         self.setMinimumHeight(40)
 
 
+class _BrandFooterPlacer(QObject):
+    """左下角品牌字样定位器：跟随窗口 resize 保持在左下角"""
+
+    def __init__(self, foot: QLabel, dialog: QDialog):
+        super().__init__(dialog)
+        self._foot, self._dialog = foot, dialog
+        dialog.installEventFilter(self)
+        QTimer.singleShot(0, self._place)
+
+    def _place(self):
+        f, d = self._foot, self._dialog
+        f.adjustSize()
+        f.move(8, d.height() - f.height() - 8)
+
+    def eventFilter(self, obj, ev):
+        from PyQt6.QtCore import QEvent
+        if obj is self._dialog and ev.type() == QEvent.Type.Resize:
+            self._place()
+        return False
+
+
+def add_brand_footer(dialog: QDialog, overlay: bool = False) -> None:
+    """在所有对话框底部左下角追加 'Create By Xiaozhu' 品牌字样。
+
+    overlay=False：QVBoxLayout 根布局直接在末尾追加；
+    其他布局（QFormLayout）或 overlay=True（主面板等复杂布局）
+    用绝对定位叠加在左下角并跟随窗口缩放。
+    """
+    from PyQt6.QtWidgets import QFormLayout
+    lay = dialog.layout()
+    if lay is None:
+        return
+    foot = QLabel("Create By Xiaozhu")
+    foot.setObjectName("brandFooter")
+    foot.setStyleSheet("color: #8A93A6; font-size: 10px; background: transparent;")
+    foot.setAlignment(Qt.AlignmentFlag.AlignLeft)
+    if overlay or not isinstance(lay, QVBoxLayout):
+        foot.setParent(dialog)
+        _BrandFooterPlacer(foot, dialog)
+        foot.show()
+        return
+    lay.addWidget(foot)
+
+
 class DataDirDialog(QDialog):
     """迁移前勾选要一并移动的数据目录（AppData/文档等安装目录之外的目录）"""
 
@@ -224,6 +268,7 @@ class UninstallConfirmDialog(QDialog):
         ok_btn.clicked.connect(self.accept)
         btn_layout.addWidget(ok_btn)
         layout.addLayout(btn_layout)
+        add_brand_footer(self)
 
     def _add_section(self, layout, title, lines):
         tl = QLabel(title)

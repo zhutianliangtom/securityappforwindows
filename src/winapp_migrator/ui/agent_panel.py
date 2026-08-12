@@ -1858,12 +1858,12 @@ class AgentPanel(QDialog):
                              'margin:16px 0 4px 14px;">'
                              f'{seg["html"]}</div>')
             elif t == "image":
-                # 截图融入主对话气泡：下方缩略图，不显示“已截屏”等提示小字
+                # 截图融入主对话气泡：圆角缩略图 + 细边框，不显示“已截屏”等提示小字
                 url = seg.get("url", "")
                 parts.append(
                     f'<div style="padding-left:30px;">'
-                    f'<img src="{url}" width="{img_w}" style="border-radius:8px;display:block;'
-                    'margin:12px 0 12px 0;"></div>')
+                    f'<img src="{url}" width="{img_w}" style="border-radius:10px;'
+                    'border:1px solid #223354;display:block;margin:12px 0 12px 0;"></div>')
             elif t == "text":
                 parts.append(f'<div style="color:{TEXT};font-size:{f_main}px;">'
                              f'{_render_text(seg["raw"])}</div>')
@@ -2376,21 +2376,25 @@ class AgentPanel(QDialog):
         self._update_welcome()          # 发消息后欢迎介绍立即消失
 
         # 用户气泡：文字与拖入的图片/文件一并渲染进同一气泡
-        # （图片缩小缩略图、文件用彩色徽章缩略图+文件名，独立成块不挤压不窜位）
+        # 图片为圆角缩略图；文件为紧凑卡片（徽章+文件名+大小）横排，统一深色卡片风
         if images or files:
             parts = ([f'<div style="font-size:14px;">{_esc(text).replace(chr(10), "<br/>")}</div>']
                      if text else [])
-            parts += [f'<img src="{u}" width="200" style="border-radius:8px;display:block;'
-                      'margin:12px 0 12px 0;">' for u in images]
+            parts += [f'<img src="{u}" width="200" style="border-radius:10px;'
+                      'border:1px solid #223354;display:block;margin:10px 0;">' for u in images]
             for p in files:
+                fname = os.path.basename(p)
+                fsize = self._file_size_text(p)
                 parts.append(
-                    f'<div style="display:inline-block;text-align:center;margin:12px 8px 12px 0;'
-                    f'padding:6px;background:{PANEL};border:1px solid {BORDER};border-radius:8px;">'
-                    f'<img src="{self._file_thumb_data_url(p)}" width="56" height="56" '
-                    'style="display:block;">'
-                    f'<div style="font-size:11px;color:{TEXT_DIM};max-width:80px;'
-                    'white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">'
-                    f'{_esc(os.path.basename(p)[:12])}</div></div>')
+                    f'<div style="display:inline-block;vertical-align:middle;'
+                    f'background:#152036;border:1px solid #223354;border-radius:10px;'
+                    'padding:7px 10px;margin:10px 8px 10px 0;">'
+                    f'<img src="{self._file_thumb_data_url(p)}" width="34" height="34" '
+                    'style="vertical-align:middle;border-radius:6px;">'
+                    f'<span style="vertical-align:middle;margin-left:8px;">'
+                    f'<span style="color:{TEXT};font-size:13px;">{_esc(fname[:18])}</span>'
+                    f'<br><span style="color:{TEXT_DIM};font-size:10px;">{_esc(fsize or "文件")}</span>'
+                    f'</span></div>')
             src = "<br/>".join(parts)
             b = self._add_bubble(self._scale_user_html(src, self._font_scale()),
                                  "user", rich=True)
@@ -2765,24 +2769,58 @@ class AgentPanel(QDialog):
         for p in paths or []:
             self._add_attachment(p)
 
+    @staticmethod
+    def _round_pixmap(src: QPixmap, size: int, radius: int = 8) -> QPixmap:
+        """把任意图片按方形圆角裁剪（居中裁切），用于附件卡片/气泡缩略图"""
+        pm = QPixmap(size, size)
+        pm.fill(Qt.GlobalColor.transparent)
+        p = QPainter(pm)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        path = QPainterPath()
+        path.addRoundedRect(0, 0, size, size, radius, radius)
+        p.setClipPath(path)
+        p.drawPixmap(0, 0, src.scaled(size, size,
+                                      Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+                                      Qt.TransformationMode.SmoothTransformation))
+        p.end()
+        return pm
+
+    @staticmethod
+    def _file_size_text(path: str) -> str:
+        """文件大小人性化显示（B/KB/MB）"""
+        try:
+            n = os.path.getsize(path)
+        except OSError:
+            return ""
+        if n < 1024:
+            return f"{n} B"
+        if n < 1024 * 1024:
+            return f"{n / 1024:.1f} KB"
+        return f"{n / 1024 / 1024:.1f} MB"
+
     def _attach_thumb(self, pixmap: QPixmap, tooltip: str, name: str = ""):
+        """附件条缩略图卡片：圆角方形缩略图 + 文件名，hover 边框高亮（深色精密卡片风）"""
         box = QWidget()
+        box.setObjectName("attCard")
         box.setToolTip(tooltip)
+        box.setFixedSize(78, 86)
         box.setStyleSheet(
-            f"QWidget {{ background: {PANEL}; border: 1px solid {BORDER}; border-radius: 8px; }}")
+            f"#attCard {{ background: #152036; border: 1px solid #223354; border-radius: 10px; }}"
+            f"#attCard:hover {{ background: #182644; border: 1px solid {ACCENT}; }}")
         v = QVBoxLayout(box)
-        v.setContentsMargins(6, 6, 6, 6)
-        v.setSpacing(3)
+        v.setContentsMargins(6, 8, 6, 6)
+        v.setSpacing(4)
         v.setAlignment(Qt.AlignmentFlag.AlignCenter)
         thumb = QLabel()
-        thumb.setPixmap(pixmap.scaled(56, 56, Qt.AspectRatioMode.KeepAspectRatio,
-                                      Qt.TransformationMode.SmoothTransformation))
+        thumb.setFixedSize(44, 44)
+        thumb.setPixmap(self._round_pixmap(pixmap, 44))
         thumb.setToolTip(tooltip)
         v.addWidget(thumb, 0, Qt.AlignmentFlag.AlignCenter)
         if name:
-            nl = QLabel(name if len(name) <= 12 else name[:11] + "…")
+            nl = QLabel(name if len(name) <= 9 else name[:8] + "…")
             nl.setStyleSheet(f"color: {TEXT_DIM}; font-size: 10px;")
             nl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            nl.setToolTip(tooltip)
             v.addWidget(nl, 0, Qt.AlignmentFlag.AlignCenter)
         # 插入到 stretch 之前
         self._attach_lay.insertWidget(self._attach_lay.count() - 1, box)

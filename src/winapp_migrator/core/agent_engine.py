@@ -247,6 +247,20 @@ class AgentEngine:
             if drop:
                 m["content"] = keep
 
+    @staticmethod
+    def _strip_images(messages: list):
+        """纯文本模型：移除全部 image_url 内容项（历史残留/自动截图均清理）。
+        消息若因此只剩图，补占位文本，避免发送空 content 被上游拒绝"""
+        for m in messages:
+            c = m.get("content")
+            if not isinstance(c, list):
+                continue
+            kept = [x for x in c
+                    if not (isinstance(x, dict) and x.get("type") == "image_url")]
+            if not kept:
+                kept = [{"type": "text", "text": "（截图已忽略）"}]
+            m["content"] = kept
+
     def start(self, user_input: str, agent_name: str = "", images: list = None,
               skills: list = None):
         """后台线程执行一轮任务；images: 用户拖入的图片 data URL 列表；
@@ -416,6 +430,8 @@ class AgentEngine:
                 if self.on_status:
                     self.on_status("正在思考…")
                 self._prune_images(2)  # 历史截图只保留最近 2 张，其余剥离成纯文本，控制视觉输入 tokens
+                if self.text_only:
+                    self._strip_images(self._messages)   # 纯文本模型：发送前清掉全部 image_url（历史残留/自动截图都清）
                 # 自动压缩：上下文过长时合并旧消息（保留任务目标），防止长任务中 AI 遗忘开头
                 if len(self._messages) > 45:
                     n = self.compress_history(keep_recent=8)
@@ -482,8 +498,9 @@ class AgentEngine:
                             self.on_status(f"正在执行: {name}")
                         res = self._execute(name, args, allow_dangerous=approved)
                         text, imgs = res["text"], res["images"]
-                        # 操作类工具（点击/输入等）无截图时自动截屏验证（点击完成后必须截图验证闭环）
-                        if not imgs and name in _SCREEN_CHANGING:
+                        # 操作类工具（点击/输入等）无截图时自动截屏验证（点击完成后必须截图验证闭环）；
+                        # 纯文本模型看不到图，跳过自动截图，改用文本验证
+                        if not imgs and name in _SCREEN_CHANGING and not self.text_only:
                             try:
                                 imgs = [capture_screen_data_url()]
                             except Exception:

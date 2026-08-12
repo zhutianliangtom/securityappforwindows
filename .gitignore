@@ -1,0 +1,34 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.egg-info/
+.eggs/
+*.log
+
+# PyInstaller
+build/__pycache__/
+build/WinAppMigrator/
+build/setup/
+build/uninstall/
+build/build/
+dist/
+dist_new/
+*.spec
+!build/WinAppMigrator.spec
+!installer/setup.spec
+!installer/uninstall.spec
+
+# Inno Setup
+Output/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+Thumbs.db
+.DS_Store

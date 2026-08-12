@@ -1,0 +1,864 @@
+"""Agent 内置工具：注册表（LLM function calling schema）+ 执行（接入沙盒评估）
+
+执行结果统一为 {"text": str, "images": [data_url]}：
+- text 作为 tool 消息文本返回给模型
+- images 中的截图 data URL 由引擎并入下一轮视觉输入（截图验证闭环）
+"""
+
+import itertools
+import json
+import locale
+import os
+import subprocess
+import threading
+import time
+from datetime import datetime
+from pathlib import Path
+
+from winapp_migrator.core import agent_sandbox
+from winapp_migrator.core import agent_screen
+from winapp_migrator.core import agent_find
+from winapp_migrator.core import agent_locator
+
+# 本地记忆文件（AI 长期记忆，markdown 格式）
+MEMORY_FILE = Path.home() / ".winapp_migrator" / "agent" / "memory.md"
+
+# ------------------------------------------------------------
+# 工作目录（面板"选择工作目录"设置，QSettings 持久化）：
+# 查找/创建/修改/删除/读取文件与运行命令优先在此目录执行
+# ------------------------------------------------------------
+WORKDIR: str = ""
+
+
+def set_workdir(path: str):
+    global WORKDIR
+    WORKDIR = (path or "").strip()
+
+
+def get_workdir() -> str:
+    return WORKDIR
+
+
+def _resolve(path: str) -> Path:
+    """路径解析：空 → 工作目录；相对 → 工作目录/相对路径；绝对 → 原样"""
+    raw = os.path.expandvars(os.path.expanduser((path or "").strip()))
+    if not raw:
+        return Path(WORKDIR) if WORKDIR else Path.cwd()
+    p = Path(raw)
+    if p.is_absolute():
+        return p
+    return (Path(WORKDIR) / p) if WORKDIR else p
+
+# ------------------------------------------------------------
+# 后台命令注册表：run_command 超时未结束（未开强制退出）的命令转入后台，
+# AI 可用 check_command 轮询进度。reader 线程持续排空管道，防止缓冲填满阻塞进程。
+# ------------------------------------------------------------
+_running_cmds: dict = {}          # cmd_id -> 记录
+_cmd_seq = itertools.count(1)     # 自增命令编号
+_COMMAND_OUTPUT_MAX = 60000       # 单次返回的输出上限（字符）
+_CREATE_NO_WINDOW = 0x08000000
+
+
+def _console_encoding() -> str:
+    """控制台程序输出编码：GetOEMCP 获取 cmd 实际代码页（中文系统 cp936），
+    避免 Python UTF-8 模式下按 utf-8 解码 GBK 输出导致乱码/解码异常"""
+    try:
+        import ctypes
+        cp = ctypes.windll.kernel32.GetOEMCP()
+        if cp:
+            return f"cp{cp}"
+    except Exception:
+        pass
+    return locale.getpreferredencoding(False)
+
+
+def _kill_process_tree(pid: int) -> bool:
+    """taskkill /T 结束整个进程树（shell 启动的进程常有子进程）"""
+    try:
+        subprocess.run(f"taskkill /PID {pid} /T /F", shell=True,
+                       capture_output=True, text=True, timeout=15)
+        return True
+    except Exception:
+        return False
+
+
+def _drain_pipe(pipe, lines: list, lock: threading.Lock):
+    """后台线程逐行读取管道并存入共享缓冲（防管道填满导致进程阻塞）"""
+    try:
+        for line in iter(pipe.readline, ""):
+            with lock:
+                lines.append(line)
+    except Exception:
+        pass
+    finally:
+        try:
+            pipe.close()
+        except Exception:
+            pass
+
+
+def _collect(rec: dict) -> str:
+    """汇总后台命令的已收集输出（stdout + stderr，带截断）"""
+    with rec["lock"]:
+        out = "".join(rec["out"]).strip()
+        err = "".join(rec["err"]).strip()
+    text = out
+    if err:
+        text += f"\n[stderr] {err[:8000]}" if text else f"[stderr] {err[:8000]}"
+    if len(text) > _COMMAND_OUTPUT_MAX:
+        text = "（输出过长，已截断）\n" + text[-_COMMAND_OUTPUT_MAX:]
+    return text
+
+# ---------- 工具定义（LLM 可见） ----------
+TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "screenshot",
+            "description": "截取当前整个屏幕，返回截图图像。观察屏幕/验证操作结果时使用，"
+                           "AI 视觉模型会直接看到截图内容。",
+            "parameters": {"type": "object", "properties": {}, "required": []},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_screen_size",
+            "description": "获取屏幕分辨率（宽、高像素），用于计算点击/移动坐标。",
+            "parameters": {"type": "object", "properties": {}, "required": []},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_windows",
+            "description": "枚举当前可见窗口（标题+编号），供 AI 选择目标窗口聚焦操作，"
+                           "避免全屏截图中其他窗口干扰。",
+            "parameters": {"type": "object", "properties": {}, "required": []},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "capture_window",
+            "description": "截取指定窗口（只截该窗口，避开其他窗口遮挡/干扰），返回截图与窗口内文字元素清单。"
+                           "窗口图带坐标刻度，后续 click 的窗口内读数会自动换算回屏幕坐标。"
+                           "先调用 list_windows 确认目标窗口，window 传标题（模糊）或编号。",
+            "parameters": {"type": "object",
+                           "properties": {
+                               "window": {"type": "string",
+                                          "description": "目标窗口：标题（支持模糊匹配）或 list_windows 返回的编号"}},
+                           "required": ["window"]},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "find_app",
+            "description": "快速查找已安装应用（扫描开始菜单/桌面快捷方式/注册表，秒查带缓存），"
+                           "返回可启动的完整路径候选。当用户要打开某个应用而你不确定其确切名称/"
+                           "路径时使用，无需逐层截图找图标。",
+            "parameters": {"type": "object",
+                           "properties": {
+                               "query": {"type": "string", "description": "应用名称，如 微信/记事本/chrome"},
+                               "limit": {"type": "integer", "description": "最多返回候选数，默认 10"}},
+                           "required": ["query"]},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "search_files",
+            "description": "在用户目录快速模糊查找文件（并行遍历，找到即返回），"
+                           "返回匹配的文件完整路径列表。当需要定位某个文件而不知道确切路径时使用。",
+            "parameters": {"type": "object",
+                           "properties": {
+                               "query": {"type": "string", "description": "文件名关键字，如 报告/photo/setup"},
+                               "folder": {"type": "string", "description": "限定搜索目录（可选，默认用户常用目录）"},
+                               "limit": {"type": "integer", "description": "最多返回条数，默认 30"}},
+                           "required": ["query"]},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "ask_user",
+            "description": "当用户需求不明确、缺少关键信息（如目标文件路径、目标对象、期望结果）时，"
+                           "用此工具向用户提问并等待回答。禁止在信息不足时猜测执行，必须先提问。",
+            "parameters": {"type": "object",
+                           "properties": {
+                               "question": {"type": "string", "description": "要问用户的问题（简洁明确）"},
+                               "options": {"type": "array", "items": {"type": "string"},
+                                           "description": "建议选项，用户可直接选择（可为空数组表示自由回答）"},
+                               "multi_select": {"type": "boolean",
+                                                "description": "是否允许多选，默认 false"}},
+                           "required": ["question"]},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "click_text",
+            "description": "按文字精确定位点击：输入目标文字（如按钮文字、菜单项、输入框标签），"
+                           "系统通过 Windows 原生控件(UIA)与屏幕OCR找到该文字的确切像素位置并点击，"
+                           "像素级精确，无需自己估算坐标。文字类目标（按钮/菜单/对话框按钮）优先用它，"
+                           "找不到时才用 click 视觉定位。",
+            "parameters": {"type": "object",
+                           "properties": {"text": {"type": "string",
+                                                   "description": "要点击的文字内容，如 确定/取消/开始/新建 等"},
+                                          "button": {"type": "string", "enum": ["left", "right", "middle"],
+                                                     "description": "鼠标键，默认 left"}},
+                           "required": ["text"]},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "move_mouse",
+            "description": "移动鼠标到指定像素坐标（不点击）。移动后截图会显示红色准星标记鼠标位置，"
+                           "用于图标目标的对齐：看准星是否套住目标，未对准按偏移修正坐标再移动，对准后再 click。",
+            "parameters": {"type": "object",
+                           "properties": {"x": {"type": "integer"}, "y": {"type": "integer"}},
+                           "required": ["x", "y"]},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "click",
+            "description": "在指定坐标点击鼠标（可指定左右中键与次数）。"
+                           "文字类目标优先用 click_text；图标/图形目标用准星对齐法："
+                           "先用 move_mouse 移到目标附近，截图看红色准星是否套住目标，"
+                           "未对准则修正坐标再移动，对准后 click（坐标=鼠标当前位置）一次点准。"
+                           "系统会自动把坐标换算为真实屏幕坐标。目标太小可先 zoom_in 放大。",
+            "parameters": {"type": "object",
+                           "properties": {"x": {"type": "integer"}, "y": {"type": "integer"},
+                                          "button": {"type": "string", "enum": ["left", "right", "middle"]},
+                                          "clicks": {"type": "integer"}},
+                           "required": ["x", "y"]},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "zoom_in",
+            "description": "以指定屏幕坐标为中心放大 400×400 区域（放大 3 倍并叠加细网格刻度），"
+                           "返回放大后的局部截图。用于两步精确定位：先在全屏图上估出目标附近坐标，"
+                           "再 zoom_in 放大后按放大图里的红色准星对齐目标（若鼠标在区域内），"
+                           "或按细刻度读数，随后用该坐标调用 click。"
+                           "注意：放大图内的坐标读数同样可直接作为 click 的 x/y，系统自动换算。",
+            "parameters": {"type": "object",
+                           "properties": {"x": {"type": "integer",
+                                                "description": "目标附近的屏幕坐标 X（全屏刻度读数）"},
+                                          "y": {"type": "integer",
+                                                "description": "目标附近的屏幕坐标 Y（全屏刻度读数）"}},
+                           "required": ["x", "y"]},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "drag",
+            "description": "从 (x1,y1) 拖动鼠标到 (x2,y2)（按住左键拖拽）。",
+            "parameters": {"type": "object",
+                           "properties": {"x1": {"type": "integer"}, "y1": {"type": "integer"},
+                                          "x2": {"type": "integer"}, "y2": {"type": "integer"}},
+                           "required": ["x1", "y1", "x2", "y2"]},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "scroll",
+            "description": "滚动鼠标滚轮，正值向上、负值向下（120 为 1 格）。",
+            "parameters": {"type": "object",
+                           "properties": {"delta": {"type": "integer"}},
+                           "required": ["delta"]},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "press_key",
+            "description": "按键盘虚拟键：enter/tab/escape/backspace/space/delete/home/end/"
+                           "pageup/pagedown/up/down/left/right/f1-f12 等。",
+            "parameters": {"type": "object",
+                           "properties": {"key": {"type": "string"}},
+                           "required": ["key"]},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "type_text",
+            "description": "输入文本（支持中文），可含特殊键名 enter/tab。",
+            "parameters": {"type": "object",
+                           "properties": {"text": {"type": "string"}},
+                           "required": ["text"]},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "run_command",
+            "description": "在系统终端执行命令（受沙盒约束）。危险命令（删除/格式化/关机等）会被拒绝。"
+                           "默认等待 wait 秒（默认 5）：期间持续收集输出；若 wait 秒内未完成，"
+                           "force_quit=true 则强制结束进程树，false 则转入后台运行，返回命令 ID，"
+                           "之后用 check_command 轮询进度。启动 GUI 应用建议 wait=1。",
+            "parameters": {"type": "object",
+                           "properties": {
+                               "command": {"type": "string", "description": "要执行的命令"},
+                               "wait": {"type": "integer",
+                                        "description": "等待秒数，默认 5。长任务可调大以等待更多输出"},
+                               "force_quit": {"type": "boolean",
+                                              "description": "是否开启超时强制退出：wait 秒内未完成则强制结束进程树。"
+                                                             "默认 false（转入后台运行，可轮询）。预计会长时间挂起/无输出的命令建议开启"}},
+                           "required": ["command"]},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "check_command",
+            "description": "查询后台运行命令的进度与最新输出（run_command 超时未结束且未开强制退出时转入后台的命令）。"
+                           "返回是否仍在运行、已产生的输出；若已结束则返回最终输出与退出码。"
+                           "不传 cmd_id 时列出全部后台命令。",
+            "parameters": {"type": "object",
+                           "properties": {
+                               "cmd_id": {"type": "integer",
+                                          "description": "后台命令 ID（run_command 返回的 id），不传则列出全部"}},
+                           "required": []},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "read_file",
+            "description": "读取文本文件内容（最大 200KB）。",
+            "parameters": {"type": "object",
+                           "properties": {"path": {"type": "string"}},
+                           "required": ["path"]},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "write_file",
+            "description": "创建或覆盖写入文本文件（目录不存在自动创建，最大 500KB）。",
+            "parameters": {"type": "object",
+                           "properties": {"path": {"type": "string"},
+                                          "content": {"type": "string"}},
+                           "required": ["path", "content"]},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "edit_file",
+            "description": "编辑文件：把文件中的 old_text 精确替换为 new_text（仅替换第一处，最大 200KB）。",
+            "parameters": {"type": "object",
+                           "properties": {"path": {"type": "string"},
+                                          "old_text": {"type": "string"},
+                                          "new_text": {"type": "string"}},
+                           "required": ["path", "old_text", "new_text"]},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "delete_file",
+            "description": "删除文件或空目录（工作目录优先）。删除系统关键目录内的内容仍被沙盒拒绝；"
+                           "非空目录请用 run_command 精确处理。",
+            "parameters": {"type": "object",
+                           "properties": {"path": {"type": "string",
+                                                   "description": "要删除的文件或空目录路径（相对路径基于工作目录）"}},
+                           "required": ["path"]},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_directory",
+            "description": "列出目录内容（仅允许用户目录，最多 200 项，带 DIR/FILE 标记），用于探索文件结构。",
+            "parameters": {"type": "object",
+                           "properties": {"path": {"type": "string"}},
+                           "required": ["path"]},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "save_memory",
+            "description": "把任务中的关键信息（用户偏好、重要结论、文件路径、约定等）追加保存到本地记忆文件 "
+                           "memory.md（自动带时间戳，单条 ≤8000 字符）。值得长期记住的内容请主动保存。",
+            "parameters": {"type": "object",
+                           "properties": {"content": {"type": "string"}},
+                           "required": ["content"]},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "load_memory",
+            "description": "读取本地记忆文件 memory.md 的完整内容。开始新任务或需要回忆过往信息时，"
+                           "由你自行决定是否调用。",
+            "parameters": {"type": "object", "properties": {}, "required": []},
+        },
+    },
+]
+
+# 沙盒拒绝返回（无截图）
+def _blocked(text: str) -> dict:
+    return {"text": text, "images": []}
+
+
+def _ask_user(args: dict, ask_user_cb) -> dict:
+    """向用户提问（需求不明确时强制提问，禁止猜测执行）"""
+    question = str(args.get("question", "")).strip()
+    if not question:
+        return _blocked("[ask_user] 缺少问题")
+    if not ask_user_cb:
+        return _blocked("[ask_user] 未接入提问面板，请基于已有信息继续")
+    try:
+        answer = ask_user_cb({
+            "question": question,
+            "options": args.get("options") or [],
+            "multi_select": bool(args.get("multi_select", False)),
+        })
+        return {"text": f"用户回答：{answer}", "images": []}
+    except Exception as e:
+        return _blocked(f"[ask_user] 提问失败: {e}")
+
+
+def execute_tool(name: str, args: dict, allow_dangerous: bool = False,
+                 ask_user_cb=None) -> dict:
+    """执行工具，返回 {"text", "images"}。
+
+    allow_dangerous=True 时放行危险操作（AskBeforeEdit 模式下用户显式确认后的授权）；
+    False 时危险操作硬拒绝（YOLO 自动放行场景的安全底线）。
+    ask_user_cb: Callable[[dict], str] 提问回调（阻塞式，返回用户回答文本）。
+    """
+    args = args or {}
+    if name == "ask_user":
+        return _ask_user(args, ask_user_cb)
+    level, reason = agent_sandbox.assess_tool(name, args)
+    if level == "dangerous" and not allow_dangerous:
+        return _blocked(f"[沙盒拒绝] {reason}")
+
+    try:
+        if name == "screenshot":
+            url = agent_screen.capture_screen_data_url()
+            # 同时用 OCR 提取文字元素坐标，随截图返回给模型（像素级点击依据）
+            png = agent_screen.capture_screen_png()
+            w, h = agent_screen.screen_size()
+            elems = agent_locator.locate_elements(png, w, h)
+            return {"text": "已截取屏幕。" + agent_locator.summarize(elems),
+                    "images": [url]}
+        if name == "get_screen_size":
+            w, h = agent_screen.screen_size()
+            return {"text": f"屏幕分辨率 {w}x{h}",
+                    "images": [agent_screen.capture_screen_data_url()]}
+        if name == "click_text":
+            # 按文字精确定位：UIA + OCR 找到文字中心坐标，直接点击（像素级，无需视觉读数）
+            target = str(args.get("text", "")).strip()
+            button = str(args.get("button", "left"))
+            if not target:
+                return {"text": "[click_text] 缺少要点击的文字参数 text", "images": []}
+            w, h = agent_screen.screen_size()
+            png = agent_screen.capture_screen_png()
+            elems = agent_locator.locate_elements(png, w, h)
+            hit = agent_locator.find_element(target, elems)
+            if hit is None:
+                # 兜底：重新截图 OCR 一次（UIA 有时缓存延迟），仍未命中则报错让模型换方案
+                elems = agent_locator.locate_elements(
+                    agent_screen.capture_screen_png(), w, h)
+                hit = agent_locator.find_element(target, elems)
+            if hit is None:
+                return {"text": f"[click_text] 未找到文字「{target}」。屏幕上的文字元素："
+                                f"{agent_locator.summarize(elems)}。请改用 click 视觉定位或确认目标存在。",
+                        "images": []}
+            x, y = hit
+            agent_screen.click_physical(x, y, button, 1)   # 物理像素直点，UIA/OCR 坐标无需换算
+            return {"text": f"已按文字「{target}」精确定位并点击屏幕坐标 ({x},{y})",
+                    "images": []}
+        if name == "find_app":
+            return {"text": agent_find.find_app(
+                str(args.get("query", "")),
+                agent_sandbox.to_int(args.get("limit", 10))), "images": []}
+        if name == "search_files":
+            folder = str(args.get("folder", "")).strip()
+            if not folder and WORKDIR:
+                folder = WORKDIR   # 未指定目录时默认在工作目录内查找
+            return {"text": agent_find.search_files(
+                str(args.get("query", "")), folder,
+                agent_sandbox.to_int(args.get("limit", 30))), "images": []}
+        if name == "list_windows":
+            return _list_windows()
+        if name == "capture_window":
+            return _capture_window(str(args.get("window", "")))
+        if name == "move_mouse":
+            agent_screen.move_mouse(agent_sandbox.to_int(args.get("x")),
+                                    agent_sandbox.to_int(args.get("y")))
+            return {"text": f"鼠标已移动到 ({args.get('x')}, {args.get('y')})", "images": []}
+        if name == "click":
+            x, y = agent_sandbox.to_int(args.get("x")), agent_sandbox.to_int(args.get("y"))
+            px, py = agent_screen.map_to_screen(x, y)   # 换算后的真实屏幕坐标（供模型核对）
+            agent_screen.click(x, y,
+                               str(args.get("button", "left")),
+                               agent_sandbox.to_int(args.get("clicks", 1)))
+            return {"text": f"已点击 ({x}, {y}) {args.get('button', 'left')} 键 x{args.get('clicks', 1)}"
+                            f"（换算屏幕坐标 {px},{py}）", "images": []}
+        if name == "zoom_in":
+            # 模型给的全屏读数 → 物理坐标 → 放大局部截图（切换视觉基准为 zoom 态）
+            x, y = agent_sandbox.to_int(args.get("x")), agent_sandbox.to_int(args.get("y"))
+            px, py = agent_screen.map_to_screen(x, y)
+            url = agent_screen.capture_zoom_data_url(px, py)
+            return {"text": f"已放大屏幕坐标 ({px},{py}) 附近 400×400 区域（3 倍）。"
+                            "请基于放大图内的细网格刻度精确读取目标坐标，再调用 click。",
+                    "images": [url]}
+        if name == "drag":
+            agent_screen.drag(agent_sandbox.to_int(args.get("x1")),
+                              agent_sandbox.to_int(args.get("y1")),
+                              agent_sandbox.to_int(args.get("x2")),
+                              agent_sandbox.to_int(args.get("y2")))
+            return {"text": f"已从 ({args.get('x1')},{args.get('y1')}) 拖到 ({args.get('x2')},{args.get('y2')})",
+                    "images": []}
+        if name == "scroll":
+            agent_screen.scroll(agent_sandbox.to_int(args.get("delta")))
+            return {"text": f"已滚动 {args.get('delta')}", "images": []}
+        if name == "press_key":
+            agent_screen.key_press(str(args["key"]))
+            return {"text": f"已按键 {args['key']}", "images": []}
+        if name == "type_text":
+            agent_screen.type_text(str(args["text"]))
+            return {"text": f"已输入文本（{len(str(args['text']))} 字符）", "images": []}
+        if name == "run_command":
+            return _run_command(str(args.get("command", "")),
+                                agent_sandbox.to_int(args.get("wait", 5)),
+                                bool(args.get("force_quit", False)))
+        if name == "check_command":
+            return _check_command(agent_sandbox.to_int(args.get("cmd_id", 0)) or None)
+        if name == "read_file":
+            return _read_file(str(args.get("path", "")))
+        if name == "write_file":
+            return _write_file(str(args.get("path", "")), str(args.get("content", "")))
+        if name == "edit_file":
+            return _edit_file(str(args.get("path", "")),
+                              str(args.get("old_text", "")),
+                              str(args.get("new_text", "")))
+        if name == "delete_file":
+            return _delete_file(str(args.get("path", "")))
+        if name == "list_directory":
+            return _list_directory(str(args.get("path", "")))
+        if name == "save_memory":
+            return _save_memory(str(args.get("content", "")))
+        if name == "load_memory":
+            return _load_memory()
+    except Exception as e:
+        return _blocked(f"[工具执行错误] {name}: {e}")
+    return _blocked(f"[未知工具] {name}")
+
+
+def _run_command(command: str, wait: int = 5, force_quit: bool = False) -> dict:
+    """执行命令，AI 自主选择等待/强制退出策略。
+
+    - wait 秒内完成：返回完整输出与退出码
+    - wait 秒内未完成：
+      · force_quit=True  → taskkill /T 强制结束进程树，返回已收集输出
+      · force_quit=False → 转入后台注册表（可 check_command 轮询进度），返回命令 ID
+    reader 线程持续排空 stdout/stderr，轮询期间可拿到增量进度。
+    """
+    try:
+        wait = max(0, min(int(wait), 600))
+        # 控制台程序按 OEM 代码页输出（中文系统 GBK，英文 cp437），
+        # 用 text=True 默认 UTF-8 会解码失败导致 reader 线程崩溃、输出丢失
+        proc = subprocess.Popen(command, shell=True, stdout=subprocess.PIPE,
+                                stderr=subprocess.PIPE, text=True,
+                                encoding=_console_encoding(),
+                                errors="replace",
+                                cwd=WORKDIR or None,     # 命令默认在工作目录执行
+                                creationflags=_CREATE_NO_WINDOW)
+    except Exception as e:
+        return _blocked(f"[沙盒] 命令执行失败: {e}")
+
+    out_lines, err_lines = [], []
+    lock = threading.Lock()
+    threads = [
+        threading.Thread(target=_drain_pipe, args=(proc.stdout, out_lines, lock), daemon=True),
+        threading.Thread(target=_drain_pipe, args=(proc.stderr, err_lines, lock), daemon=True),
+    ]
+    for t in threads:
+        t.start()
+
+    # 轮询等待：wait 秒内每 1s 检查一次进程是否退出（期间输出持续被 reader 线程收集）
+    deadline = time.time() + wait
+    while time.time() < deadline:
+        if proc.poll() is not None:
+            break
+        time.sleep(1.0)
+
+    with lock:
+        out = "".join(out_lines).strip()
+        err = "".join(err_lines).strip()
+    code = proc.poll()
+
+    def _compose() -> str:
+        text = out
+        if err:
+            text += f"\n[stderr] {err[:8000]}" if text else f"[stderr] {err[:8000]}"
+        if not text:
+            text = f"（命令完成，退出码 {code}）"
+        return text[:_COMMAND_OUTPUT_MAX]
+
+    if code is not None:
+        for t in threads:
+            t.join(1.0)   # 等 reader 线程排空剩余输出
+        return {"text": _compose(), "images": []}
+
+    if force_quit:
+        _kill_process_tree(proc.pid)
+        # 留出清理时间后再读一次输出
+        time.sleep(0.8)
+        for t in threads:
+            t.join(1.0)
+        with lock:
+            out = "".join(out_lines).strip()
+            err = "".join(err_lines).strip()
+        code = proc.poll()
+        return {"text": f"命令在 {wait}s 内未完成，已按 force_quit 强制结束（退出码 {code}）。\n" + _compose(),
+                "images": []}
+
+    # 转入后台运行：注册并返回 ID，AI 用 check_command 轮询进度
+    cmd_id = next(_cmd_seq)
+    _running_cmds[cmd_id] = {
+        "proc": proc, "command": command, "out": out_lines, "err": err_lines,
+        "lock": lock, "threads": threads, "start": time.strftime("%H:%M:%S"),
+    }
+    text = (f"命令已转入后台运行（ID {cmd_id}，{wait}s 内未完成）。可用 "
+            f"check_command(cmd_id={cmd_id}) 轮询进度。当前输出：\n" + _compose())
+    return {"text": text, "images": []}
+
+
+def _check_command(cmd_id: int = None) -> dict:
+    """轮询后台命令进度：cmd_id 为空时列出全部；指定 ID 时返回最新输出，
+    已结束则返回最终输出与退出码并从注册表移除。"""
+    if cmd_id is None:
+        # 顺手清理已结束的命令，避免注册表堆积僵尸条目
+        for i in [i for i, r in _running_cmds.items() if r["proc"].poll() is not None]:
+            del _running_cmds[i]
+        if not _running_cmds:
+            return {"text": "当前没有后台运行中的命令", "images": []}
+        lines = [f"ID {i}: {rec['command'][:80]}（{rec['start']} 启动）"
+                 for i, rec in _running_cmds.items()]
+        return {"text": "后台运行中的命令：\n" + "\n".join(lines), "images": []}
+
+    rec = _running_cmds.get(cmd_id)
+    if rec is None:
+        return {"text": f"未找到后台命令 ID {cmd_id}（可能已结束或被清理）", "images": []}
+    code = rec["proc"].poll()
+    if code is None:
+        return {"text": f"命令 ID {cmd_id} 仍在运行（{time.strftime('%H:%M:%S')}）。当前输出：\n"
+                        + _collect(rec), "images": []}
+    for t in rec.get("threads", []):
+        t.join(1.0)   # 等 reader 线程排空剩余输出
+    del _running_cmds[cmd_id]
+    return {"text": f"命令 ID {cmd_id} 已结束，退出码 {code}。最终输出：\n" + _collect(rec), "images": []}
+
+
+def _read_file(path: str) -> dict:
+    p = _resolve(path)
+    level, reason = agent_sandbox.assess_path(str(p), "read")
+    if level != "safe":
+        return _blocked(f"[沙盒拒绝] {reason}")
+    try:
+        size = os.path.getsize(p)
+        if size > 200 * 1024:
+            return _blocked(f"[沙盒] 文件过大（{size} 字节 > 200KB）")
+        with open(p, "r", encoding="utf-8", errors="replace") as f:
+            return {"text": f.read()[:30000], "images": []}
+    except Exception as e:
+        return _blocked(f"[沙盒] 读取失败: {e}")
+
+
+def _write_file(path: str, content: str) -> dict:
+    """创建/覆盖写入文件（工作目录优先；系统目录也可写，删除系统目录仍被拒）"""
+    p = _resolve(path)
+    level, reason = agent_sandbox.assess_path(str(p), "write")
+    if level != "safe":
+        return _blocked(f"[沙盒拒绝] {reason}")
+    if len(content) > 500 * 1024:
+        return _blocked("[沙盒] 内容过大（>500KB）")
+    try:
+        os.makedirs(os.path.dirname(os.path.abspath(p)), exist_ok=True)
+        with open(p, "w", encoding="utf-8") as f:
+            f.write(content)
+        return {"text": f"已写入 {len(content)} 字符到 {p}", "images": []}
+    except Exception as e:
+        return _blocked(f"[沙盒] 写入失败: {e}")
+
+
+def _edit_file(path: str, old_text: str, new_text: str) -> dict:
+    """编辑文件：精确替换第一处 old_text"""
+    p = _resolve(path)
+    level, reason = agent_sandbox.assess_path(str(p), "write")
+    if level != "safe":
+        return _blocked(f"[沙盒拒绝] {reason}")
+    try:
+        if os.path.getsize(p) > 200 * 1024:
+            return _blocked("[沙盒] 文件过大（>200KB）")
+        with open(p, "r", encoding="utf-8", errors="replace") as f:
+            data = f.read()
+        if old_text not in data:
+            return _blocked("[沙盒] 未找到要替换的内容")
+        data = data.replace(old_text, new_text, 1)
+        with open(p, "w", encoding="utf-8") as f:
+            f.write(data)
+        return {"text": f"已替换 1 处内容到 {p}", "images": []}
+    except Exception as e:
+        return _blocked(f"[沙盒] 编辑失败: {e}")
+
+
+def _delete_file(path: str) -> dict:
+    """删除文件或空目录（工作目录优先；删除系统关键目录内容被沙盒拒绝）"""
+    p = _resolve(path)
+    level, reason = agent_sandbox.assess_path(str(p), "delete")
+    if level != "safe":
+        return _blocked(f"[沙盒拒绝] {reason}")
+    try:
+        if not p.exists():
+            return _blocked(f"[沙盒] 路径不存在: {p}")
+        if p.is_dir():
+            if any(p.iterdir()):
+                return _blocked(f"[沙盒] 目录非空，禁止递归删除: {p}（可用 run_command 精确处理）")
+            p.rmdir()
+        else:
+            p.unlink()
+        return {"text": f"已删除: {p}", "images": []}
+    except Exception as e:
+        return _blocked(f"[沙盒] 删除失败: {e}")
+
+
+def _list_directory(path: str) -> dict:
+    """列出目录内容（工作目录优先，最多 200 项）"""
+    p = _resolve(path)
+    level, reason = agent_sandbox.assess_path(str(p), "read")
+    if level != "safe":
+        return _blocked(f"[沙盒拒绝] {reason}")
+    try:
+        entries = sorted(os.listdir(p))
+        lines = []
+        for e in entries[:200]:
+            full = os.path.join(p, e)
+            mark = "DIR " if os.path.isdir(full) else "FILE"
+            lines.append(f"{mark}\t{e}")
+        text = f"{p} 共 {len(entries)} 项" + (f"（仅显示前 200）" if len(entries) > 200 else "") + "：\n"
+        text += "\n".join(lines)
+        return {"text": text, "images": []}
+    except Exception as e:
+        return _blocked(f"[沙盒] 读取失败: {e}")
+
+
+def _list_windows() -> dict:
+    """枚举可见窗口（标题+编号），供 AI 选择目标窗口"""
+    try:
+        wins = agent_screen.list_windows()
+    except Exception as e:
+        return {"text": f"[list_windows] 枚举失败: {e}", "images": []}
+    if not wins:
+        return {"text": "未发现可见窗口（请先打开目标窗口）", "images": []}
+    lines = [f"{i + 1}. {w['title']}（{w['w']}x{w['h']} @{w['x']},{w['y']}）"
+             for i, w in enumerate(wins[:40])]
+    more = f"\n…共 {len(wins)} 个窗口" if len(wins) > 40 else ""
+    return {"text": "可见窗口：\n" + "\n".join(lines) + more, "images": []}
+
+
+def _capture_window(window: str) -> dict:
+    """截取指定窗口（标题模糊/编号），返回截图与窗口内文字元素清单"""
+    try:
+        wins = agent_screen.list_windows()
+    except Exception as e:
+        return {"text": f"[capture_window] 窗口枚举失败: {e}", "images": []}
+    if not wins:
+        return {"text": "[capture_window] 未发现可见窗口，请先打开目标窗口", "images": []}
+    q = str(window or "").strip().lower()
+    if not q:
+        return {"text": "[capture_window] 缺少 window 参数（窗口标题或 list_windows 编号）", "images": []}
+    target = None
+    try:   # 编号定位
+        idx = int(q) - 1
+        if 0 <= idx < len(wins):
+            target = wins[idx]
+    except ValueError:
+        pass
+    if target is None:   # 标题模糊匹配：全等 → 包含 → 任一分词
+        for w in wins:
+            t = w["title"].lower()
+            if t == q or q in t or any(tok and tok in t for tok in q.split()):
+                target = w
+                break
+    if target is None:
+        cand = "\n".join(f"{i + 1}. {w['title']}" for i, w in enumerate(wins[:30]))
+        return {"text": f"[capture_window] 未找到窗口「{window}」。可见窗口：\n{cand}", "images": []}
+    try:
+        url = agent_screen.capture_window_data_url(target["hwnd"])
+        summary = ""
+        try:   # 窗口内 OCR 元素（窗口内像素坐标，供视觉定位参考）
+            png = agent_screen.capture_window_png(target["hwnd"])
+            elems = agent_locator.ocr_elements(png, target["w"], target["h"])
+            summary = agent_locator.summarize(elems, 40)
+        except Exception:
+            pass
+        return {"text": f"已截取窗口「{target['title']}」（{target['w']}x{target['h']}）"
+                        + (f"。窗口内文字元素：{summary}" if summary else ""),
+                "images": [url]}
+    except Exception as e:
+        return {"text": f"[capture_window] 截取失败: {e}", "images": []}
+
+
+_MEMORY_MAX_TOTAL = 50 * 1024   # 记忆文件总上限 50KB（超出后截断旧部分）
+_MEMORY_MAX_ENTRY = 8000       # 单条记忆上限 8000 字符
+
+
+def _save_memory(content: str) -> dict:
+    """把关键信息追加写入本地记忆文件（markdown，自动带时间戳）"""
+    content = (content or "").strip()
+    if not content:
+        return _blocked("[记忆] 内容为空，未保存")
+    if len(content) > _MEMORY_MAX_ENTRY:
+        return _blocked(f"[记忆] 单条内容过长（{len(content)} 字符 > {_MEMORY_MAX_ENTRY}）")
+    try:
+        MEMORY_FILE.parent.mkdir(parents=True, exist_ok=True)
+        # 超限时截断：保留尾部内容
+        if MEMORY_FILE.exists() and MEMORY_FILE.stat().st_size > _MEMORY_MAX_TOTAL:
+            with open(MEMORY_FILE, "r", encoding="utf-8") as f:
+                old = f.read()
+            old = old[-(_MEMORY_MAX_TOTAL // 2):]   # 保留最近 ~25KB
+            with open(MEMORY_FILE, "w", encoding="utf-8") as f:
+                f.write("<!-- 记忆已达上限，旧内容已截断 -->\n" + old)
+        stamp = datetime.now().strftime("%Y-%m-%d %H:%M")
+        with open(MEMORY_FILE, "a", encoding="utf-8") as f:
+            f.write(f"\n## {stamp}\n{content}\n")
+        return {"text": f"已保存到记忆文件 memory.md（{len(content)} 字符）", "images": []}
+    except Exception as e:
+        return _blocked(f"[记忆] 保存失败: {e}")
+
+
+def _load_memory() -> dict:
+    """读取本地记忆文件完整内容"""
+    try:
+        if not MEMORY_FILE.exists():
+            return {"text": "（记忆文件为空，暂无历史记忆。可在遇到值得记住的关键信息时调用 save_memory 保存。）",
+                    "images": []}
+        size = MEMORY_FILE.stat().st_size
+        if size > _MEMORY_MAX_TOTAL:
+            return _blocked(f"[记忆] 记忆文件过大（{size // 1024}KB > {_MEMORY_MAX_TOTAL // 1024}KB），请人工清理")
+        with open(MEMORY_FILE, "r", encoding="utf-8") as f:
+            text = f.read().strip() or "（记忆为空）"
+        return {"text": text, "images": []}
+    except Exception as e:
+        return _blocked(f"[记忆] 读取失败: {e}")
+
+
+def tool_schemas() -> list:
+    """供 LLM tools 参数的完整 schema 列表"""
+    return json.loads(json.dumps(TOOLS))

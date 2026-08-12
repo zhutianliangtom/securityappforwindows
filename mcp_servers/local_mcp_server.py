@@ -41,9 +41,29 @@ def _total_memory_mb() -> int:
     return 0
 
 
+def _os_name() -> str:
+    """从注册表读取真实系统产品名（Win10/Win11 内核同为 10.0，platform 无法区分）
+
+    注意：Win11 的注册表 ProductName 仍返回 "Windows 10 …"（微软兼容性设计），
+    需按 CurrentBuildNumber（>=22000 为 Win11）修正名称。
+    """
+    try:
+        import winreg
+        with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE,
+                            r"SOFTWARE\Microsoft\Windows NT\CurrentVersion") as k:
+            name = winreg.QueryValueEx(k, "ProductName")[0]
+            display = winreg.QueryValueEx(k, "DisplayVersion")[0]
+            build = int(winreg.QueryValueEx(k, "CurrentBuildNumber")[0])
+        if build >= 22000 and name.startswith("Windows 10"):
+            name = name.replace("Windows 10", "Windows 11")
+        return f"{name}（{display}，内部版本 {build}）"
+    except (OSError, ValueError):
+        return f"{platform.system()} {platform.release()}"
+
+
 def tool_system_info(args: dict) -> str:
     return (f"主机名: {socket.gethostname()}\n"
-            f"系统: {platform.system()} {platform.release()} ({platform.version()})\n"
+            f"系统: {_os_name()}\n"
             f"架构: {platform.machine()}\n"
             f"CPU 核心数: {os.cpu_count()}\n"
             f"物理内存: {_total_memory_mb()} MB\n"

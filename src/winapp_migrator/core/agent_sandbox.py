@@ -16,6 +16,8 @@ SAFE_COMMANDS = {
     "set", "route", "arp", "nslookup", "tracert", "getmac",
     # 普通文件操作：新建/复制/移动/重命名/删除单文件或空目录
     "mkdir", "md", "copy", "move", "ren", "rename", "del", "erase", "rd", "rmdir",
+    # git：常规提交/推送/拉取/查看（危险子命令由 DANGEROUS_KW 先行拒绝）
+    "git",
 }
 
 # 危险关键词（拒绝）
@@ -27,6 +29,10 @@ DANGEROUS_KW = [
     "move /y", "xcopy", "robocopy /e /purge",
     "powershell -enc", "powershell -e", "certutil -urlcache", "bitsadmin",
     "mshta", "wscript", "cscript", "vssadmin delete", "wmic process",
+    # git 危险操作：丢弃改动 / 强制覆盖 / 强制删除 / 重写历史
+    "git reset --hard", "git clean", "git push --force", "git push -f",
+    "git push --delete", "git branch -d", "git checkout --", "git restore .",
+    "git filter-branch",
 ]
 
 # 系统关键目录：禁止写入/修改，防止破坏系统
@@ -86,13 +92,14 @@ def assess_command(cmd: str) -> tuple:
         for d in _system_dirs():
             if str(d).lower().replace("\\", "/") in flat:
                 return "dangerous", f"禁止删除系统关键目录: {d}"
+    # 含管道/重定向/多命令串联 → risky：即使首命令在白名单
+    # （如 `git add .; git commit`、`echo hi > file`），避免绕过单命令白名单
+    if any(s in low for s in ("|", ">", "&", "&&", ";")):
+        return "risky", "命令含管道/重定向/多命令，非单条白名单命令"
     first = low.split()[0]
     base = os.path.basename(first.replace("\\", "/"))
     if base in SAFE_COMMANDS or base in _custom_safe():
         return "safe", ""
-    # 含重定向/管道/复杂脚本视为 risky
-    if any(s in low for s in ("|", ">", "&", "&&", ";")):
-        return "risky", "命令含管道/重定向，非白名单"
     return "risky", "非白名单命令"
 
 

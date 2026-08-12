@@ -57,25 +57,6 @@ DEFAULT_SKILLS = [
                      "一句话用途简介、执行流程正文。\n"
                      "2. 用 create_skill 工具创建：instruction 写清触发条件、执行步骤与规则（markdown）。\n"
                      "3. 创建成功后提示：已可通过 /技能名 或对话描述调用；若用户描述的是可复用的流程，适合沉淀为技能。")},
-    {"name": "git-commit", "description": "Git 提交与推送：分析变更、生成规范化提交信息并推送到远程",
-     "instruction": ("用户要求提交/推送代码时执行以下流程（所有命令用 run_command 在仓库目录执行）：\n"
-                     "1. 先 `git status` 查看工作区状态，再 `git diff`（未暂存）与 `git diff --cached`（已暂存）"
-                     "分析变更内容，对关键变更文件用 read_file 读取确认改动意图。\n"
-                     "2. 智能暂存：优先按逻辑分组 `git add <具体文件>` 精确暂存，"
-                     "禁止用 `git add -A`/`git add .` 全量暂存，以免误提交 .env、密钥、凭据、"
-                     "编译产物等敏感/无关文件；暂存后用 `git status` 复查确认无敏感内容。\n"
-                     "3. 生成规范化提交信息（Conventional Commits 格式）：`type(scope): 描述`，"
-                     "type 取 feat/fix/docs/style/refactor/perf/test/chore/build/ci/revert，"
-                     "scope 为影响模块名，描述聚焦为什么改而非改了什么，一行不超过 50 字，"
-                     "必要时空行后附正文要点（本次会话总结中的既有习惯沿用）。\n"
-                     "4. 提交前用 ask_user 向用户确认提交信息与包含的变更清单，确认后执行 "
-                     "`git commit -m \"提交信息\"`。\n"
-                     "5. 推送：先 `git branch -vv` 确认当前分支与远程跟踪关系；"
-                     "无上游时 `git push -u origin <分支名>`，已有上游直接 `git push`。\n"
-                     "6. 推送被拒绝（远程领先）时：先 `git pull --rebase` 拉取并变基，"
-                     "解决冲突后重新暂存提交再推送；严禁 `git push --force` 或 `--force-with-lease`，"
-                     "除非用户明确要求。\n"
-                     "7. 完成后汇报：提交哈希、分支、变更摘要；若用户只要求提交未要求推送，则只提交不推送。")},
 ]
 
 DEFAULT_AGENTS = [

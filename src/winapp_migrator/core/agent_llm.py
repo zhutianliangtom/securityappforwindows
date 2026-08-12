@@ -68,6 +68,10 @@ def load_model_config() -> dict:
         single = str(m.get("model") or "").strip()
         if single and single not in models:
             models.insert(0, single)
+        if DEFAULT_MODEL not in models:
+            # 默认轻量模型始终保留：自动切换时用它先评估任务难度，
+            # 即使用户自定义了 API/模型也不隐藏
+            models.append(DEFAULT_MODEL)
         return {
             "base_url": m.get("base_url") or DEFAULT_BASE_URL,
             "api_key": m.get("api_key") or DEFAULT_API_KEY,
@@ -136,6 +140,44 @@ def estimate_effort(text: str) -> str:
 def reasoning_effort_for(effort: str) -> str:
     """工作力度 → API 的 reasoning_effort 参数值（max/ultra 折算为 high）"""
     return _REASONING_EFFORT.get(effort if effort in EFFORTS else "medium")
+
+
+def assess_effort(text: str) -> str:
+    """用默认轻量模型（agnes-2.5-flash）评估任务难度/工作量，返回 EFFORTS 之一。
+
+    始终走内置默认 API（与用户自定义配置无关），保证评估模型不被隐藏；
+    请求极小（max_tokens=8），评估失败时回退本地启发式估算 estimate_effort。
+    """
+    import re
+    prompt = ("你是任务难度评估器。根据用户的任务描述评估工作量和复杂度，"
+              "只输出一个等级词：low、medium、high、max 或 ultra，不要输出任何其他内容。\n"
+              f"任务描述：{(text or '').strip()[:800]}")
+    payload = {
+        "model": DEFAULT_MODEL,
+        "messages": [
+            {"role": "system", "content": "你是任务难度评估器，只输出 low/medium/high/max/ultra 之一。"},
+            {"role": "user", "content": prompt},
+        ],
+        "temperature": 0,
+        "max_tokens": 8,
+    }
+    try:
+        req = urllib.request.Request(
+            f"{DEFAULT_BASE_URL}/chat/completions",
+            data=json.dumps(payload).encode("utf-8"),
+            headers={"Content-Type": "application/json",
+                     "User-Agent": _UA,
+                     "Authorization": f"Bearer {DEFAULT_API_KEY}"},
+            method="POST")
+        raw = urllib.request.urlopen(req, timeout=30).read().decode("utf-8", "replace")
+        resp = json.loads(raw)
+        txt = ((resp.get("choices") or [{}])[0].get("message") or {}).get("content", "") or ""
+        m = re.search(r"\b(low|medium|high|max|ultra)\b", txt.lower())
+        if m:
+            return m.group(1)
+    except Exception:
+        pass
+    return estimate_effort(text)   # 评估失败：回退本地估算，保证流程不中断
 
 
 class AgentLLMError(Exception):

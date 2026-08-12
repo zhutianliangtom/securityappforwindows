@@ -1076,6 +1076,7 @@ class AgentPanel(QDialog):
     result_signal = pyqtSignal(str, str, object)   # 工具名, 执行输出, 截图缩略图列表
     reasoning_signal = pyqtSignal(str)     # 流式思考过程增量
     confirm_signal = pyqtSignal(str, str, str)  # name, args_json, risk
+    eval_signal = pyqtSignal(str)          # agnes-2.5-flash 任务难度评估结果（后台线程 → 主线程）
     ask_signal = pyqtSignal(str)           # ask_user 提问（args_json）
     mcp_signal = pyqtSignal(str)
 
@@ -1143,6 +1144,7 @@ class AgentPanel(QDialog):
         self._last_activity = 0.0      # 最近一次有输出/状态的时间戳
         self._stalled_stop = False     # 是否因卡死自动停止
         self._task_active = False      # 是否有任务在执行（结束收尾的可靠依据）
+        self._eval_pending = None      # 任务难度评估待启动参数 (ai_text, send_images, skill_names)
 
         # 多对话（会话）状态：切换隔离上下文，AI 自动命名
         self._session_id = ""          # 当前会话 id
@@ -1443,6 +1445,7 @@ class AgentPanel(QDialog):
         self.confirm_signal.connect(self._on_confirm)
         self.ask_signal.connect(self._on_ask)
         self.mcp_signal.connect(self._on_mcp_status)
+        self.eval_signal.connect(self._on_assess_done)
 
     # ---------- 欢迎页（无对话时居中介绍 AI 功能） ----------
     def _build_welcome(self) -> QWidget:
@@ -2285,7 +2288,7 @@ class AgentPanel(QDialog):
         routed = routed or agent_llm.resolve_model(cfg, self._resolve_effort(self.input.toPlainText()))
         self.model_combo.blockSignals(True)
         self.model_combo.clear()
-        self.model_combo.addItem(f"自动 · {routed}", None)
+        self.model_combo.addItem("自动", None)
         for x in models:
             self.model_combo.addItem(x, x)
         if self._model_override:
@@ -2472,15 +2475,6 @@ class AgentPanel(QDialog):
             note = "以下为拖入的附件文件，请按需读取内容：\n" + \
                 "\n".join(f"- {p}" for p in files)
             ai_text = (ai_text + "\n\n" if ai_text else "") + note
-        # 工作力度 → 模型路由：自动按任务难度估算（开关开启）或用手动力度；输入框右侧可手动指定
-        effort = self._resolve_effort(ai_text)
-        cfg = self._llm_config()
-        model = self._model_override or agent_llm.resolve_model(cfg, effort)
-        engine = self._ensure_engine()
-        engine.llm.model = model
-        engine.llm.reasoning_effort = (agent_llm.reasoning_effort_for(effort)
-                                       if cfg.get("send_effort") else None)
-        engine.text_only = agent_llm.is_text_only_model(model)
         self._auto_name_session(ai_text)   # 无名称会话：用首条消息自动命名
         # 归档上一轮 AI 回复到历史（须在追加新用户消息前完成，保证交错行顺序正确）
         if self._segments:
@@ -2524,10 +2518,6 @@ class AgentPanel(QDialog):
         if shot:
             # 喂给模型时带坐标网格（精确点击定位），展示用干净原图
             send_images.append(agent_screen.capture_screen_data_url(grid=True))
-        # 本次路由的模型为纯文本时剥离图片（混配模型场景逐次判断）
-        if engine.text_only and send_images:
-            self._add_status("当前模型为纯文本模型，已忽略图片输入", WARN)
-            send_images = []
         if shot:
             self._segments.append({"type": "image", "url": shot, "caption": "已截屏"})
         self._user_stopped = False
@@ -2551,7 +2541,49 @@ class AgentPanel(QDialog):
 
         self._clear_attachments()   # 发送后清空附件条
         self._task_active = True
+        # 模型路由：自动模式先用默认 agnes-2.5-flash 评估任务难度（后台线程），
+        # 评估完成后再按难度选合适模型启动；手动指定模型/关闭自动则直接启动
+        if self._auto_effort and not self._model_override:
+            self._eval_pending = (ai_text, send_images, skill_names)
+            self._add_status("正在用轻量模型评估任务难度…", ACCENT)
+            threading.Thread(target=self._assess_worker, daemon=True).start()
+        else:
+            self._launch_task(ai_text, send_images, skill_names,
+                              self._resolve_effort(ai_text))
+
+    def _launch_task(self, ai_text: str, send_images: list, skill_names: list,
+                     effort: str):
+        """按力度/评估结果路由模型并启动任务（评估完成或手动模式时调用）"""
+        engine = self._ensure_engine()
+        cfg = self._llm_config()
+        model = self._model_override or agent_llm.resolve_model(cfg, effort)
+        engine.llm.model = model
+        engine.llm.reasoning_effort = (agent_llm.reasoning_effort_for(effort)
+                                       if cfg.get("send_effort") else None)
+        engine.text_only = agent_llm.is_text_only_model(model)
+        # 本次路由的模型为纯文本时剥离图片（混配模型场景逐次判断）
+        if engine.text_only and send_images:
+            self._add_status("当前模型为纯文本模型，已忽略图片输入", WARN)
+            send_images = []
         engine.start(ai_text, "桌面助手", send_images, skills=skill_names)
+
+    def _assess_worker(self):
+        """后台线程：用默认 agnes-2.5-flash 评估任务难度（失败回退本地估算）"""
+        ai_text = (self._eval_pending or ("", [], []))[0]
+        try:
+            effort = agent_llm.assess_effort(ai_text)
+        except Exception:
+            effort = agent_llm.estimate_effort(ai_text)
+        self.eval_signal.emit(effort)
+
+    def _on_assess_done(self, effort: str):
+        """评估完成：按难度路由模型并启动任务"""
+        if not self._eval_pending:
+            return
+        self._add_status(f"任务难度评估：{effort}", TEXT_DIM)
+        ai_text, send_images, skill_names = self._eval_pending
+        self._eval_pending = None
+        self._launch_task(ai_text, send_images, skill_names, effort)
 
     def _stop(self):
         if self._engine:

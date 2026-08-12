@@ -497,6 +497,15 @@ class _AgentSettingsDialog(QDialog):
         self.models_edit.setPlaceholderText("模型名逗号分隔，如 deepseek-v4-pro, deepseek-v4-flash")
         self.models_edit.textChanged.connect(self._on_models_changed)
         form.addRow("模型列表", self.models_edit)
+        self.protocol_combo = QComboBox()
+        self.protocol_combo.setStyleSheet(
+            f"QComboBox {{ background: {BG}; color: {TEXT};"
+            f"border: 1px solid {BORDER}; border-radius: 6px; padding: 4px 8px; }}")
+        self.protocol_combo.addItem("Chat Completions（/v1/chat/completions）", "chat")
+        self.protocol_combo.addItem("Responses API（/v1/responses）", "responses")
+        pidx = self.protocol_combo.findData(cfg.get("protocol", "chat"))
+        self.protocol_combo.setCurrentIndex(pidx if pidx >= 0 else 0)
+        form.addRow("接口协议", self.protocol_combo)
         root.addLayout(form)
 
         # 工作力度 → 模型 绑定（面板拖动力度条即切换）
@@ -578,6 +587,7 @@ class _AgentSettingsDialog(QDialog):
             "effort": old.get("effort", "medium"),
             "auto_effort": self.auto_effort_check.isChecked(),
             "send_effort": self.send_effort_check.isChecked(),
+            "protocol": self.protocol_combo.currentData() or "chat",
         }
         if base_url:
             model["base_url"] = base_url
@@ -2189,7 +2199,7 @@ class AgentPanel(QDialog):
             cfg = self._llm_config()
             client = agent_llm.LLMClient(
                 base_url=cfg.get("base_url"), api_key=cfg.get("api_key"),
-                model=cfg.get("model"))
+                model=cfg.get("model"), protocol=cfg.get("protocol", "chat"))
             self._engine = agent_engine.AgentEngine(
                 client,
                 mcp_manager=self._mcp,

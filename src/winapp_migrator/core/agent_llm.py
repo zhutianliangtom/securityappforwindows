@@ -77,12 +77,13 @@ def load_model_config() -> dict:
             "effort": m.get("effort") if m.get("effort") in EFFORTS else "medium",
             "auto_effort": bool(m.get("auto_effort", True)),
             "send_effort": bool(m.get("send_effort", False)),
+            "protocol": m.get("protocol") if m.get("protocol") in ("chat", "responses") else "chat",
         }
     except Exception:
         return {"base_url": DEFAULT_BASE_URL, "api_key": DEFAULT_API_KEY,
                 "model": DEFAULT_MODEL, "models": [DEFAULT_MODEL],
                 "effort_models": {}, "effort": "medium",
-                "auto_effort": True, "send_effort": False}
+                "auto_effort": True, "send_effort": False, "protocol": "chat"}
 
 
 def _default_effort_models(models: list) -> dict:
@@ -169,13 +170,158 @@ def build_content(text: str = "", images: Optional[List[str]] = None) -> list:
     return parts or [{"type": "text", "text": ""}]
 
 
+def _to_responses_input(messages: list) -> list:
+    """把 Chat Completions 格式的 messages 转为 Responses API 的 input 项数组。
+
+    - system → 单独走 instructions 参数，不放入 input
+    - assistant：只保留文本内容（function_call 项不回放），空内容跳过
+    - tool → {"type":"function_call_output","call_id","output"}
+    - user/assistant 文本/图片 → {"type":"message","role","content":[...]}
+    """
+    items = []
+    for m in messages or []:
+        if not isinstance(m, dict):
+            continue
+        role = m.get("role")
+        if role == "system":
+            continue
+        if role == "tool":
+            items.append({"type": "function_call_output",
+                          "call_id": str(m.get("tool_call_id") or ""),
+                          "output": str(m.get("content") or "")})
+            continue
+        if role not in ("user", "assistant"):
+            continue
+        c = m.get("content")
+        if isinstance(c, list):
+            parts = []
+            for x in c:
+                if not isinstance(x, dict):
+                    continue
+                if x.get("type") == "text" and x.get("text"):
+                    parts.append({"type": "input_text", "text": x["text"]})
+                elif x.get("type") == "image_url":
+                    url = (x.get("image_url") or {}).get("url")
+                    if url:
+                        parts.append({"type": "input_image", "image_url": url})
+            if parts:
+                items.append({"type": "message", "role": role, "content": parts})
+        else:
+            text = str(c or "").strip()
+            if text:
+                items.append({"type": "message", "role": role,
+                              "content": [{"type": "input_text", "text": text}]})
+    return items
+
+
+def _parse_responses_stream(stream, on_delta=None, on_reasoning=None, stop=None) -> dict:
+    """解析 Responses API 的 SSE 流（event: / data: 行），返回 {text, tool_calls, usage, cache}。
+
+    事件：response.output_text.delta（正文）、response.function_call_arguments.delta（工具参数，
+    按 item_id 聚合）、response.output_item.done / response.completed（工具结果与 usage）、
+    response.reasoning_text.delta（思考过程）、error（上游错误）。
+    """
+    text_parts: List[str] = []
+    calls: dict = {}        # item_id -> {"id","name","args"}
+    usage = None
+    try:
+        while True:
+            if stop and stop():
+                raise AgentLLMError("已停止")
+            raw = stream.readline()
+            if not raw:
+                break
+            line = raw.decode("utf-8", "replace").strip()
+            if not line.startswith("data:"):
+                continue
+            data = line[len("data:"):].strip()
+            if not data:
+                continue
+            try:
+                obj = json.loads(data)
+            except json.JSONDecodeError:
+                continue
+            t = obj.get("type") or ""
+            if t == "response.completed":
+                resp = obj.get("response") or {}
+                usage = resp.get("usage") or usage
+                for it in resp.get("output") or []:
+                    if isinstance(it, dict) and it.get("type") == "function_call":
+                        cid = it.get("id") or ""
+                        cur = calls.setdefault(cid, {"id": "", "name": "", "args": ""})
+                        cur["id"] = it.get("call_id") or cur["id"]
+                        if it.get("name"):
+                            cur["name"] = it["name"]
+                        if it.get("arguments"):
+                            cur["args"] = it["arguments"]
+            elif t == "response.output_item.added":
+                it = obj.get("item") or {}
+                if isinstance(it, dict) and it.get("type") == "function_call":
+                    cid = it.get("id") or ""
+                    if cid not in calls:
+                        calls[cid] = {"id": "", "name": it.get("name", ""), "args": ""}
+            elif t == "response.output_item.done":
+                it = obj.get("item") or {}
+                if isinstance(it, dict) and it.get("type") == "function_call":
+                    cid = it.get("id") or ""
+                    cur = calls.setdefault(cid, {"id": "", "name": "", "args": ""})
+                    cur["id"] = it.get("call_id") or cur["id"]
+                    if it.get("name"):
+                        cur["name"] = it["name"]
+                    if it.get("arguments"):
+                        cur["args"] = it["arguments"]
+            elif t == "response.function_call_arguments.delta":
+                cur = calls.setdefault(str(obj.get("item_id") or ""),
+                                       {"id": "", "name": "", "args": ""})
+                cur["args"] += str(obj.get("delta") or "")
+            elif t == "response.output_text.delta":
+                d = obj.get("delta")
+                if d:
+                    text_parts.append(d)
+                    if on_delta:
+                        on_delta(d)
+            elif t in ("response.reasoning_text.delta",
+                       "response.reasoning_summary_text.delta",
+                       "response.reasoning_effort.delta"):
+                d = obj.get("delta")
+                if d and on_reasoning:
+                    on_reasoning(d)
+            elif t == "error":
+                msg = obj.get("message") or (obj.get("error") or {})
+                if isinstance(msg, dict):
+                    msg = msg.get("message", "")
+                if msg:
+                    raise AgentLLMError(str(msg))
+    except AgentLLMError:
+        raise
+    except Exception as e:
+        raise AgentLLMError(f"读取响应失败: {e}")
+
+    calls_out = [{"id": calls[i]["id"] or i, "type": "function",
+                  "function": {"name": calls[i]["name"],
+                               "arguments": calls[i]["args"] or "{}"}}
+                 for i in sorted(calls) if calls[i]["name"]]
+    hit = int((usage or {}).get("prompt_cache_hit_tokens") or 0)
+    miss = int((usage or {}).get("prompt_cache_miss_tokens") or 0)
+    details = (usage or {}).get("prompt_tokens_details") or {}
+    if not hit:
+        hit = int(details.get("cached_tokens") or 0)
+    if not miss:
+        miss = max(0, int((usage or {}).get("prompt_tokens") or 0) - hit)
+    return {"text": "".join(text_parts), "tool_calls": calls_out, "usage": usage,
+            "cache": {"hit": hit, "miss": miss}}
+
+
 class LLMClient:
     def __init__(self, base_url: str = DEFAULT_BASE_URL,
-                 api_key: str = DEFAULT_API_KEY, model: str = DEFAULT_MODEL, timeout: float = 60.0):
+                 api_key: str = DEFAULT_API_KEY, model: str = DEFAULT_MODEL,
+                 timeout: float = 60.0, protocol: str = "chat"):
         self.base_url = (base_url or DEFAULT_BASE_URL).rstrip("/")
         self.api_key = api_key or DEFAULT_API_KEY
         self.model = model or DEFAULT_MODEL
         self.timeout = timeout
+        # 接口协议：chat = /v1/chat/completions（默认）；responses = /v1/responses
+        self.protocol = (protocol or "chat").lower() or "chat"
         # 由上层按工作力度设置；None 表示不发送（兼容不支持该参数的 API）
         self.reasoning_effort = None
 
@@ -191,6 +337,8 @@ class LLMClient:
         usage: {"prompt_tokens","completion_tokens","total_tokens"} 或 None
         on_reasoning: 思考过程增量（delta.reasoning_content / thinking），不保证所有模型返回
         """
+        if self.protocol == "responses":
+            return self._responses_stream(messages, tools, on_delta, on_reasoning, stop)
         payload = {
             "model": self.model,
             "messages": messages,
@@ -299,3 +447,58 @@ class LLMClient:
             miss = max(0, int((usage or {}).get("prompt_tokens") or 0) - hit)
         return {"text": "".join(text_parts), "tool_calls": calls, "usage": usage,
                 "cache": {"hit": hit, "miss": miss}}
+
+    def _responses_stream(self, messages: list, tools=None,
+                          on_delta=None, on_reasoning=None, stop=None) -> dict:
+        """Responses API（/v1/responses）流式对话。返回结构与 chat_stream 一致。
+
+        请求：instructions=system、input=消息项数组（工具结果用 function_call_output）、
+        tools、stream、reasoning.effort（可选）。流解析见 _parse_responses_stream。
+        """
+        payload = {
+            "model": self.model,
+            "input": _to_responses_input(messages),
+            "stream": True,
+            "store": False,
+        }
+        if messages and isinstance(messages[0], dict) and messages[0].get("role") == "system":
+            sys_txt = messages[0].get("content")
+            if isinstance(sys_txt, str) and sys_txt.strip():
+                payload["instructions"] = sys_txt
+        if self.reasoning_effort:
+            payload["reasoning"] = {"effort": self.reasoning_effort}
+        if tools:
+            payload["tools"] = [
+                {"type": "function", "name": t["function"]["name"],
+                 "parameters": t["function"].get("parameters", {})}
+                for t in tools if isinstance(t, dict)]
+        req = urllib.request.Request(
+            f"{self.base_url}/responses",
+            data=json.dumps(payload).encode("utf-8"),
+            headers={"Content-Type": "application/json",
+                     "User-Agent": _UA,
+                     "Authorization": f"Bearer {self.api_key}"},
+            method="POST")
+        resp = None
+        last_err = None
+        for attempt in range(_MAX_RETRIES):
+            if stop and stop():
+                raise AgentLLMError("已停止")
+            try:
+                resp = urllib.request.urlopen(req, timeout=self.timeout)
+                break
+            except urllib.error.HTTPError as e:
+                last_err = f"HTTP {e.code}: {e.read().decode('utf-8', 'replace')[:300]}"
+                if e.code in (429, 500, 502, 503, 504) and attempt < _MAX_RETRIES - 1:
+                    time.sleep(_RETRY_DELAY * (attempt + 1))
+                    continue
+                raise AgentLLMError(last_err)
+            except urllib.error.URLError as e:
+                last_err = f"网络错误: {e.reason}"
+                if attempt < _MAX_RETRIES - 1:
+                    time.sleep(_RETRY_DELAY * (attempt + 1))
+                    continue
+                raise AgentLLMError(last_err)
+        if resp is None:
+            raise AgentLLMError(last_err or "请求失败")
+        return _parse_responses_stream(resp, on_delta, on_reasoning, stop)

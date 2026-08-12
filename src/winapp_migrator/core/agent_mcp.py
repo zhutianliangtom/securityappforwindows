@@ -6,6 +6,7 @@
 """
 
 import json
+import os
 import queue
 import subprocess
 import threading
@@ -22,10 +23,13 @@ class McpError(Exception):
 
 class _StdioTransport:
     def __init__(self, command: str, args: list):
+        # CREATE_NO_WINDOW：禁止子进程弹出控制台窗口（否则连接时会闪一个黑色终端）
+        creationflags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
         try:
             self._proc = subprocess.Popen(
                 [command, *args], stdin=subprocess.PIPE,
-                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                creationflags=creationflags)
         except Exception as e:
             raise McpError(f"启动 MCP 服务器失败: {e}")
         self._pending: dict = {}

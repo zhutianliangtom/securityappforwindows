@@ -905,6 +905,7 @@ class AgentPanel(QDialog):
         self._session_id = ""          # 当前会话 id
         self._session_name = "新对话"  # 当前会话名称
         self._user_msgs: list = []     # 当前会话的用户消息文本（用于切换时重绘）
+        self._rows: list = []          # 用户消息与 AI 回复的交错顺序行（[{"type": "user"/"ai", ...}]，持久化保证重启顺序正确）
         self._scroll_pending = False   # 滚动调度去重标志
         self._bubble_widgets: list = []  # 所有气泡 QLabel（窗口缩放时同步宽度）
         self._maximized_once = False   # 首次显示即最大化（默认最大化展示）
@@ -1244,9 +1245,19 @@ class AgentPanel(QDialog):
                 seg for seg in (self._history_segments + self._segments)
                 if not (seg.get("type") == "mark" and seg.get("html") == "已停止")
             ]
+            # 交错行（用户/AI 顺序）优先使用内存维护值；旧会话无 rows 时按段流重建，
+            # 未归档的当前回复段作为最后一个 AI 行追加
+            rows = [dict(r, segs=[s for s in r.get("segs") or []
+                                  if not (s.get("type") == "mark" and s.get("html") == "已停止")])
+                    if r.get("type") == "ai" else r
+                    for r in (self._rows or self._reconstruct_rows())]
+            if self._segments and not (rows and rows[-1].get("type") == "ai"):
+                rows.append({"type": "ai", "segs": [
+                    s for s in self._segments
+                    if not (s.get("type") == "mark" and s.get("html") == "已停止")]})
             with open(d / f"{self._session_id}.ui.json", "w", encoding="utf-8") as f:
-                json.dump({"segments": clean_segments, "user_msgs": self._user_msgs},
-                          f, ensure_ascii=False)
+                json.dump({"segments": clean_segments, "user_msgs": self._user_msgs,
+                           "rows": rows}, f, ensure_ascii=False)
         except Exception:
             pass
         lst = self._load_session_list()
@@ -1283,6 +1294,7 @@ class AgentPanel(QDialog):
         self._segments = []
         self._history_segments = []
         self._user_msgs = []
+        self._rows = []
         self._hide_spinner()
         while self.msg_lay.count() > 1:  # 清空消息流（保留末尾 stretch）
             item = self.msg_lay.takeAt(0)
@@ -1299,12 +1311,18 @@ class AgentPanel(QDialog):
         except Exception:
             pass
         self._user_msgs = ums
+        # 交错行：新版文件直接使用持久化顺序；旧版文件（无 rows）置空，稍后按段流重建
+        self._rows = [r for r in (data.get("rows") or [])
+                      if isinstance(r, dict) and r.get("type") in ("user", "ai")]
         # 加载时过滤掉旧版本中持久化的“已停止”提示小字，避免重启后仍显示
         self._history_segments = [
             seg for seg in (segs or [])
             if not (seg.get("type") == "mark" and seg.get("html") == "已停止")
         ]
         self._segments = []
+        # 旧版文件无 rows：按段流重建交错行，保证本会话后续持久化不回退
+        if not self._rows:
+            self._rows = self._reconstruct_rows()
         self._render_history_all()   # 用户气泡与 AI 回复按轮次交错重绘（每条 AI 回复一个气泡）
         self._end_badge_shown = False
         self._refresh_session_combo()
@@ -1326,6 +1344,7 @@ class AgentPanel(QDialog):
         self._segments = []
         self._history_segments = []
         self._user_msgs = []
+        self._rows = []
         self._hide_spinner()
         while self.msg_lay.count() > 1:
             item = self.msg_lay.takeAt(0)
@@ -1668,21 +1687,50 @@ class AgentPanel(QDialog):
             groups.append(cur)
         return groups
 
+    def _reconstruct_rows(self) -> list:
+        """旧版会话（无 rows 字段）回退重建显示顺序。
+
+        按段流分组得到 AI 回复组；若会话末尾不是 split（最后一条消息的回复未归档），
+        说明最后一条消息必有回复 → 最后一条消息配最后一组，其余前向配对，
+        避免 user_msgs 与 AI 组数量错位导致用户消息被排到 AI 回复下方；否则直接前向配对。
+        """
+        groups = self._split_groups()
+        n, q = len(self._user_msgs), len(groups)
+        full = self._segments_full()
+        tail_has_reply = bool(full) and full[-1].get("type") != "split"
+        rows = []
+        if q and n and tail_has_reply:
+            for i, u in enumerate(self._user_msgs[:-1]):
+                rows.append({"type": "user", "text": u})
+                if i < q - 1:
+                    rows.append({"type": "ai", "segs": groups[i]})
+            rows.append({"type": "user", "text": self._user_msgs[-1]})
+            rows.append({"type": "ai", "segs": groups[-1]})
+        else:
+            for i, u in enumerate(self._user_msgs):
+                rows.append({"type": "user", "text": u})
+                if i < q:
+                    rows.append({"type": "ai", "segs": groups[i]})
+            for g in groups[n:]:
+                rows.append({"type": "ai", "segs": g})
+        return rows
+
     def _render_history_all(self):
-        """全量重建消息流：用户气泡与 AI 回复按轮次交错（加载会话/全屏缩放时调用）"""
+        """全量重建消息流：按持久化交错行渲染（加载会话/全屏缩放时调用），
+        用户消息与 AI 回复天然成对，杜绝数量错位导致的顺序错乱"""
         while self.msg_lay.count() > 1:   # 清空消息流（保留末尾 stretch）
             item = self.msg_lay.takeAt(0)
             self._free_layout_item(item)
         self._bubble_widgets = []
         self._ai_bubble = None
-        groups = self._split_groups()
-        n = len(self._user_msgs)
-        for i, u in enumerate(self._user_msgs):      # 第 i 条用户消息 → 第 i 组 AI 回复
-            self._add_bubble(u, "user")
-            if i < len(groups):
-                self._add_ai_group_bubble(groups[i])
-        for g in groups[n:]:                          # 多余 AI 组兜底追加
-            self._add_ai_group_bubble(g)
+        for r in (self._rows or self._reconstruct_rows()):
+            if r.get("type") == "user":
+                self._add_bubble(r.get("text", ""), "user")
+            else:
+                self._add_ai_group_bubble(r.get("segs") or [])
+        # 未归档的当前回复段（渲染时恒为空，防御保留）
+        if self._segments:
+            self._add_ai_group_bubble(self._segments)
 
     def _add_ai_group_bubble(self, segs: list):
         """把一组 AI 段渲染为一条独立气泡，并设为当前气泡（新回复流式续接）"""
@@ -1905,12 +1953,9 @@ class AgentPanel(QDialog):
                 self.input.setCompleter(None)
         elif self.input.completer() is None:
             self.input.setCompleter(self._completer)
-        # 空 "/" 只显示全部技能（不含 /compact 等系统命令）；否则按前缀过滤所有命令（"/c" → /compact 置顶）
+        # 输入 "/" 时展示全部可调用项（系统命令 + 全部技能 + 全部内置工具）；否则按前缀过滤
         if text.startswith("/"):
-            if text == "/":
-                matches = [f"/{s.get('name')}" for s in agent_skills.load_skills() if s.get("name")]
-            else:
-                matches = [c for c in self._all_commands() if c.startswith(text)]
+            matches = [c for c in self._all_commands() if c.startswith(text)]
             if matches:
                 self.cmd_list.clear()
                 for c in matches:
@@ -2004,7 +2049,15 @@ class AgentPanel(QDialog):
             ai_text = (ai_text + "\n\n" if ai_text else "") + note
         engine = self._ensure_engine()
         self._auto_name_session(ai_text)   # 无名称会话：用首条消息自动命名
+        # 归档上一轮 AI 回复到历史（须在追加新用户消息前完成，保证交错行顺序正确）
+        if self._segments:
+            self._history_segments.extend(self._segments)
+            self._history_segments.append({"type": "split"})
+            self._rows.append({"type": "ai", "segs": list(self._segments)})
+        self._ai_bubble = None
+        self._segments = []
         self._user_msgs.append(text)
+        self._rows.append({"type": "user", "text": text})
         self._update_welcome()          # 发消息后欢迎介绍立即消失
 
         # 用户气泡：文字与拖拽图片一并渲染进同一气泡（图片缩小缩略图、独立成块，不挤压不窜位）
@@ -2024,12 +2077,6 @@ class AgentPanel(QDialog):
         if shot:
             # 喂给模型时带坐标网格（精确点击定位），展示用干净原图
             send_images.append(agent_screen.capture_screen_data_url(grid=True))
-        # 归档当前 AI 回复到历史（末尾加 split 边界分隔各组），完整对话流用于持久化与加载重绘
-        if self._segments:
-            self._history_segments.extend(self._segments)
-            self._history_segments.append({"type": "split"})
-        self._ai_bubble = None
-        self._segments = []
         if shot:
             self._segments.append({"type": "image", "url": shot, "caption": "已截屏"})
         self._user_stopped = False
@@ -2219,6 +2266,7 @@ class AgentPanel(QDialog):
         self._segments = []
         self._history_segments = []
         self._user_msgs = []
+        self._rows = []
         self._hide_spinner()
         self.cmd_list.hide()
         self._stop_button_anim()

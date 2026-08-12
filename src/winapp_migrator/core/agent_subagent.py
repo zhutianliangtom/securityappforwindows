@@ -18,6 +18,7 @@ from winapp_migrator.core import agent_llm, agent_tools
 SUB_AGENT_WHITELIST = ("read_file", "write_file", "edit_file", "delete_file",
                        "list_directory", "search_files", "find_app",
                        "web_fetch", "web_search", "clipboard", "extract_text",
+                       "create_docx", "create_pptx", "create_xlsx",
                        "system_info", "get_time", "env_var")
 
 _SUB_SYSTEM = """你是子 Agent：负责独立完成一项聚焦的子任务，结果会被主 Agent 汇总使用。

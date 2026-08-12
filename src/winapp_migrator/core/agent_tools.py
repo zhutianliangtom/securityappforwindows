@@ -517,13 +517,73 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "extract_text",
-            "description": "提取文档纯文本：支持 txt/md/log/json/csv/docx/xlsx"
-                           "（docx/xlsx 直接解析 zip+XML，无需第三方库），PDF 需先 pip install pypdf。"
+            "description": "提取文档纯文本：支持 txt/md/log/json/csv/docx/pptx/xlsx"
+                           "（docx/pptx/xlsx 直接解析 zip+XML，无需第三方库），PDF 需先 pip install pypdf。"
                            "读取文档内容、分析表格数据时使用。",
             "parameters": {"type": "object",
                            "properties": {
                                "path": {"type": "string", "description": "文档文件路径（相对路径基于工作目录）"}},
                            "required": ["path"]},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "create_docx",
+            "description": "生成 Word 文档（.docx）：可选大标题 + 段落文本列表。"
+                           "适合报告、说明文档、合同文本、简历等文字型文档。",
+            "parameters": {"type": "object",
+                           "properties": {
+                               "path": {"type": "string", "description": "保存路径（.docx，相对路径基于工作目录）"},
+                               "title": {"type": "string", "description": "文档大标题（可选）"},
+                               "paragraphs": {"type": "array",
+                                              "description": "段落文本列表，每项一个字符串",
+                                              "items": {"type": "string"}}},
+                           "required": ["path", "paragraphs"]},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "create_pptx",
+            "description": "生成 PowerPoint 演示文稿（.pptx）：可选首页标题 + 多页幻灯片，"
+                           "每页包含页标题与要点列表。适合汇报、产品介绍、培训课件等演示文档。",
+            "parameters": {"type": "object",
+                           "properties": {
+                               "path": {"type": "string", "description": "保存路径（.pptx）"},
+                               "title": {"type": "string", "description": "演示文稿标题（可选，用作首页）"},
+                               "slides": {"type": "array",
+                                          "description": "幻灯片列表，每项 {title: 页标题, bullets: [要点, ...]}",
+                                          "items": {"type": "object",
+                                                    "properties": {
+                                                        "title": {"type": "string", "description": "页标题"},
+                                                        "bullets": {"type": "array",
+                                                                    "description": "本页要点列表",
+                                                                    "items": {"type": "string"}}},
+                                                    "required": ["title"]}}},
+                           "required": ["path", "slides"]},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "create_xlsx",
+            "description": "生成 Excel 工作簿（.xlsx）：多个工作表，每表 {name, rows}，"
+                           "rows 为二维数组（首行可作为表头）。适合数据表、统计报表、清单等。",
+            "parameters": {"type": "object",
+                           "properties": {
+                               "path": {"type": "string", "description": "保存路径（.xlsx）"},
+                               "sheets": {"type": "array",
+                                          "description": "工作表列表，每项 {name: 表名, rows: [[单元格,...],...]}",
+                                          "items": {"type": "object",
+                                                    "properties": {
+                                                        "name": {"type": "string", "description": "工作表名"},
+                                                        "rows": {"type": "array",
+                                                                 "description": "数据行二维数组",
+                                                                 "items": {"type": "array",
+                                                                           "items": {}}}},
+                                                    "required": ["name", "rows"]}}},
+                           "required": ["path", "sheets"]},
         },
     },
     {
@@ -790,6 +850,15 @@ def execute_tool(name: str, args: dict, allow_dangerous: bool = False,
             return _clipboard(str(args.get("action", "read")), str(args.get("text", "")))
         if name == "extract_text":
             return _extract_text(str(args.get("path", "")))
+        if name == "create_docx":
+            return _create_docx(str(args.get("path", "")), str(args.get("title", "")),
+                                args.get("paragraphs") if isinstance(args.get("paragraphs"), list) else [])
+        if name == "create_pptx":
+            return _create_pptx(str(args.get("path", "")), str(args.get("title", "")),
+                                args.get("slides") if isinstance(args.get("slides"), list) else [])
+        if name == "create_xlsx":
+            return _create_xlsx(str(args.get("path", "")),
+                                args.get("sheets") if isinstance(args.get("sheets"), list) else [])
         if name == "create_skill":
             return _create_skill(str(args.get("name", "")),
                                  str(args.get("description", "")),
@@ -1354,6 +1423,7 @@ def _extract_text(path: str) -> dict:
     """提取文档纯文本：txt/md/log/json/csv 直接读，docx/xlsx 解析 zip+XML（标准库），
     pdf 提示先 pip install pypdf"""
     import csv as _csv
+    import html as _html
     import re as _re
     import zipfile
     p = _resolve(path)
@@ -1373,7 +1443,7 @@ def _extract_text(path: str) -> dict:
                 xml = z.read("word/document.xml").decode("utf-8", errors="replace")
             paras = ["".join(_re.findall(r"<w:t[^>]*>(.*?)</w:t>", seg, _re.S))
                      for seg in xml.split("</w:p>")]
-            return {"text": "\n".join(x for x in paras if x.strip())[:8000], "images": []}
+            return {"text": "\n".join(_html.unescape(x) for x in paras if x.strip())[:8000], "images": []}
         if suffix == ".xlsx":
             # xlsx = zip + xl/sharedStrings.xml（共享字符串）+ xl/worksheets/sheetN.xml（单元格）
             with zipfile.ZipFile(p) as z:
@@ -1402,16 +1472,115 @@ def _extract_text(path: str) -> dict:
                             elif 't="inlineStr"' in attrs:
                                 ism = _re.search(r"<t[^>]*>(.*?)</t>", inner, _re.S)
                                 val = ism.group(1) if ism else ""
-                            cells.append(f"{ref}:{val}")
+                            cells.append(f"{ref}:{_html.unescape(val)}")
                         if cells:
                             out.append(" ".join(cells))
+                return {"text": "\n".join(out)[:8000], "images": []}
+        if suffix == ".pptx":
+            # pptx = zip + ppt/slides/slideN.xml，文本在 <a:t>，标题文字带 txBody
+            with zipfile.ZipFile(p) as z:
+                names = z.namelist()
+                out = []
+                for sn in sorted(n for n in names
+                                 if n.startswith("ppt/slides/slide") and n.endswith(".xml")):
+                    sx = z.read(sn).decode("utf-8", errors="replace")
+                    texts = _re.findall(r"<a:t>(.*?)</a:t>", sx, _re.S)
+                    out.append(f"[{sn}]")
+                    out.append(" | ".join(_html.unescape(t) for t in texts))
                 return {"text": "\n".join(out)[:8000], "images": []}
         if suffix == ".pdf":
             return _blocked("[extract_text] PDF 文本提取需 pypdf：先 run_command 执行 "
                             "pip install pypdf 后重试（pip 已在命令白名单）")
-        return _blocked(f"[extract_text] 不支持格式 {suffix}（支持 txt/csv/docx/xlsx，pdf 需装 pypdf）")
+        return _blocked(f"[extract_text] 不支持格式 {suffix}（支持 txt/csv/docx/pptx/xlsx，pdf 需装 pypdf）")
     except Exception as e:
         return _blocked(f"[extract_text] 解析失败: {e}")
+
+
+def _create_docx(path: str, title: str, paragraphs: list) -> dict:
+    """生成 Word 文档（python-docx）：标题 + 段落文本"""
+    try:
+        from docx import Document
+    except ImportError:
+        return _blocked("[create_docx] 缺少 python-docx：run_command 执行 pip install python-docx")
+    p = _resolve(path)
+    try:
+        p.parent.mkdir(parents=True, exist_ok=True)
+        doc = Document()
+        if (title or "").strip():
+            doc.add_heading(str(title), level=0)
+        for para in (paragraphs or []):
+            para = str(para)
+            doc.add_paragraph(para) if para.strip() else doc.add_paragraph()
+        doc.save(str(p))
+    except Exception as e:
+        return _blocked(f"[create_docx] 生成失败: {e}")
+    return {"text": f"已生成 Word 文档：{p}", "images": []}
+
+
+def _create_pptx(path: str, title: str, slides: list) -> dict:
+    """生成 PowerPoint（python-pptx）：首页标题 + 每页标题与要点"""
+    try:
+        from pptx import Presentation
+    except ImportError:
+        return _blocked("[create_pptx] 缺少 python-pptx：run_command 执行 pip install python-pptx")
+    p = _resolve(path)
+    try:
+        p.parent.mkdir(parents=True, exist_ok=True)
+        prs = Presentation()
+        if (title or "").strip():
+            s = prs.slides.add_slide(prs.slide_layouts[0])   # 标题页
+            s.shapes.title.text = str(title)
+        for item in (slides or []):
+            if not isinstance(item, dict):
+                continue
+            slide = prs.slides.add_slide(prs.slide_layouts[1])   # 标题 + 内容
+            slide.shapes.title.text = str(item.get("title") or "")
+            tf = slide.placeholders[1].text_frame
+            first = True
+            for b in (item.get("bullets") or []):
+                para = tf.paragraphs[0] if first else tf.add_paragraph()
+                first = False
+                para.text = str(b)
+        prs.save(str(p))
+    except Exception as e:
+        return _blocked(f"[create_pptx] 生成失败: {e}")
+    return {"text": f"已生成 PPT：{p}", "images": []}
+
+
+def _xlsx_cell(v):
+    """单元格值：数字字符串自动转数值，其余保留"""
+    if isinstance(v, (int, float)):
+        return v
+    s = str(v)
+    try:
+        return int(s) if s.lstrip("+-").isdigit() else \
+            float(s) if any(c in s for c in ".eE") and s.strip() else s
+    except ValueError:
+        return s
+
+
+def _create_xlsx(path: str, sheets: list) -> dict:
+    """生成 Excel 工作簿（openpyxl）：多工作表二维数组"""
+    try:
+        from openpyxl import Workbook
+    except ImportError:
+        return _blocked("[create_xlsx] 缺少 openpyxl：run_command 执行 pip install openpyxl")
+    p = _resolve(path)
+    try:
+        p.parent.mkdir(parents=True, exist_ok=True)
+        wb = Workbook()
+        wb.remove(wb.active)
+        for sheet in (sheets or []):
+            if not isinstance(sheet, dict):
+                continue
+            ws = wb.create_sheet(title=str(sheet.get("name") or "Sheet"))
+            for row in (sheet.get("rows") or []):
+                if isinstance(row, (list, tuple)):
+                    ws.append([_xlsx_cell(v) for v in row])
+        wb.save(str(p))
+    except Exception as e:
+        return _blocked(f"[create_xlsx] 生成失败: {e}")
+    return {"text": f"已生成 Excel 工作簿：{p}", "images": []}
 
 
 def _web_search(query: str, max_results: int = 8) -> dict:

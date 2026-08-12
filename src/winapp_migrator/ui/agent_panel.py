@@ -1,4 +1,4 @@
-"""AI Agent 工具面板（深色"星际控制台"风格，无 emoji，矢量图标）
+"""zhuzhu Copilot 工具面板（深色"星际控制台"风格，无 emoji，矢量图标）
 
 消息气泡（TRAE 风格，单气泡一体化）：
 - AI 气泡内依次渲染：思考过程 → 操作步骤 → 最终文本输出，均在同一气泡内
@@ -1252,7 +1252,7 @@ class AgentPanel(QDialog):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("AI Agent 工具面板")
+        self.setWindowTitle("zhuzhu Copilot")
         self.setWindowIcon(QIcon(_app_icon_path()))
         self.setAcceptDrops(True)   # 支持把图片/文件拖入对话框
         # 窗口可自由调整大小，标题栏带最小化/最大化按钮
@@ -1633,7 +1633,7 @@ class AgentPanel(QDialog):
         cl = QVBoxLayout(card)
         cl.setContentsMargins(28, 24, 28, 24)
         cl.setSpacing(10)
-        t = QLabel("AI 桌面助手")
+        t = QLabel("zhuzhu Copilot")
         t.setStyleSheet(f"color: {TEXT}; font-size: 20px; font-weight: 800;")
         t.setAlignment(Qt.AlignmentFlag.AlignCenter)
         cl.addWidget(t)
@@ -2807,7 +2807,7 @@ class AgentPanel(QDialog):
         if engine.text_only and send_images:
             self._add_status("当前模型为纯文本模型，已忽略图片输入", WARN)
             send_images = []
-        engine.start(ai_text, "桌面助手", send_images, skills=skill_names)
+        engine.start(ai_text, "zhuzhu Copilot", send_images, skills=skill_names)
 
     def _assess_worker(self):
         """后台线程：用默认 agnes-2.5-flash 评估任务难度（失败回退本地估算）"""

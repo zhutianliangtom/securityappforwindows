@@ -134,7 +134,7 @@ def _foreground_window_hwnd() -> int:
         return 0
     pid = wintypes.DWORD()
     user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
-    if pid.value == os.getpid():   # 本程序自己的窗口（如 Agent 面板前台时）回退全屏
+    if pid.value == os.getpid():   # 本程序自己的窗口（如 zhuzhu Copilot 面板前台时）回退全屏
         return 0
     rect = wintypes.RECT()
     if not user32.GetWindowRect(hwnd, ctypes.byref(rect)):

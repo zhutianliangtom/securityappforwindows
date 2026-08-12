@@ -1,4 +1,4 @@
-"""AI Agent 的 LLM 客户端：OpenAI 兼容 /v1/chat/completions，流式（SSE）
+"""zhuzhu Copilot 的 LLM 客户端：OpenAI 兼容 /v1/chat/completions，流式（SSE）
 
 - stream: true，逐 token 回调（on_delta）实现主流 Agent 的流式输出
 - 工具调用：tools / tool_choice（流式 tool_calls 增量按 index 聚合）

@@ -522,7 +522,7 @@ class MainWindow(QMainWindow):
         self.download_btn.clicked.connect(self._open_download_dialog)
         layout.addWidget(self.download_btn)
 
-        self.agent_btn = QPushButton("🤖 AI Agent")
+        self.agent_btn = QPushButton("🤖 zhuzhu Copilot")
         self.agent_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.agent_btn.setMinimumHeight(40)
         self.agent_btn.setStyleSheet(
@@ -1080,7 +1080,7 @@ class MainWindow(QMainWindow):
         self._download_dialog.activateWindow()
 
     def _open_agent_panel(self):
-        """打开 AI Agent 面板（单例，可同时保持打开）"""
+        """打开 zhuzhu Copilot 面板（单例，可同时保持打开）"""
         if not hasattr(self, "_agent_panel") or self._agent_panel is None:
             self._agent_panel = AgentPanel(self)
         self._agent_panel.show()

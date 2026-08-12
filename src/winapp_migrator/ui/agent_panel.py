@@ -939,6 +939,43 @@ class _ArrowComboBox(QComboBox):
         p.end()
 
 
+class _DropLineEdit(QLineEdit):
+    """输入框子类：直接在控件层处理文件拖放（不依赖拖放事件向父级冒泡）。
+
+    QLineEdit 默认 acceptDrops=True 但只认文本，文件 URL 会显示禁用样式且不冒泡；
+    重写 drag/drop 后文件拖入即转附件，纯文本拖放仍走默认逻辑。
+    """
+    fileDropped = pyqtSignal(list)   # 拖入的文件路径列表
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setAcceptDrops(True)
+
+    def _has_files(self, e) -> bool:
+        return e.mimeData().hasUrls()
+
+    def dragEnterEvent(self, e):
+        if self._has_files(e):
+            e.acceptProposedAction()
+        else:
+            super().dragEnterEvent(e)
+
+    def dragMoveEvent(self, e):
+        if self._has_files(e):
+            e.acceptProposedAction()
+        else:
+            super().dragMoveEvent(e)
+
+    def dropEvent(self, e):
+        if self._has_files(e):
+            paths = [u.toLocalFile() for u in e.mimeData().urls() if u.toLocalFile()]
+            if paths:
+                self.fileDropped.emit(paths)
+            e.acceptProposedAction()
+        else:
+            super().dropEvent(e)
+
+
 class AgentPanel(QDialog):
     delta_signal = pyqtSignal(str)
     status_signal = pyqtSignal(str)
@@ -1245,9 +1282,7 @@ class AgentPanel(QDialog):
         self._completer.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
         self.input.setCompleter(self._completer)
         self.input.installEventFilter(self)   # 拦截 Ctrl+V：剪贴板图片转附件
-        # 关闭输入框自身拖放接收：QLineEdit 默认 acceptDrops=True 但只认文本，
-        # 文件 URL 会被拒绝并显示禁用样式，且事件不再冒泡 → 统一由面板 dragEnter/drop 处理
-        self.input.setAcceptDrops(False)
+        self.input.fileDropped.connect(self._on_input_files_dropped)   # 文件拖入 → 附件
         bottom.addWidget(self.input, 1)
 
         # 输入框右侧「+」上传按钮：文件选择器多选（也支持拖拽 / Ctrl+V 粘贴）
@@ -2673,6 +2708,11 @@ class AgentPanel(QDialog):
             if p:
                 self._add_attachment(p)
         e.acceptProposedAction()
+
+    def _on_input_files_dropped(self, paths: list):
+        """输入框文件拖入：逐个加入附件（图片/文件，纯文本模型自动过滤图片）"""
+        for p in paths or []:
+            self._add_attachment(p)
 
     def _add_attachment(self, path: str):
         path = os.path.abspath(path)

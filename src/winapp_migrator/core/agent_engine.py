@@ -238,11 +238,13 @@ class AgentEngine:
             if drop:
                 m["content"] = keep
 
-    def start(self, user_input: str, agent_name: str = "", images: list = None):
-        """后台线程执行一轮任务；images: 用户拖入的图片 data URL 列表"""
+    def start(self, user_input: str, agent_name: str = "", images: list = None,
+              skills: list = None):
+        """后台线程执行一轮任务；images: 用户拖入的图片 data URL 列表；
+        skills: 手动调用的技能名列表（/技能名 提示），其 instruction 注入系统提示词"""
         self._stop.clear()
         self._thread = threading.Thread(target=self.run,
-                                        args=(user_input, agent_name, images),
+                                        args=(user_input, agent_name, images, skills),
                                         daemon=True)
         self._thread.start()
 
@@ -296,9 +298,10 @@ class AgentEngine:
         return {"text": f"[未知工具] {name}", "images": []}
 
     # ---------- 主循环 ----------
-    def run(self, user_input: str, agent_name: str = "", images: list = None):
+    def run(self, user_input: str, agent_name: str = "", images: list = None,
+            skills: list = None):
         self.end_state = ""
-        system = agent_skills.build_system_prompt(agent_name)
+        system = agent_skills.build_system_prompt(agent_name, extra_skills=skills)
         if not self._messages or self._messages[0].get("role") != "system":
             self._messages.insert(0, {"role": "system", "content": system})
         else:

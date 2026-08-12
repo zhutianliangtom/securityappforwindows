@@ -1615,12 +1615,17 @@ class AgentPanel(QDialog):
         return ""
 
     def _match_skill(self, text: str):
-        """按名称匹配内置技能（/技能名 手动调用），未匹配返回 None"""
-        q = text.lstrip("/").strip().lower()
+        """解析 /技能名 [提示]：按技能名匹配，返回 (技能dict, 提示文本)；未匹配返回 (None, "")"""
+        if not text.startswith("/"):
+            return None, ""
+        parts = text[1:].split(None, 1)
+        if not parts:
+            return None, ""
+        q = parts[0].strip().lower()
         for s in agent_skills.load_skills():
             if s.get("name", "").strip().lower() == q:
-                return s
-        return None
+                return s, (parts[1].strip() if len(parts) > 1 else "")
+        return None, ""
 
     def _match_tool(self, text: str):
         """/工具名 [参数] → (name, args_text)；支持中文别名（截屏/截图→screenshot）；未匹配返回 None"""
@@ -1729,12 +1734,14 @@ class AgentPanel(QDialog):
         if text.lower().startswith("/clear"):
             self._clear_chat()
             return
-        # 手动调用内置技能：/技能名 → 把技能指令作为用户消息发送给 AI
-        skill = self._match_skill(text)
+        ai_text = text                       # 传给 AI 的文本（默认=原文）；原文用于用户气泡显示
+        skill_names = []
+        # 手动调用内置技能：/技能名 [提示] → 技能 instruction 注入本次系统提示词，提示作为用户消息
+        skill, skill_prompt = self._match_skill(text)
         if skill:
             self._add_status(f"已调用技能「{skill.get('name')}」", ACCENT)
-            text = (f"请使用技能「{skill.get('name')}」，严格按其流程执行。\n\n"
-                    f"技能说明：\n{skill.get('instruction', '')}")
+            skill_names = [skill.get("name")]
+            ai_text = skill_prompt or f"请严格按技能「{skill.get('name')}」的流程执行。"
         # 手动指定工具：/工具名 [参数] → 转成指令由 AI 调用对应工具
         tool = self._match_tool(text)
         shot = None
@@ -1745,20 +1752,20 @@ class AgentPanel(QDialog):
                 # 手动截屏：面板直接截图并展示（不依赖 AI 调用工具，保证必定出图）
                 try:
                     shot = agent_screen.capture_screen_data_url(grid=False)   # 展示用干净原图
-                    text = "已截取当前屏幕并展示在对话中，请基于截图内容回答或继续执行。"
+                    ai_text = "已截取当前屏幕并展示在对话中，请基于截图内容回答或继续执行。"
                 except Exception:
                     shot = None
             else:
-                text = (f"请调用工具「{tname}」完成以下任务，参数必须按 JSON 传入。\n"
-                        f"工具参数说明：{self._tool_params_hint(tname)}\n"
-                        f"参数原始文本：{targs or '(无，可自行确定合理参数，不确定时先 ask_user 澄清)'}")
+                ai_text = (f"请调用工具「{tname}」完成以下任务，参数必须按 JSON 传入。\n"
+                           f"工具参数说明：{self._tool_params_hint(tname)}\n"
+                           f"参数原始文本：{targs or '(无，可自行确定合理参数，不确定时先 ask_user 澄清)'}")
         # 非图片附件：把路径文本附加给 AI（不显示源内容），AI 可按需 read_file
         if files:
             note = "以下为拖入的附件文件，请按需读取内容：\n" + \
                 "\n".join(f"- {p}" for p in files)
-            text = (text + "\n\n" if text else "") + note
+            ai_text = (ai_text + "\n\n" if ai_text else "") + note
         engine = self._ensure_engine()
-        self._auto_name_session(text)   # 无名称会话：用首条消息自动命名
+        self._auto_name_session(ai_text)   # 无名称会话：用首条消息自动命名
         self._user_msgs.append(text)
         self._update_welcome()          # 发消息后欢迎介绍立即消失
 
@@ -1809,7 +1816,7 @@ class AgentPanel(QDialog):
 
         self._clear_attachments()   # 发送后清空附件条
         self._task_active = True
-        engine.start(text, "桌面助手", send_images)
+        engine.start(ai_text, "桌面助手", send_images, skills=skill_names)
 
     def _stop(self):
         if self._engine:

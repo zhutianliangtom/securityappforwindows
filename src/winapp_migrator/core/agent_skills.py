@@ -263,8 +263,11 @@ def skill_instructions(skill_names: list) -> str:
     return "\n".join(parts)
 
 
-def build_system_prompt(agent_name: str = "") -> str:
-    """构造 system prompt：人设 persona + 基础提示 + 严格规则 + 工具执行规范 + 技能说明 + 工具列表"""
+def build_system_prompt(agent_name: str = "", extra_skills: list = None) -> str:
+    """构造 system prompt：人设 persona + 基础提示 + 严格规则 + 工具执行规范 + 技能说明 + 工具列表
+
+    extra_skills: 手动调用的技能名列表（/技能名 提示），其 instruction 注入本任务系统提示词。
+    """
     agent = next((a for a in load_agents() if a.get("name") == agent_name), None) \
         or DEFAULT_AGENTS[0]
     parts = []
@@ -293,11 +296,14 @@ def build_system_prompt(agent_name: str = "") -> str:
         parts.append("\n".join(block))
     prompt = "\n\n".join(parts)
 
-    skills = agent.get("skills", [])
+    skills = list(agent.get("skills", [])) + list(extra_skills or [])
     if skills:
         inst = skill_instructions(skills)
         if inst:
             prompt += "\n\n" + inst
+    if extra_skills:
+        prompt += ("\n\n本次任务要求严格按上述指定技能（/技能名 手动调用）的流程执行，"
+                   "先按其 instruction 组织步骤再行动。")
     prompt += ("\n\n可用内置工具：screenshot(截屏观察)、list_windows/capture_window(枚举并只截指定窗口，"
                "避免其他窗口干扰)、get_screen_size(分辨率)、"
                "ask_user(需求不明确时向用户提问)、"

@@ -10,6 +10,7 @@
 """
 
 import base64
+import ctypes
 import html as _html
 import json
 import os
@@ -22,9 +23,11 @@ from pathlib import Path
 
 from PyQt6.QtCore import (Qt, QTimer, QSettings, QPropertyAnimation, pyqtSignal,
                           pyqtProperty, QEasingCurve, QByteArray, QBuffer, QIODevice,
-                          QEvent, QRect, QSize, QPoint)
+                          QEvent, QRect, QSize, QPoint, QPointF, QMimeData, QUrl,
+                          QAbstractNativeEventFilter)
 from PyQt6.QtGui import (QIcon, QFont, QPainter, QPen, QColor, QPixmap, QImage,
-                         QPainterPath, QKeySequence, QTextOption)
+                         QPainterPath, QKeySequence, QTextOption,
+                         QDragEnterEvent, QDragMoveEvent, QDropEvent)
 from PyQt6.QtWidgets import (
     QDialog, QLabel, QLineEdit, QPushButton, QComboBox, QScrollArea,
     QVBoxLayout, QHBoxLayout, QMessageBox, QFormLayout, QWidget,
@@ -37,6 +40,7 @@ from PyQt6.QtWidgets import (
 from winapp_migrator.core import agent_llm, agent_engine, agent_skills, agent_sandbox, agent_tools, agent_screen
 from winapp_migrator.core.agent_mcp import McpManager
 from winapp_migrator.core.agent_screen import capture_screen_data_url
+from winapp_migrator.utils.helpers import is_admin
 
 # ---------- 深色"星际控制台"主题 ----------
 BG = "#0B1220"            # 窗口底色（深蓝黑）
@@ -1070,6 +1074,95 @@ class _DropTextEdit(QPlainTextEdit):
             super().dropEvent(e)
 
 
+# ---------- 管理员权限下的原生拖放（Windows UIPI 绕行） ----------
+# UIPI 会拦截普通 Explorer 拖入管理员（High IL）窗口的 OLE 拖放，Qt 常规 DnD 无解。
+# 方案：RevokeDragDrop 移除 Qt 的 OLE 注册 → Explorer 回退发送 WM_DROPFILES 消息 →
+# 原生事件过滤器解析文件路径与落点，合成 Qt 拖放事件投递给鼠标下方的控件。
+_WM_DROPFILES = 0x0233
+_WM_COPYDATA = 0x004A
+_WM_COPYGLOBALDATA = 0x004D
+_MSGFLT_ADD = 1
+
+
+class _MSG(ctypes.Structure):
+    """Win32 MSG 结构（64 位布局）"""
+    _fields_ = [("hwnd", ctypes.c_void_p),
+                ("message", ctypes.c_uint),
+                ("wParam", ctypes.c_void_p),
+                ("lParam", ctypes.c_void_p),
+                ("time", ctypes.c_uint),
+                ("pt_x", ctypes.c_long), ("pt_y", ctypes.c_long)]
+
+
+def _drag_query_files(hdrop) -> list:
+    """从 HDROP 句柄解析拖入的文件路径列表"""
+    n = ctypes.windll.shell32.DragQueryFileW(hdrop, 0xFFFFFFFF, None, 0)
+    paths = []
+    for i in range(n):
+        ln = ctypes.windll.shell32.DragQueryFileW(hdrop, i, None, 0)
+        buf = ctypes.create_unicode_buffer(ln + 1)
+        ctypes.windll.shell32.DragQueryFileW(hdrop, i, buf, ln + 1)
+        paths.append(buf.value)
+    return paths
+
+
+class _AdminDropFilter(QAbstractNativeEventFilter):
+    """把 WM_DROPFILES 转成 Qt 拖放事件，投递给鼠标下方的可接收控件"""
+
+    def __init__(self, panel):
+        super().__init__()
+        self._panel = panel
+
+    def nativeEventFilter(self, eventType, message):
+        try:
+            msg = ctypes.cast(message, ctypes.POINTER(_MSG)).contents
+            if msg.message != _WM_DROPFILES:
+                return False, 0
+            hdrop = ctypes.c_void_p(msg.wParam)
+            paths = _drag_query_files(hdrop)
+            pt = _POINT()
+            ctypes.windll.shell32.DragQueryPoint(hdrop, ctypes.byref(pt))
+            ctypes.windll.shell32.DragFinish(hdrop)
+            if paths:
+                # 延迟到主循环投递，避免在原生消息处理中重入 Qt 事件循环
+                QTimer.singleShot(0, lambda x=pt.x, y=pt.y, p=paths:
+                                  self._deliver(x, y, p))
+            return True, 0
+        except Exception:
+            return False, 0
+
+    def _deliver(self, x: int, y: int, paths: list):
+        """主循环内投递：定位鼠标下方第一个可接收拖放的控件并发送 Qt 拖放事件"""
+        panel = self._panel
+        try:
+            if panel is None or not paths:
+                return
+            w = panel.childAt(QPoint(x, y))
+            while w is not None and not w.acceptDrops():
+                w = w.parentWidget()
+            if w is None:
+                w = panel
+            md = QMimeData()
+            md.setUrls([QUrl.fromLocalFile(p) for p in paths])
+            local = w.mapFrom(panel, QPoint(x, y))
+            app = QApplication.instance()
+            app.sendEvent(w, QDragEnterEvent(
+                local, Qt.DropAction.CopyAction, md, Qt.MouseButton.LeftButton,
+                Qt.KeyboardModifier.NoModifier))
+            app.sendEvent(w, QDragMoveEvent(
+                local, Qt.DropAction.CopyAction, md, Qt.MouseButton.LeftButton,
+                Qt.KeyboardModifier.NoModifier))
+            app.sendEvent(w, QDropEvent(
+                QPointF(local), Qt.DropAction.CopyAction, md, Qt.MouseButton.LeftButton,
+                Qt.KeyboardModifier.NoModifier))
+        except Exception:
+            pass
+
+
+class _POINT(ctypes.Structure):
+    _fields_ = [("x", ctypes.c_long), ("y", ctypes.c_long)]
+
+
 class AgentPanel(QDialog):
     delta_signal = pyqtSignal(str)
     status_signal = pyqtSignal(str)
@@ -1145,6 +1238,9 @@ class AgentPanel(QDialog):
         self._stalled_stop = False     # 是否因卡死自动停止
         self._task_active = False      # 是否有任务在执行（结束收尾的可靠依据）
         self._eval_pending = None      # 任务难度评估待启动参数 (ai_text, send_images, skill_names)
+        # 管理员权限下的原生拖放（UIPI 绕行，仅提权时启用）
+        self._admin_dnd = False
+        self._admin_drop_filter = None
 
         # 多对话（会话）状态：切换隔离上下文，AI 自动命名
         self._session_id = ""          # 当前会话 id
@@ -1808,6 +1904,9 @@ class AgentPanel(QDialog):
         if not self._maximized_once:   # 默认最大化展示
             self._maximized_once = True
             QTimer.singleShot(0, self.showMaximized)
+        # 管理员权限：Windows UIPI 拦截普通 Explorer 的 OLE 拖放，改用 WM_DROPFILES 原生通道
+        if not self._admin_dnd and is_admin():
+            QTimer.singleShot(150, self._setup_admin_dnd)
 
     def _add_bubble(self, text: str, align: str, rich: bool = False,
                     animate: bool = True) -> QLabel:
@@ -2837,6 +2936,30 @@ class AgentPanel(QDialog):
                 self._add_attachment(p)
         e.acceptProposedAction()
 
+    def _setup_admin_dnd(self):
+        """管理员权限下启用 WM_DROPFILES 原生拖放通道（UIPI 拦截 OLE 拖放的绕行方案）"""
+        try:
+            hwnd = int(self.winId())
+            user32 = ctypes.windll.user32
+            for m in (_WM_DROPFILES, _WM_COPYDATA, _WM_COPYGLOBALDATA):
+                user32.ChangeWindowMessageFilter(m, _MSGFLT_ADD)
+            try:
+                _ex = user32.ChangeWindowMessageFilterEx
+                _ex.argtypes = [ctypes.c_void_p, ctypes.c_uint, ctypes.c_uint,
+                                ctypes.c_void_p]
+                _ex(hwnd, _WM_DROPFILES, _MSGFLT_ADD, None)
+            except Exception:
+                pass
+            ctypes.windll.shell32.DragAcceptFiles(hwnd, True)
+            # 移除 Qt 的 OLE 拖放注册，让 Explorer 回退到 WM_DROPFILES 消息通道
+            ctypes.windll.ole32.RevokeDragDrop(hwnd)
+            self._admin_drop_filter = _AdminDropFilter(self)
+            QApplication.instance().installNativeEventFilter(self._admin_drop_filter)
+            self._admin_dnd = True
+            self._add_status("已启用管理员拖放通道（系统限制，拖拽图标不可见）", TEXT_DIM)
+        except Exception:
+            self._admin_dnd = False
+
     def _on_input_files_dropped(self, paths: list):
         """输入框文件拖入：逐个加入附件（图片/文件，纯文本模型自动过滤图片）"""
         for p in paths or []:
@@ -3185,4 +3308,10 @@ class AgentPanel(QDialog):
             self._mcp.close_all()
         except Exception:
             pass
+        if self._admin_drop_filter is not None:
+            try:
+                QApplication.instance().removeNativeEventFilter(self._admin_drop_filter)
+            except Exception:
+                pass
+            self._admin_drop_filter = None
         event.accept()

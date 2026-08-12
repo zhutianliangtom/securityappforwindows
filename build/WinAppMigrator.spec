@@ -8,7 +8,7 @@ a = Analysis(
     ['../src/main.py'],
     pathex=['../src'],
     binaries=[],
-    datas=[('../assets', 'assets')],
+    datas=[('../assets', 'assets'), ('../src/winapp_migrator/skills', 'skills')],
     hiddenimports=[
         'winapp_migrator.core.app_scanner',
         'winapp_migrator.core.migration',

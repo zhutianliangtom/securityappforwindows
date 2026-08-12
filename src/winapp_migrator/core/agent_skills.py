@@ -10,6 +10,8 @@
 
 import json
 import os
+import shutil
+import sys
 from pathlib import Path
 
 CONFIG_DIR = Path.home() / ".winapp_migrator" / "agent"
@@ -319,8 +321,17 @@ def _parse_skill_md(text: str) -> dict:
     return {"name": name, "description": desc, "instruction": body}
 
 
+def _shipped_skills_dir() -> Path:
+    """随应用分发的内置技能资源目录：打包后为 _MEIPASS/skills，开发模式为 src/winapp_migrator/skills"""
+    if getattr(sys, "frozen", False):
+        base = Path(getattr(sys, "_MEIPASS", "."))
+        return base / "skills"
+    return Path(__file__).resolve().parent.parent / "skills"
+
+
 def ensure_md_skills() -> None:
-    """确保内置 md 技能存在：首次运行时自动生成 skills/<name>/SKILL.md（可被用户编辑）"""
+    """确保内置 md 技能存在：内置模板（_BUILTIN_MD_SKILLS）+ 随包分发的技能资源，
+    用户技能目录缺失时自动生成/复制（不覆盖用户已有或修改过的技能）"""
     root = _skills_dir()
     for name, cfg in _BUILTIN_MD_SKILLS.items():
         f = root / name / "SKILL.md"
@@ -333,6 +344,19 @@ def ensure_md_skills() -> None:
                 f"{cfg['instruction'].strip()}\n", encoding="utf-8")
         except OSError:
             pass
+    # 随包分发技能：用户目录缺失同名技能时整体复制（含 resources 附属文件）
+    shipped = _shipped_skills_dir()
+    if shipped.is_dir():
+        for d in shipped.iterdir():
+            if not d.is_dir() or not (d / "SKILL.md").is_file():
+                continue
+            target = root / d.name
+            if (target / "SKILL.md").is_file():
+                continue
+            try:
+                shutil.copytree(d, target)
+            except OSError:
+                pass
 
 
 def load_md_skills() -> list:

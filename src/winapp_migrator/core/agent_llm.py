@@ -19,8 +19,30 @@ _UA = "WinAppMigrator/1.0 AgentClient"
 _MAX_RETRIES = 3    # 请求失败（429/5xx/网络）自动重试次数
 _RETRY_DELAY = 2.0  # 重试基础延迟（秒），指数退避
 
-# 纯文本模型关键字（子串匹配）：命中即视为不支持图像输入，禁用截图/视觉能力
-TEXT_ONLY_KEYS = ("deepseek",)
+# 纯文本模型关键字（子串匹配）：命中即视为不支持图像输入，禁用截图/视觉能力。
+# 只收录"确定无视觉"的文本模型名/前缀，避免误伤 gpt-4o / qwen-vl / glm-4v / hunyuan-vision 等视觉模型
+TEXT_ONLY_KEYS = (
+    "deepseek",                # deepseek-chat / deepseek-reasoner / deepseek-v4-* 均无视觉
+    "glm-4-flash", "glm-4-air", "glm-4-long",     # 智谱文本（glm-4v 有视觉，不匹配）
+    "qwen-turbo", "qwen-plus", "qwen-max", "qwen-long", "qwen-lite",  # 通义文本系列
+    "moonshot-v1",             # Kimi 旧版文本模型
+    "gpt-3.5",                 # OpenAI 旧文本模型（gpt-4o 含视觉，不匹配）
+    "text-davinci", "text-babbage", "text-curie", "text-ada",
+    "llama-2", "llama3-8b", "llama3-70b", "llama-3-8b", "llama-3-70b",
+    "mistral-7b", "mistral-8x", "mixtral",        # Mistral 文本系列
+    "phi-3", "phi-4",                            # 微软 Phi 文本
+    "gemma-2",                                   # Google 文本（gemma-3 起含视觉，不收录）
+    "chatglm", "yi-34b", "yi-large", "baichuan",  # 开源文本
+    "ernie-bot", "minimax", "abab",              # 百度文心 / MiniMax 文本
+    "spark-lite", "spark-v3",                    # 讯飞星火文本
+    "hunyuan-turbo", "hunyuan-lite",             # 腾讯混元文本（hunyuan-vision 不匹配）
+)
+
+# 工作力度档位（从轻到重）：决定"力度→模型"路由与是否加大推理
+EFFORTS = ("low", "medium", "high", "max", "ultra")
+# 发送给 API 的 reasoning_effort 取值（OpenAI 兼容仅支持 low/medium/high，max/ultra 折算为 high）
+_REASONING_EFFORT = {"low": "low", "medium": "medium", "high": "high",
+                     "max": "high", "ultra": "high"}
 
 
 def is_text_only_model(model: str) -> bool:
@@ -30,18 +52,89 @@ def is_text_only_model(model: str) -> bool:
 
 
 def load_model_config() -> dict:
-    """从 settings.json 读取模型配置（base_url/api_key/model），未配置时返回默认"""
+    """从 settings.json 读取模型配置，未配置时返回默认。
+
+    返回完整配置（含同服务商多模型与力度路由）：
+    base_url / api_key / model(主模型=首个) / models(全部模型名) /
+    effort_models(力度→模型) / effort(当前力度) / auto_effort(自动按难度) /
+    send_effort(是否向 API 发送 reasoning_effort)
+    """
     try:
         from winapp_migrator.core import agent_skills
         m = agent_skills.load_settings().get("model") or {}
+        if not isinstance(m, dict):
+            m = {}
+        models = [str(x).strip() for x in (m.get("models") or []) if str(x).strip()]
+        single = str(m.get("model") or "").strip()
+        if single and single not in models:
+            models.insert(0, single)
         return {
             "base_url": m.get("base_url") or DEFAULT_BASE_URL,
             "api_key": m.get("api_key") or DEFAULT_API_KEY,
-            "model": m.get("model") or DEFAULT_MODEL,
+            "model": models[0] if models else DEFAULT_MODEL,
+            "models": models or [DEFAULT_MODEL],
+            "effort_models": dict(m.get("effort_models") or {}),
+            "effort": m.get("effort") if m.get("effort") in EFFORTS else "medium",
+            "auto_effort": bool(m.get("auto_effort", True)),
+            "send_effort": bool(m.get("send_effort", False)),
         }
     except Exception:
         return {"base_url": DEFAULT_BASE_URL, "api_key": DEFAULT_API_KEY,
-                "model": DEFAULT_MODEL}
+                "model": DEFAULT_MODEL, "models": [DEFAULT_MODEL],
+                "effort_models": {}, "effort": "medium",
+                "auto_effort": True, "send_effort": False}
+
+
+def _default_effort_models(models: list) -> dict:
+    """力度→模型的默认路由：多模型时首个视为最强（pro）用于 high/max/ultra，
+    末个最轻（flash）用于 low/medium；单模型时全部同款"""
+    if not models:
+        return {}
+    if len(models) == 1:
+        return {e: models[0] for e in EFFORTS}
+    return {"low": models[-1], "medium": models[-1],
+            "high": models[0], "max": models[0], "ultra": models[0]}
+
+
+def resolve_model(cfg: dict, effort: str = "medium") -> str:
+    """按工作力度解析应使用的模型名：优先用户配置的 effort_models 映射，
+    否则按模型列表默认路由，最后回退主模型/默认模型"""
+    m = cfg or {}
+    effort = effort if effort in EFFORTS else "medium"
+    em = m.get("effort_models") or {}
+    name = str(em.get(effort) or "").strip() or str(em.get("medium") or "").strip()
+    if name:
+        return name
+    models = m.get("models") or []
+    if models:
+        return _default_effort_models(models).get(effort) or models[0]
+    return m.get("model") or DEFAULT_MODEL
+
+
+def estimate_effort(text: str) -> str:
+    """按任务难度智能估算工作力度：文本越长、关键操作词越多 → 力度越重"""
+    t = (text or "").strip()
+    if not t:
+        return "medium"
+    n = len(t)
+    hard = ("分析", "编写", "开发", "调试", "配置", "迁移", "优化", "卸载",
+            "安装", "重构", "计划", "步骤", "然后", "并且", "同时", "多个",
+            "项目", "代码", "构建", "测试", "部署")
+    hits = sum(1 for k in hard if k in t)
+    if n >= 300 or (n >= 100 and hits >= 2):
+        return "ultra"
+    if n >= 100 or (n >= 40 and hits >= 1) or hits >= 3:
+        return "max"
+    if n >= 60 or (n >= 25 and hits >= 1) or hits >= 2:
+        return "high"
+    if n >= 12:
+        return "medium"
+    return "low"
+
+
+def reasoning_effort_for(effort: str) -> str:
+    """工作力度 → API 的 reasoning_effort 参数值（max/ultra 折算为 high）"""
+    return _REASONING_EFFORT.get(effort if effort in EFFORTS else "medium")
 
 
 class AgentLLMError(Exception):
@@ -83,6 +176,8 @@ class LLMClient:
         self.api_key = api_key or DEFAULT_API_KEY
         self.model = model or DEFAULT_MODEL
         self.timeout = timeout
+        # 由上层按工作力度设置；None 表示不发送（兼容不支持该参数的 API）
+        self.reasoning_effort = None
 
     def chat_stream(self, messages: list,
                     tools: Optional[list] = None,
@@ -102,6 +197,8 @@ class LLMClient:
             "stream": True,
             "stream_options": {"include_usage": True},
         }
+        if self.reasoning_effort:
+            payload["reasoning_effort"] = self.reasoning_effort
         if tools:
             payload["tools"] = tools
             payload["tool_choice"] = tool_choice
@@ -191,4 +288,14 @@ class LLMClient:
                   "function": {"name": tool_calls[i]["name"],
                                "arguments": tool_calls[i]["args"] or "{}"}}
                  for i in sorted(tool_calls)]
-        return {"text": "".join(text_parts), "tool_calls": calls, "usage": usage}
+        # 上下文缓存统计（DeepSeek 返回 prompt_cache_hit/miss_tokens；
+        # 部分服务商在 prompt_tokens_details.cached_tokens 提供命中数）
+        hit = int((usage or {}).get("prompt_cache_hit_tokens") or 0)
+        miss = int((usage or {}).get("prompt_cache_miss_tokens") or 0)
+        details = (usage or {}).get("prompt_tokens_details") or {}
+        if not hit:
+            hit = int(details.get("cached_tokens") or 0)
+        if not miss:
+            miss = max(0, int((usage or {}).get("prompt_tokens") or 0) - hit)
+        return {"text": "".join(text_parts), "tool_calls": calls, "usage": usage,
+                "cache": {"hit": hit, "miss": miss}}

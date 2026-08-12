@@ -27,7 +27,7 @@ from PyQt6.QtWidgets import (
     QVBoxLayout, QHBoxLayout, QMessageBox, QFormLayout, QWidget,
     QApplication, QStyle, QListWidget, QGraphicsOpacityEffect,
     QCompleter, QRadioButton, QCheckBox, QFileIconProvider, QListWidgetItem,
-    QStackedWidget, QMenu, QFileDialog, QPlainTextEdit,
+    QStackedWidget, QMenu, QFileDialog, QPlainTextEdit, QSlider,
 )
 
 from winapp_migrator.core import agent_llm, agent_engine, agent_skills, agent_sandbox, agent_tools, agent_screen
@@ -428,7 +428,7 @@ class _AgentSettingsDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("AI 设置")
-        self.setMinimumSize(540, 600)
+        self.setMinimumSize(560, 720)
         self.setStyleSheet(
             f"QDialog {{ background: {PANEL}; }}"
             f"QLabel {{ color: {TEXT}; font-size: 13px; }}"
@@ -477,23 +477,55 @@ class _AgentSettingsDialog(QDialog):
         self.memory_check.setStyleSheet(f"color: {TEXT}; font-size: 13px; spacing: 8px;")
         root.addWidget(self.memory_check)
 
-        # 模型接入
-        root.addWidget(_lbl("模型接入（模型名含 deepseek 等关键字自动视为纯文本，"
-                            "禁用图片上传与截图工具）", bold=True))
+        # 模型接入（同服务商多模型，按工作力度路由）
+        root.addWidget(_lbl("模型接入（同服务商多模型；模型名含纯文本关键字如 deepseek "
+                            "自动禁用图片/截图能力）", bold=True))
         m = s.get("model") or {}
+        if not isinstance(m, dict):
+            m = {}
+        cfg = agent_llm.load_model_config()   # 规范化：models / effort / auto 等
         form = QFormLayout()
         form.setSpacing(8)
         self.base_edit = QLineEdit(str(m.get("base_url") or ""))
-        self.base_edit.setPlaceholderText(agent_llm.DEFAULT_BASE_URL)
+        self.base_edit.setPlaceholderText("https://api.example.com/v1（示例地址）")
         form.addRow("接口地址", self.base_edit)
         self.key_edit = QLineEdit(str(m.get("api_key") or ""))
         self.key_edit.setEchoMode(QLineEdit.EchoMode.Password)
-        self.key_edit.setPlaceholderText(agent_llm.DEFAULT_API_KEY)
+        self.key_edit.setPlaceholderText("sk-xxxxxxxx（示例，填写真实 Key）")
         form.addRow("API Key", self.key_edit)
-        self.model_edit = QLineEdit(str(m.get("model") or ""))
-        self.model_edit.setPlaceholderText(agent_llm.DEFAULT_MODEL)
-        form.addRow("模型名", self.model_edit)
+        self.models_edit = QLineEdit(", ".join(cfg["models"]))
+        self.models_edit.setPlaceholderText("模型名逗号分隔，如 deepseek-v4-pro, deepseek-v4-flash")
+        self.models_edit.textChanged.connect(self._on_models_changed)
+        form.addRow("模型列表", self.models_edit)
         root.addLayout(form)
+
+        # 工作力度 → 模型 绑定（面板拖动力度条即切换）
+        root.addWidget(_lbl("工作力度 → 模型（单模型时各档同款；多模型默认首=最强/末=最轻）"))
+        combo_style = (f"QComboBox {{ background: {BG}; color: {TEXT};"
+                       f"border: 1px solid {BORDER}; border-radius: 6px; padding: 4px 8px; }}"
+                       f"QComboBox::drop-down {{ border: none; width: 20px; }}")
+        eff_form = QFormLayout()
+        eff_form.setSpacing(6)
+        self.effort_combos = {}
+        for e in agent_llm.EFFORTS:
+            cb = QComboBox()
+            cb.setStyleSheet(combo_style)
+            eff_form.addRow(f"  {e}", cb)
+            self.effort_combos[e] = cb
+        root.addLayout(eff_form)
+
+        # 智能调用 + 推理参数
+        self.auto_effort_check = QCheckBox("自动按任务难度选择工作力度（智能调用）")
+        self.auto_effort_check.setStyleSheet(f"color: {TEXT}; font-size: 13px; spacing: 8px;")
+        self.auto_effort_check.setChecked(cfg.get("auto_effort", True))
+        root.addWidget(self.auto_effort_check)
+        self.send_effort_check = QCheckBox(
+            "向 API 发送 reasoning_effort 参数（仅支持该参数的服务商开启，如 OpenAI o 系列 / Qwen）")
+        self.send_effort_check.setStyleSheet(f"color: {TEXT}; font-size: 13px; spacing: 8px;")
+        self.send_effort_check.setChecked(cfg.get("send_effort", False))
+        root.addWidget(self.send_effort_check)
+
+        self._fill_effort_combos(cfg["models"], cfg.get("effort_models") or {})
 
         btns = QHBoxLayout()
         ok = QPushButton(_std_icon(QStyle.StandardPixmap.SP_DialogYesButton), "保存")
@@ -509,14 +541,48 @@ class _AgentSettingsDialog(QDialog):
         btns.addWidget(cancel)
         root.addLayout(btns)
 
+    def _fill_effort_combos(self, models: list, effort_models: dict = None):
+        """按模型列表重建各档力度下拉：保留已选值，缺失时按默认路由补齐"""
+        effort_models = effort_models or {}
+        default = agent_llm._default_effort_models(models)
+        for e, cb in self.effort_combos.items():
+            prev = cb.currentText()
+            cb.blockSignals(True)
+            cb.clear()
+            cb.addItems(models)
+            want = effort_models.get(e) or default.get(e) or prev
+            idx = cb.findText(want) if want else -1
+            cb.setCurrentIndex(idx if idx >= 0 else 0)
+            cb.blockSignals(False)
+
+    def _on_models_changed(self):
+        """模型列表编辑时实时刷新各档力度下拉（保留已选值）"""
+        models = [x.strip() for x in self.models_edit.text().replace("，", ",").split(",")
+                  if x.strip()]
+        if models:
+            self._fill_effort_combos(models)
+
     def _save(self):
+        base_url = self.base_edit.text().strip()
+        api_key = self.key_edit.text().strip()
+        models = [x.strip() for x in self.models_edit.text().replace("，", ",").split(",")
+                  if x.strip()]
+        if not models:
+            models = [agent_llm.DEFAULT_MODEL]
+        effort_models = {e: cb.currentText() for e, cb in self.effort_combos.items()}
+        old = agent_llm.load_model_config()
         model = {
-            "base_url": self.base_edit.text().strip(),
-            "api_key": self.key_edit.text().strip(),
-            "model": self.model_edit.text().strip(),
+            "model": models[0],          # 兼容旧字段：主模型 = 首个
+            "models": models,
+            "effort_models": effort_models,
+            "effort": old.get("effort", "medium"),
+            "auto_effort": self.auto_effort_check.isChecked(),
+            "send_effort": self.send_effort_check.isChecked(),
         }
-        if not any(model.values()):   # 全部留空：不使用自定义模型
-            model = {}
+        if base_url:
+            model["base_url"] = base_url
+        if api_key:
+            model["api_key"] = api_key
         data = {
             "custom_rules": [ln.strip() for ln in self.rules_edit.toPlainText().splitlines()
                              if ln.strip()],
@@ -866,11 +932,13 @@ class AgentPanel(QDialog):
         self._ask_evt = threading.Event()
         self._ask_result = ""
         self._mcp = McpManager()
-        # 用户设置：纯文本模型自动识别、记忆开关
+        # 用户设置：多模型/工作力度/纯文本模型自动识别、记忆开关
         _s = agent_skills.load_settings()
-        _cfg = _s.get("model") or {}
-        self._text_only = agent_llm.is_text_only_model(
-            _cfg.get("model") or agent_llm.DEFAULT_MODEL)
+        self._model_cfg = agent_llm.load_model_config()   # 规范化多模型/力度路由配置
+        self._effort = self._model_cfg.get("effort", "medium")
+        self._auto_effort = bool(self._model_cfg.get("auto_effort", True))
+        self._model_override = None      # 输入框右侧手动指定的模型（None=按力度路由）
+        self._refresh_text_only()
         self._memory_enabled = bool(_s.get("memory_enabled", True))
 
         # 拖入的附件：图片（data URL，发给模型）与非图片文件（路径文本）
@@ -915,6 +983,7 @@ class AgentPanel(QDialog):
         self._stop_anim_angle = 0
 
         self._build_ui()
+        self._sync_effort_ui()   # 把 settings 里的力度/自动开关同步到滑块与模型下拉
         self._connect_signals()
         self._restore_workdir()   # 恢复上次选择的工作目录（QSettings 持久化）
         self._init_sessions()   # 加载会话列表，默认恢复最近对话（上下文隔离）
@@ -1039,8 +1108,36 @@ class AgentPanel(QDialog):
         clear_btn.clicked.connect(self._clear_chat)
         top.addWidget(clear_btn)
 
-        # 模型/接口/API Key 已写死，无需设置入口
         root.addLayout(top)
+
+        # 工作力度行：拖动切换（low/medium/high/max/ultra）+ 自动按难度开关 + 当前路由模型
+        effort_row = QHBoxLayout()
+        effort_row.setSpacing(8)
+        eff_lbl = QLabel("工作力度")
+        eff_lbl.setStyleSheet(f"color: {TEXT}; font-size: 12px;")
+        effort_row.addWidget(eff_lbl)
+        self.effort_slider = QSlider(Qt.Orientation.Horizontal)
+        self.effort_slider.setRange(0, len(agent_llm.EFFORTS) - 1)
+        self.effort_slider.setFixedWidth(140)
+        self.effort_slider.setPageStep(1)
+        self.effort_slider.setToolTip("拖动切换工作力度（决定使用哪个模型）："
+                                      + " / ".join(agent_llm.EFFORTS))
+        self.effort_slider.valueChanged.connect(self._on_effort_changed)
+        effort_row.addWidget(self.effort_slider)
+        self.effort_label = QLabel("medium")
+        self.effort_label.setStyleSheet(f"color: {ACCENT}; font-size: 12px; font-weight: 700;")
+        self.effort_label.setFixedWidth(52)
+        effort_row.addWidget(self.effort_label)
+        self.auto_effort_check = QCheckBox("自动按难度")
+        self.auto_effort_check.setStyleSheet(f"color: {TEXT}; font-size: 12px; spacing: 6px;")
+        self.auto_effort_check.setToolTip("按任务难度自动选择工作力度（智能调用）；关闭后仅手动拖动")
+        self.auto_effort_check.toggled.connect(self._on_effort_changed)
+        effort_row.addWidget(self.auto_effort_check)
+        self.route_model_label = QLabel("")
+        self.route_model_label.setStyleSheet(f"color: {TEXT_DIM}; font-size: 12px;")
+        effort_row.addWidget(self.route_model_label)
+        effort_row.addStretch(1)
+        root.addLayout(effort_row)
 
         # 聊天区（气泡）与欢迎页（无对话时居中介绍 AI 功能）用堆叠切换
         self.msg_area = QScrollArea()
@@ -1095,12 +1192,27 @@ class AgentPanel(QDialog):
             f"QLineEdit:focus {{ border: 1px solid #4B6BD6; }}")
         self.input.returnPressed.connect(self._send)
         self.input.textChanged.connect(self._update_cmd_suggestions)
+        self.input.textChanged.connect(self._refresh_route_label)
         # 内联预测：输入 /com 时半透明显示 /compact 完成部分
         self._completer = QCompleter(self._all_commands(), self)
         self._completer.setCompletionMode(QCompleter.CompletionMode.InlineCompletion)
         self._completer.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
         self.input.setCompleter(self._completer)
         bottom.addWidget(self.input, 1)
+
+        # 输入框右侧：手动切换本次使用的模型（选「自动」则按工作力度路由）
+        self.model_combo = QComboBox()
+        self.model_combo.setMinimumWidth(150)
+        self.model_combo.setMaximumWidth(230)
+        self.model_combo.setStyleSheet(
+            f"QComboBox {{ background: {PANEL}; color: {TEXT}; border: 1px solid {BORDER};"
+            "border-radius: 10px; padding: 6px 10px; font-size: 12px; }}"
+            f"QComboBox::drop-down {{ border: none; width: 22px; }}"
+            f"QComboBox QAbstractItemView {{ background: {PANEL}; color: {TEXT};"
+            "border: 1px solid #4B6BD6; selection-background-color: #16233C; }}")
+        self.model_combo.setToolTip("手动切换本次使用的模型；「自动」= 按工作力度路由")
+        self.model_combo.currentIndexChanged.connect(self._on_model_combo)
+        bottom.addWidget(self.model_combo)
 
         self.send_btn = QPushButton(_std_icon(QStyle.StandardPixmap.SP_ArrowUp), "发送")
         self.send_btn.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -1864,12 +1976,14 @@ class AgentPanel(QDialog):
             self._add_status("AI 设置已保存并生效", OK)
 
     def _apply_agent_settings(self):
-        """设置变更后：刷新纯文本模型/记忆状态；引擎空闲则重建以应用新配置"""
+        """设置变更后：刷新多模型/力度/纯文本状态；引擎空闲则重建以应用新配置"""
         s = agent_skills.load_settings()
-        cfg = s.get("model") or {}
-        self._text_only = agent_llm.is_text_only_model(
-            cfg.get("model") or agent_llm.DEFAULT_MODEL)
+        self._model_cfg = agent_llm.load_model_config()
+        self._effort = self._model_cfg.get("effort", "medium")
+        self._auto_effort = bool(self._model_cfg.get("auto_effort", True))
+        self._refresh_text_only()
         self._memory_enabled = bool(s.get("memory_enabled", True))
+        self._sync_effort_ui()
         if self._text_only:
             self._add_status("纯文本模型：已禁用图片上传与截图工具", WARN)
         if self._engine is not None:
@@ -1879,6 +1993,88 @@ class AgentPanel(QDialog):
                 return
             self._engine = None   # 空闲：丢弃旧引擎，重建应用新模型/开关
         self._ensure_engine()
+
+    # ---------- 工作力度 / 模型路由 ----------
+    def _refresh_text_only(self):
+        """纯文本模型识别：全部已配置模型均为纯文本时才全局禁用视觉（
+        混配模型时按本次实际使用的模型逐次判断，见 _send）"""
+        cfg = self._model_cfg
+        models = cfg.get("models") or [cfg.get("model") or agent_llm.DEFAULT_MODEL]
+        self._text_only = all(agent_llm.is_text_only_model(x) for x in models)
+
+    def _on_effort_changed(self, *_):
+        """力度滑块/自动开关变更：刷新标签与路由显示，持久化力度与开关"""
+        self._effort = agent_llm.EFFORTS[self.effort_slider.value()]
+        self.effort_label.setText(self._effort)
+        self._sync_model_combo()   # 重建输入框右侧模型下拉
+        self._refresh_route_label()
+        s = agent_skills.load_settings()
+        m = dict(s.get("model") or {})
+        m["effort"] = self._effort
+        m["auto_effort"] = self.auto_effort_check.isChecked()
+        s["model"] = m
+        agent_skills.save_settings(s)
+
+    def _sync_effort_ui(self):
+        """把 settings 里的力度/自动开关同步到控件（初始化/设置保存后调用）"""
+        idx = agent_llm.EFFORTS.index(self._effort)
+        self.effort_slider.blockSignals(True)
+        self.effort_slider.setValue(idx)
+        self.effort_slider.blockSignals(False)
+        self.auto_effort_check.blockSignals(True)
+        self.auto_effort_check.setChecked(self._auto_effort)
+        self.auto_effort_check.blockSignals(False)
+        self.effort_label.setText(self._effort)
+        self._sync_model_combo()   # 初始化/设置保存后重建输入框右侧模型下拉
+        self._refresh_route_label()
+
+    def _resolve_effort(self, text: str) -> str:
+        """本次任务使用的工作力度：自动开关开启时按任务难度估算，否则用手动力度"""
+        if self._auto_effort:
+            return agent_llm.estimate_effort(text)
+        return self._effort
+
+    def _refresh_route_label(self, *_):
+        """显示当前路由模型（手动指定显示指定模型；自动模式随输入实时估算）"""
+        cfg = self._model_cfg
+        if self._model_override:
+            self.route_model_label.setText(f"模型: {self._model_override}")
+            return
+        effort = self._resolve_effort(self.input.text())
+        model = agent_llm.resolve_model(cfg, effort)
+        tag = "自动·" if self._auto_effort else ""
+        self.route_model_label.setText(f"{tag}模型: {model}")
+        # 输入框右侧下拉首项同步显示当前路由模型（仅自动模式）
+        if not self._model_override and self.model_combo.count():
+            self.model_combo.setItemText(0, f"自动 · {model}")
+
+    def _sync_model_combo(self, routed: str = None):
+        """重建输入框右侧模型下拉：首项「自动(按力度)」+ 全部模型名"""
+        cfg = self._model_cfg
+        models = cfg.get("models") or [cfg.get("model") or agent_llm.DEFAULT_MODEL]
+        routed = routed or agent_llm.resolve_model(cfg, self._resolve_effort(self.input.text()))
+        self.model_combo.blockSignals(True)
+        self.model_combo.clear()
+        self.model_combo.addItem(f"自动 · {routed}", None)
+        for x in models:
+            self.model_combo.addItem(x, x)
+        if self._model_override:
+            idx = self.model_combo.findData(self._model_override)
+            if idx < 0:      # 手动指定模型已不在列表：清除覆盖回到自动路由
+                self._model_override = None
+                idx = 0
+            self.model_combo.setCurrentIndex(idx)
+        else:
+            self.model_combo.setCurrentIndex(0)
+        self.model_combo.blockSignals(False)
+
+    def _on_model_combo(self, idx):
+        """手动切换模型：选中具体模型则本次发送使用之；选「自动」回到力度路由"""
+        if idx < 0:
+            return
+        val = self.model_combo.itemData(idx)
+        self._model_override = val if val else None
+        self._refresh_route_label()
 
     def _reconnect_mcp(self):
         threading.Thread(target=self._init_mcp, daemon=True).start()
@@ -1984,15 +2180,18 @@ class AgentPanel(QDialog):
 
     # ---------- 发送 / 停止 ----------
     def _llm_config(self) -> dict:
-        # 模型/接口/API Key 从 settings.json 读取（未配置时用默认 Agnes 2.5）
-        return agent_llm.load_model_config()
+        # 多模型/接口/API Key 从 settings.json 读取（含同服务商多模型与力度路由）
+        return self._model_cfg
 
     def _ensure_engine(self):
         """复用同一引擎：保留跨任务对话上下文"""
         if self._engine is None:
             cfg = self._llm_config()
+            client = agent_llm.LLMClient(
+                base_url=cfg.get("base_url"), api_key=cfg.get("api_key"),
+                model=cfg.get("model"))
             self._engine = agent_engine.AgentEngine(
-                agent_llm.LLMClient(**cfg),
+                client,
                 mcp_manager=self._mcp,
                 on_delta=lambda s: self.delta_signal.emit(s),
                 on_status=lambda s: self.status_signal.emit(s),
@@ -2047,7 +2246,15 @@ class AgentPanel(QDialog):
             note = "以下为拖入的附件文件，请按需读取内容：\n" + \
                 "\n".join(f"- {p}" for p in files)
             ai_text = (ai_text + "\n\n" if ai_text else "") + note
+        # 工作力度 → 模型路由：自动按任务难度估算（开关开启）或用手动力度；输入框右侧可手动指定
+        effort = self._resolve_effort(ai_text)
+        cfg = self._llm_config()
+        model = self._model_override or agent_llm.resolve_model(cfg, effort)
         engine = self._ensure_engine()
+        engine.llm.model = model
+        engine.llm.reasoning_effort = (agent_llm.reasoning_effort_for(effort)
+                                       if cfg.get("send_effort") else None)
+        engine.text_only = agent_llm.is_text_only_model(model)
         self._auto_name_session(ai_text)   # 无名称会话：用首条消息自动命名
         # 归档上一轮 AI 回复到历史（须在追加新用户消息前完成，保证交错行顺序正确）
         if self._segments:
@@ -2077,6 +2284,10 @@ class AgentPanel(QDialog):
         if shot:
             # 喂给模型时带坐标网格（精确点击定位），展示用干净原图
             send_images.append(agent_screen.capture_screen_data_url(grid=True))
+        # 本次路由的模型为纯文本时剥离图片（混配模型场景逐次判断）
+        if engine.text_only and send_images:
+            self._add_status("当前模型为纯文本模型，已忽略图片输入", WARN)
+            send_images = []
         if shot:
             self._segments.append({"type": "image", "url": shot, "caption": "已截屏"})
         self._user_stopped = False
@@ -2388,8 +2599,9 @@ class AgentPanel(QDialog):
             t = self._engine.tokens
             used = t['prompt'] + t['completion']
             if self._topbar_wide():
+                cache_txt = f" · 缓存命中 {t['cache_hit']}" if t.get('cache_hit') else ""
                 self.token_label.setText(
-                    f"已用 {used} tokens（输入 {t['prompt']} / 输出 {t['completion']}）")
+                    f"已用 {used} tokens（输入 {t['prompt']} / 输出 {t['completion']}{cache_txt}）")
             else:
                 self.token_label.setText(f"{used} tk")
         running = bool(self._engine and self._engine._thread and self._engine._thread.is_alive())

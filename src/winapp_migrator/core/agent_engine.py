@@ -126,7 +126,7 @@ class AgentEngine:
         self._stop.set()
 
     def reset_tokens(self):
-        self.tokens = {"prompt": 0, "completion": 0}
+        self.tokens = {"prompt": 0, "completion": 0, "cache_hit": 0, "cache_miss": 0}
         self.last_estimate = 0
 
     def clear_history(self):
@@ -272,7 +272,14 @@ class AgentEngine:
             tools = [t for t in tools
                      if t["function"]["name"] not in ("save_memory", "load_memory")]
         if self.mcp:
-            tools.extend(self.mcp.tool_schemas())
+            # MCP 工具并入：与内置工具/其他服务器同名时跳过（内置优先），
+            # 否则同名工具会让上游报 "Tool names must be unique"
+            seen = {t["function"]["name"] for t in tools}
+            for t in self.mcp.tool_schemas():
+                name = t["function"]["name"]
+                if name and name not in seen:
+                    tools.append(t)
+                    seen.add(name)
         return tools
 
     def _execute(self, name: str, args: dict, allow_dangerous: bool = False) -> dict:
@@ -458,8 +465,11 @@ class AgentEngine:
                 except Exception:
                     pass
 
-    def _accum_usage(self, usage):
+    def _accum_usage(self, usage, cache=None):
         if not usage:
             return
         self.tokens["prompt"] += int(usage.get("prompt_tokens", 0))
         self.tokens["completion"] += int(usage.get("completion_tokens", 0))
+        if cache:
+            self.tokens["cache_hit"] += int(cache.get("hit", 0))
+            self.tokens["cache_miss"] += int(cache.get("miss", 0))

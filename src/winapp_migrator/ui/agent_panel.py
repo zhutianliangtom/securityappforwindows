@@ -614,8 +614,9 @@ class _AgentSettingsDialog(QDialog):
             QMessageBox.warning(self, "导入失败", msg)
 
     def _delete_skill(self):
-        """删除用户技能：下拉选择（排除内置），确认后删除并即时生效"""
-        builtin = {s.get("name") for s in agent_skills.DEFAULT_SKILLS}
+        """删除用户技能：下拉选择（排除内置 JSON/md 技能），确认后删除并即时生效"""
+        builtin = ({s.get("name") for s in agent_skills.DEFAULT_SKILLS}
+                   | set(agent_skills._BUILTIN_MD_SKILLS))
         deletable = [s["name"] for s in agent_skills.load_skills()
                      if s.get("name") and s["name"] not in builtin]
         if not deletable:

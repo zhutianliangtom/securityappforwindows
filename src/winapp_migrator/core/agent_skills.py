@@ -358,12 +358,12 @@ def load_md_skills() -> list:
 
 def delete_skill(name: str) -> tuple:
     """删除用户技能：md 技能（skills/<name> 目录含 resources）与 skills.json 中的条目；
-    内置技能（DEFAULT_SKILLS）拒绝删除。返回 (ok, message)。"""
+    内置技能（DEFAULT_SKILLS JSON 与 _BUILTIN_MD_SKILLS md 模板）拒绝删除。返回 (ok, message)。"""
     import shutil
     name = (name or "").strip()
     if not name:
         return False, "技能名不能为空"
-    builtin = {s.get("name") for s in DEFAULT_SKILLS}
+    builtin = {s.get("name") for s in DEFAULT_SKILLS} | set(_BUILTIN_MD_SKILLS)
     if name in builtin:
         return False, f"「{name}」是内置技能，不可删除"
     removed = False

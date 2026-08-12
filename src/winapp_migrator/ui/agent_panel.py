@@ -965,6 +965,8 @@ class FlowLayout(QLayout):
         self.setSpacing(spacing)
 
     def addWidget(self, w: QWidget):
+        # 必须先 addChildWidget 建立父子关系，否则控件不会随布局显示/定位
+        self.addChildWidget(w)
         self.addItem(QWidgetItem(w))
 
     def addItem(self, item):
@@ -1126,7 +1128,8 @@ class _AdminDropFilter(QAbstractNativeEventFilter):
 
     def nativeEventFilter(self, eventType, message):
         try:
-            msg = ctypes.cast(message, ctypes.POINTER(_MSG)).contents
+            # PyQt6 中 message 为 sip.voidptr，需先转整数地址再按 MSG 结构解析
+            msg = ctypes.cast(int(message), ctypes.POINTER(_MSG)).contents
             if msg.message != _WM_DROPFILES:
                 return False, 0
             hdrop = ctypes.c_void_p(msg.wParam)

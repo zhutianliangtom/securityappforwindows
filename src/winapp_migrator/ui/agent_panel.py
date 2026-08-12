@@ -2567,12 +2567,14 @@ class AgentPanel(QDialog):
 
     def _cmd_desc(self, cmd: str) -> str:
         """命令描述（用于命令条 tooltip）"""
-        name = cmd.lstrip("/")
-        for s in agent_skills.load_skills():
-            if s.get("name", "").strip().lower() == name.lower():
-                return s.get("description", "")
+        name = cmd.lstrip("/").lower()
+        skills = {s.get("name", "").strip().lower(): s
+                  for s in agent_skills.load_skills()}
+        s = skills.get(name)
+        if s:
+            return s.get("description", "")
         for t in agent_tools.TOOLS:
-            if t["function"]["name"] == name:
+            if t["function"]["name"].lower() == name:
                 return t["function"].get("description", "")
         return ""
 

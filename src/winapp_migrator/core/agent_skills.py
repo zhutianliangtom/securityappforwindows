@@ -14,6 +14,7 @@ import json
 import os
 import shutil
 import sys
+import time
 from pathlib import Path
 
 CONFIG_DIR = Path.home() / ".winapp_migrator" / "agent"
@@ -501,6 +502,49 @@ DEFAULT_AGENTS = [
 ]
 
 
+# 技能加载缓存：输入框 textChanged 等高频路径避免每次全量扫盘。
+# 失效依据：skills.json 的 mtime + skills 目录内所有 SKILL.md 的 (目录名, mtime, size) 指纹，
+# 任何技能导入/删除/编辑（含用户手改 SKILL.md）都会导致指纹变化而自动失效，保证热改即时生效。
+_SKILLS_CACHE = {"all_key": None, "all_list": None, "md_key": None, "md_list": None,
+                 "stamp": 0.0}
+_MIGRATE_STATE = {"mtime": 0, "clean": False}
+_SKILLS_TTL = 2.0   # 快速路径有效期（秒）：期间直接返回缓存，零磁盘 IO
+
+
+def _skills_fresh() -> bool:
+    """TTL 快速路径：高频调用（输入框 textChanged）期间零 IO 直接命中缓存。
+    修改类操作（导入/删除/创建）会显式失效缓存，保证即时生效。"""
+    return time.time() - _SKILLS_CACHE["stamp"] < _SKILLS_TTL
+
+
+def _invalidate_skills_cache() -> None:
+    """修改技能后显式失效缓存（导入/删除/创建），下次调用重新扫盘"""
+    _SKILLS_CACHE.update(all_key=None, all_list=None, md_key=None, md_list=None, stamp=0.0)
+
+
+def _file_mtime(path: Path):
+    try:
+        return path.stat().st_mtime_ns
+    except OSError:
+        return 0
+
+
+def _md_key(root: Path) -> str:
+    """skills 目录指纹：所有 SKILL.md 的 (目录名, mtime, size) 摘要"""
+    parts = []
+    try:
+        for d in sorted(root.iterdir()):
+            if not d.is_dir():
+                continue
+            f = d / "SKILL.md"
+            if f.is_file():
+                st = f.stat()
+                parts.append(f"{d.name}:{st.st_mtime_ns}:{st.st_size}")
+    except OSError:
+        pass
+    return "|".join(parts)
+
+
 def _load(name: str, default: list) -> list:
     path = CONFIG_DIR / name
     try:
@@ -595,23 +639,32 @@ def ensure_md_skills() -> None:
 
 
 def load_md_skills() -> list:
-    """扫描市场标准技能目录，返回 [{name,description,instruction,source:'md'}]"""
+    """扫描市场标准技能目录，返回 [{name,description,instruction,source:'md'}]。
+    TTL 快速路径：有效期内的重复调用零 IO 直接返回缓存；修改操作显式失效。"""
+    if _skills_fresh() and _SKILLS_CACHE["md_list"] is not None:
+        return _SKILLS_CACHE["md_list"]
     ensure_md_skills()
+    root = _skills_dir()
+    key = _md_key(root)
+    if _SKILLS_CACHE["md_key"] == key and _SKILLS_CACHE["md_list"] is not None:
+        _SKILLS_CACHE["stamp"] = time.time()
+        return _SKILLS_CACHE["md_list"]
     out = []
     try:
-        root = _skills_dir()
-        if not root.is_dir():
-            return out
-        for d in sorted(root.iterdir()):
-            f = d / "SKILL.md"
-            if not d.is_dir() or not f.is_file():
-                continue
-            s = _parse_skill_md(f.read_text(encoding="utf-8", errors="replace"))
-            if s:
-                s["source"] = "md"
-                out.append(s)
+        if root.is_dir():
+            for d in sorted(root.iterdir()):
+                f = d / "SKILL.md"
+                if not d.is_dir() or not f.is_file():
+                    continue
+                s = _parse_skill_md(f.read_text(encoding="utf-8", errors="replace"))
+                if s:
+                    s["source"] = "md"
+                    out.append(s)
     except Exception:
         pass
+    _SKILLS_CACHE["md_key"] = key
+    _SKILLS_CACHE["md_list"] = out
+    _SKILLS_CACHE["stamp"] = time.time()
     return out
 
 
@@ -646,6 +699,7 @@ def delete_skill(name: str) -> tuple:
         pass
     if not removed:
         return False, f"未找到技能「{name}」"
+    _invalidate_skills_cache()
     return True, f"已删除技能「{name}」并即时生效"
 
 
@@ -670,6 +724,7 @@ def create_md_skill(name: str, description: str, instruction: str) -> tuple:
         md = (f"---\nname: {name}\ndescription: {description}\n---\n\n"
               f"{instruction}\n")
         (d / "SKILL.md").write_text(md, encoding="utf-8")
+        _invalidate_skills_cache()
         return True, f"已创建技能「{name}」（{d / 'SKILL.md'}），已加载生效"
     except OSError as e:
         return False, f"创建技能失败: {e}"
@@ -720,6 +775,7 @@ def import_skill_file(path: str) -> tuple:
         s = _parse_skill_md(md_path.read_text(encoding="utf-8", errors="replace"))
         if not s:
             return False, "SKILL.md 内容为空或格式不正确"
+        _invalidate_skills_cache()
         return True, f"已导入技能「{s.get('name') or md_path.parent.name}」并即时生效"
     except OSError as e:
         return False, f"导入失败: {e}"
@@ -728,10 +784,15 @@ def import_skill_file(path: str) -> tuple:
 def _migrate_legacy_json_skills() -> None:
     """迁移旧 JSON 技能：技能已统一为市场标准 md（SKILL.md），
     若 skills.json 中存在已内置化的旧 JSON 条目则自动移除（保留用户自建技能），
-    避免 JSON 优先覆盖 md 版本导致 SKILL.md 编辑不生效。"""
+    避免 JSON 优先覆盖 md 版本导致 SKILL.md 编辑不生效。
+    带 mtime 状态缓存：文件未变化且已清理干净时跳过重复读取。"""
+    global _MIGRATE_STATE
     try:
         path = CONFIG_DIR / "skills.json"
         if not path.is_file():
+            return
+        mt = _file_mtime(path)
+        if _MIGRATE_STATE["clean"] and _MIGRATE_STATE["mtime"] == mt:
             return
         data = json.loads(path.read_text(encoding="utf-8"))
         if not isinstance(data, list):
@@ -739,7 +800,9 @@ def _migrate_legacy_json_skills() -> None:
         builtin = set(_BUILTIN_MD_SKILLS) | {"code-review"}
         leftover = [s for s in data
                     if isinstance(s, dict) and s.get("name") not in builtin]
-        if len(leftover) != len(data):
+        _MIGRATE_STATE["mtime"] = mt
+        _MIGRATE_STATE["clean"] = len(leftover) == len(data)
+        if not _MIGRATE_STATE["clean"]:
             path.write_text(json.dumps(leftover, ensure_ascii=False, indent=2),
                             encoding="utf-8")
     except Exception:
@@ -750,8 +813,15 @@ def load_skills() -> list:
     """全部技能：内置 skills.json + 内置核心技能兜底 + 市场标准 md 技能（skills/<name>/SKILL.md）
 
     md 技能与 JSON 同名时以 JSON 为准（JSON 优先）。每次调用实时扫描，新增 md 技能即时生效。
+    TTL 快速路径：有效期内的重复调用零 IO 直接返回缓存；修改操作显式失效。
     """
+    if _skills_fresh() and _SKILLS_CACHE["all_list"] is not None:
+        return _SKILLS_CACHE["all_list"]
     _migrate_legacy_json_skills()
+    key = (_file_mtime(CONFIG_DIR / "skills.json"), _md_key(_skills_dir()))
+    if _SKILLS_CACHE["all_key"] == key and _SKILLS_CACHE["all_list"] is not None:
+        _SKILLS_CACHE["stamp"] = time.time()
+        return _SKILLS_CACHE["all_list"]
     merged = list(_load("skills.json", DEFAULT_SKILLS))
     seen = {s.get("name") for s in merged if s.get("name")}
     # 内置核心技能兜底：缺失时补充（保证 skill-create 等始终可用）
@@ -762,6 +832,9 @@ def load_skills() -> list:
     for s in load_md_skills():
         if s.get("name") and s.get("name") not in seen:
             merged.append(s)
+    _SKILLS_CACHE["all_key"] = key
+    _SKILLS_CACHE["all_list"] = merged
+    _SKILLS_CACHE["stamp"] = time.time()
     return merged
 
 

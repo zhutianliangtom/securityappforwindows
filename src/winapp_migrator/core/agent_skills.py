@@ -52,6 +52,11 @@ DEFAULT_SKILLS = [
      "instruction": ("1. 用 read_file 读取待审查文件，list_directory 了解项目结构。\n"
                      "2. 按顺序检查：逻辑正确性、边界与错误处理、安全与权限、可维护性。\n"
                      "3. 输出审查结论：严重问题/一般问题/建议，逐条给出文件与行号。")},
+    {"name": "skill-create", "description": "技能创建：根据用户自然语言描述自动生成市场标准 SKILL.md 技能并加载",
+     "instruction": ("1. 倾听用户对技能的描述，提炼出：技能名（英文，字母/数字/下划线/连字符，≤50 字符）、"
+                     "一句话用途简介、执行流程正文。\n"
+                     "2. 用 create_skill 工具创建：instruction 写清触发条件、执行步骤与规则（markdown）。\n"
+                     "3. 创建成功后提示：已可通过 /技能名 或对话描述调用；若用户描述的是可复用的流程，适合沉淀为技能。")},
 ]
 
 DEFAULT_AGENTS = [
@@ -229,8 +234,99 @@ def _ensure_samples():
         pass
 
 
+def _skills_dir() -> Path:
+    """市场标准技能目录：~/.winapp_migrator/agent/skills/<name>/SKILL.md"""
+    return CONFIG_DIR / "skills"
+
+
+def _parse_skill_md(text: str) -> dict:
+    """解析 SKILL.md：--- frontmatter（name/description）--- + 正文 instruction
+
+    市场标准格式（Claude Skills / Trae Skill）。无 frontmatter 时仅返回正文。
+    """
+    s = (text or "").strip()
+    if not s:
+        return {}
+    name = desc = ""
+    body = s
+    if s.startswith("---"):
+        end = s.find("\n---", 3)
+        if end > 0:
+            fm = s[3:end].strip()
+            body = s[end + 4:].strip()
+            for line in fm.splitlines():
+                line = line.strip()
+                if line.startswith("name:"):
+                    name = line[len("name:"):].strip().strip("\"'")
+                elif line.startswith("description:"):
+                    desc = line[len("description:"):].strip().strip("\"'")
+    if not body:
+        return {}
+    return {"name": name, "description": desc, "instruction": body}
+
+
+def load_md_skills() -> list:
+    """扫描市场标准技能目录，返回 [{name,description,instruction,source:'md'}]"""
+    out = []
+    try:
+        root = _skills_dir()
+        if not root.is_dir():
+            return out
+        for d in sorted(root.iterdir()):
+            f = d / "SKILL.md"
+            if not d.is_dir() or not f.is_file():
+                continue
+            s = _parse_skill_md(f.read_text(encoding="utf-8", errors="replace"))
+            if s:
+                s["source"] = "md"
+                out.append(s)
+    except Exception:
+        pass
+    return out
+
+
+def create_md_skill(name: str, description: str, instruction: str) -> tuple:
+    """以用户自然语言描述为基础，生成市场标准 SKILL.md 技能并注册。
+
+    返回 (ok: bool, message: str)。生成后 load_skills 立即加载生效。
+    """
+    import re
+    name = (name or "").strip()
+    if not name:
+        return False, "技能名不能为空"
+    if not re.match(r"^[A-Za-z0-9_-]{1,50}$", name):
+        return False, "技能名仅支持字母/数字/下划线/连字符（≤50 字符）"
+    description = (description or "").strip() or name
+    instruction = (instruction or "").strip()
+    if not instruction:
+        return False, "技能说明（instruction）不能为空"
+    try:
+        d = _skills_dir() / name
+        d.mkdir(parents=True, exist_ok=True)
+        md = (f"---\nname: {name}\ndescription: {description}\n---\n\n"
+              f"{instruction}\n")
+        (d / "SKILL.md").write_text(md, encoding="utf-8")
+        return True, f"已创建技能「{name}」（{d / 'SKILL.md'}），已加载生效"
+    except OSError as e:
+        return False, f"创建技能失败: {e}"
+
+
 def load_skills() -> list:
-    return _load("skills.json", DEFAULT_SKILLS)
+    """全部技能：内置 skills.json + 内置核心技能兜底 + 市场标准 md 技能（skills/<name>/SKILL.md）
+
+    md 技能与 JSON 同名时以 JSON 为准（JSON 优先）。每次调用实时扫描，新增 md 技能即时生效。
+    """
+    merged = list(_load("skills.json", DEFAULT_SKILLS))
+    seen = {s.get("name") for s in merged if s.get("name")}
+    # 内置核心技能兜底：缺失时补充（保证 skill-create 等始终可用）
+    for s in DEFAULT_SKILLS:
+        if s.get("name") and s.get("name") not in seen:
+            merged.append(s)
+            seen.add(s.get("name"))
+    for s in load_md_skills():
+        if s.get("name") and s.get("name") not in seen:
+            merged.append(s)
+    return merged
 
 
 def load_agents() -> list:

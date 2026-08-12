@@ -479,6 +479,22 @@ TOOLS = [
                            "required": ["url"]},
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "create_skill",
+            "description": "以用户自然语言描述为基础，自动生成市场标准 SKILL.md 技能文件并加载（写入 "
+                           "skills/<name>/SKILL.md，创建后立即生效，AI 与用户均可通过 /技能名 调用）。",
+            "parameters": {"type": "object",
+                           "properties": {
+                               "name": {"type": "string",
+                                        "description": "技能名（仅字母/数字/下划线/连字符，≤50 字符）"},
+                               "description": {"type": "string", "description": "技能用途一句话简介"},
+                               "instruction": {"type": "string",
+                                               "description": "技能执行流程/规则正文（markdown，写清触发条件与步骤）"}},
+                           "required": ["name", "description", "instruction"]},
+        },
+    },
 ]
 
 # 沙盒拒绝返回（无截图）
@@ -644,6 +660,10 @@ def execute_tool(name: str, args: dict, allow_dangerous: bool = False,
             return _migrate_app(str(args.get("name", "")), str(args.get("target", "")))
         if name == "fast_download":
             return _fast_download(str(args.get("url", "")), str(args.get("dest_dir", "")))
+        if name == "create_skill":
+            return _create_skill(str(args.get("name", "")),
+                                 str(args.get("description", "")),
+                                 str(args.get("instruction", "")))
     except Exception as e:
         return _blocked(f"[工具执行错误] {name}: {e}")
     return _blocked(f"[未知工具] {name}")
@@ -1091,6 +1111,13 @@ def _fast_download(url: str, dest_dir: str) -> dict:
         return {"text": f"下载未完成：状态 {snap.get('status')}，{err}", "images": []}
     except Exception as e:
         return _blocked(f"[fast_download] 下载失败: {e}")
+
+
+def _create_skill(name: str, description: str, instruction: str) -> dict:
+    """生成市场标准 SKILL.md 技能并注册（创建后立即生效）"""
+    from winapp_migrator.core import agent_skills
+    ok, msg = agent_skills.create_md_skill(name, description, instruction)
+    return ({"text": msg, "images": []} if ok else _blocked(msg))
 
 
 def tool_schemas() -> list:

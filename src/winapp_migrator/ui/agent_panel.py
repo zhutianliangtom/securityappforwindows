@@ -428,7 +428,7 @@ class _AgentSettingsDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("AI 设置")
-        self.setMinimumSize(560, 720)
+        self.setMinimumSize(560, 640)
         self.setStyleSheet(
             f"QDialog {{ background: {PANEL}; }}"
             f"QLabel {{ color: {TEXT}; font-size: 13px; }}"
@@ -495,7 +495,6 @@ class _AgentSettingsDialog(QDialog):
         form.addRow("API Key", self.key_edit)
         self.models_edit = QLineEdit(", ".join(cfg["models"]))
         self.models_edit.setPlaceholderText("模型名逗号分隔，如 deepseek-v4-pro, deepseek-v4-flash")
-        self.models_edit.textChanged.connect(self._on_models_changed)
         form.addRow("模型列表", self.models_edit)
         self.protocol_combo = QComboBox()
         self.protocol_combo.setStyleSheet(
@@ -508,33 +507,12 @@ class _AgentSettingsDialog(QDialog):
         form.addRow("接口协议", self.protocol_combo)
         root.addLayout(form)
 
-        # 工作力度 → 模型 绑定（面板拖动力度条即切换）
-        root.addWidget(_lbl("工作力度 → 模型（单模型时各档同款；多模型默认首=最强/末=最轻）"))
-        combo_style = (f"QComboBox {{ background: {BG}; color: {TEXT};"
-                       f"border: 1px solid {BORDER}; border-radius: 6px; padding: 4px 8px; }}"
-                       f"QComboBox::drop-down {{ border: none; width: 20px; }}")
-        eff_form = QFormLayout()
-        eff_form.setSpacing(6)
-        self.effort_combos = {}
-        for e in agent_llm.EFFORTS:
-            cb = QComboBox()
-            cb.setStyleSheet(combo_style)
-            eff_form.addRow(f"  {e}", cb)
-            self.effort_combos[e] = cb
-        root.addLayout(eff_form)
-
-        # 智能调用 + 推理参数
-        self.auto_effort_check = QCheckBox("自动按任务难度选择工作力度（智能调用）")
-        self.auto_effort_check.setStyleSheet(f"color: {TEXT}; font-size: 13px; spacing: 8px;")
-        self.auto_effort_check.setChecked(cfg.get("auto_effort", True))
-        root.addWidget(self.auto_effort_check)
+        # 推理参数（工作力度与自动按难度开关统一在面板左上角调整）
         self.send_effort_check = QCheckBox(
             "向 API 发送 reasoning_effort 参数（仅支持该参数的服务商开启，如 OpenAI o 系列 / Qwen）")
         self.send_effort_check.setStyleSheet(f"color: {TEXT}; font-size: 13px; spacing: 8px;")
         self.send_effort_check.setChecked(cfg.get("send_effort", False))
         root.addWidget(self.send_effort_check)
-
-        self._fill_effort_combos(cfg["models"], cfg.get("effort_models") or {})
 
         btns = QHBoxLayout()
         ok = QPushButton(_std_icon(QStyle.StandardPixmap.SP_DialogYesButton), "保存")
@@ -550,27 +528,6 @@ class _AgentSettingsDialog(QDialog):
         btns.addWidget(cancel)
         root.addLayout(btns)
 
-    def _fill_effort_combos(self, models: list, effort_models: dict = None):
-        """按模型列表重建各档力度下拉：保留已选值，缺失时按默认路由补齐"""
-        effort_models = effort_models or {}
-        default = agent_llm._default_effort_models(models)
-        for e, cb in self.effort_combos.items():
-            prev = cb.currentText()
-            cb.blockSignals(True)
-            cb.clear()
-            cb.addItems(models)
-            want = effort_models.get(e) or default.get(e) or prev
-            idx = cb.findText(want) if want else -1
-            cb.setCurrentIndex(idx if idx >= 0 else 0)
-            cb.blockSignals(False)
-
-    def _on_models_changed(self):
-        """模型列表编辑时实时刷新各档力度下拉（保留已选值）"""
-        models = [x.strip() for x in self.models_edit.text().replace("，", ",").split(",")
-                  if x.strip()]
-        if models:
-            self._fill_effort_combos(models)
-
     def _save(self):
         base_url = self.base_edit.text().strip()
         api_key = self.key_edit.text().strip()
@@ -578,14 +535,10 @@ class _AgentSettingsDialog(QDialog):
                   if x.strip()]
         if not models:
             models = [agent_llm.DEFAULT_MODEL]
-        effort_models = {e: cb.currentText() for e, cb in self.effort_combos.items()}
-        old = agent_llm.load_model_config()
+        # 力度与自动按难度开关由面板左上角滑块持久化，设置页不覆盖；力度→模型用默认路由
         model = {
             "model": models[0],          # 兼容旧字段：主模型 = 首个
             "models": models,
-            "effort_models": effort_models,
-            "effort": old.get("effort", "medium"),
-            "auto_effort": self.auto_effort_check.isChecked(),
             "send_effort": self.send_effort_check.isChecked(),
             "protocol": self.protocol_combo.currentData() or "chat",
         }

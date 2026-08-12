@@ -1029,7 +1029,6 @@ class AgentPanel(QDialog):
         self._stop_anim_angle = 0
 
         self._build_ui()
-        self.setAcceptDrops(True)   # 整个面板接收文件/图片拖放（子控件拒绝后冒泡到此）
         self._sync_effort_ui()   # 把 settings 里的力度/自动开关同步到滑块与模型下拉
         self._connect_signals()
         self._restore_workdir()   # 恢复上次选择的工作目录（QSettings 持久化）
@@ -1246,6 +1245,9 @@ class AgentPanel(QDialog):
         self._completer.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
         self.input.setCompleter(self._completer)
         self.input.installEventFilter(self)   # 拦截 Ctrl+V：剪贴板图片转附件
+        # 关闭输入框自身拖放接收：QLineEdit 默认 acceptDrops=True 但只认文本，
+        # 文件 URL 会被拒绝并显示禁用样式，且事件不再冒泡 → 统一由面板 dragEnter/drop 处理
+        self.input.setAcceptDrops(False)
         bottom.addWidget(self.input, 1)
 
         # 输入框右侧「+」上传按钮：文件选择器多选（也支持拖拽 / Ctrl+V 粘贴）
@@ -1274,6 +1276,7 @@ class AgentPanel(QDialog):
             "border: 1px solid #4B6BD6; selection-background-color: #16233C; }}")
         self.model_combo.setToolTip("手动切换本次使用的模型；「自动」= 按工作力度路由")
         self.model_combo.currentIndexChanged.connect(self._on_model_combo)
+        self.model_combo.setAcceptDrops(False)   # 文件拖放由面板统一接收
         bottom.addWidget(self.model_combo)
 
         self.send_btn = QPushButton(_std_icon(QStyle.StandardPixmap.SP_ArrowUp), "发送")
@@ -2748,32 +2751,12 @@ class AgentPanel(QDialog):
         return True
 
     def eventFilter(self, obj, event):
-        """拦截输入框事件：
-        - Ctrl+V：剪贴板有图片时转成附件，而不是粘贴进文本框
-        - 拖放文件：QLineEdit 默认接受拖放但拒绝文件 URL（显示禁用样式），
-          这里接管文件拖放转成附件，纯文本拖放仍走默认"""
-        if obj in (self.input, self.model_combo):
-            t = event.type()
-            if t == QEvent.Type.DragEnter:
-                if event.mimeData().hasUrls():
-                    event.acceptProposedAction()
-                    return True
-            elif t == QEvent.Type.DragMove:
-                if event.mimeData().hasUrls():
-                    event.acceptProposedAction()
-                    return True
-            elif t == QEvent.Type.Drop:
-                if event.mimeData().hasUrls():
-                    for url in event.mimeData().urls():
-                        p = url.toLocalFile()
-                        if p:
-                            self._add_attachment(p)
-                    event.acceptProposedAction()
-                    return True
-            elif t == QEvent.Type.KeyPress and \
-                    event.matches(QKeySequence.StandardKey.Paste) and \
-                    self._paste_clipboard_image():
-                return True
+        """拦截输入框 Ctrl+V：剪贴板有图片时转成附件，而不是粘贴进文本框。
+        （文件拖放由面板 dragEnterEvent/dropEvent 统一处理，无需在此接管）"""
+        if obj is self.input and event.type() == QEvent.Type.KeyPress and \
+                event.matches(QKeySequence.StandardKey.Paste) and \
+                self._paste_clipboard_image():
+            return True
         return super().eventFilter(obj, event)
 
     def _pick_attachments(self):

@@ -52,9 +52,15 @@ def _sub_system_prompt() -> str:
              if str(r).strip()]
     if not rules:
         return _SUB_SYSTEM
+    from pathlib import Path
+    rules_path = Path.home() / ".winapp_migrator" / "agent" / "settings.json"
     return (_SUB_SYSTEM
-            + "\n\n用户自定义规则（每次执行操作前必须查看并严格遵守）：\n"
-            + "\n".join(f"- {r}" for r in rules))
+            + "\n\n用户自定义开发规则（每次执行操作前必须查看并严格遵守，"
+            f"原始文件：{rules_path}）：\n"
+            + "\n".join(f"- {r}" for r in rules)
+            + f"\n当用户询问开发规则/项目规则/我们的规则等内容时，"
+              f"必须调用 read_file 工具读取 {rules_path} 的 custom_rules 字段，"
+              f"原样逐条如实回答；严禁凭记忆、猜测或编造规则内容。")
 
 
 def run_sub_agent(llm, goal, allowed=None, stop=None, on_status=None) -> str:

@@ -513,8 +513,13 @@ def build_system_prompt(agent_name: str = "", extra_skills: list = None,
     rules = settings.get("custom_rules") or []
     valid = [str(r).strip() for r in rules if str(r).strip()]
     if valid:
-        prompt += ("\n\n用户自定义规则（每次执行操作前必须查看并严格遵守）：\n"
+        rules_path = CONFIG_DIR / "settings.json"
+        prompt += (f"\n\n用户自定义开发规则（每次执行操作前必须查看并严格遵守，"
+                   f"原始文件：{rules_path}）：\n"
                    + "\n".join(f"- {r}" for r in valid))
+        prompt += (f"\n当用户询问开发规则/项目规则/我们的规则等内容时，"
+                   f"必须调用 read_file 工具读取 {rules_path} 的 custom_rules 字段，"
+                   f"原样逐条如实回答；严禁凭记忆、猜测或编造规则内容。")
     extra_prompt = (settings.get("custom_system_prompt") or "").strip()
     if extra_prompt:
         prompt += "\n\n用户自定义系统提示词补充：\n" + extra_prompt

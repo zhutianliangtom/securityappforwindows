@@ -30,14 +30,21 @@ DEFAULT_SKILLS = [
                      "4. 需要定位应用/文件时先用 find_app / search_files；信息不足用 ask_user 澄清。\n"
                      "5. 步骤多时每完成一个阶段用 save_memory 保存进度，上下文被压缩后先 load_memory 恢复。\n"
                      "6. 全部完成后输出总结：完成项、最终结果、关键产出位置。")},
-    {"name": "brainstorming", "description": "头脑风暴：需求探索与方案设计",
-     "instruction": ("1. 用 ask_user 依次澄清用户意图、目标与约束，直到需求明确。\n"
-                     "2. 提出 2-3 个可行方案并对比优缺点，征询用户选择。\n"
-                     "3. 确认方案后再动手，不跳过任何确认步骤。")},
+    {"name": "brainstorming", "description": "头脑风暴：先理清需求，再制定计划并交用户审核",
+     "instruction": ("1. 先用 ask_user 依次澄清需求：目标、范围、约束、输入/输出与验收标准，"
+                     "直到需求完全明确（禁止在信息不足时猜测执行）。\n"
+                     "2. 需求明确后进入方案设计：提出 2-3 个可行方案并对比优缺点、成本与风险，"
+                     "用 ask_user 征询用户选择。\n"
+                     "3. 方案确认后，按 writing-plans 技能的流程制定详细执行计划："
+                     "把任务拆解为可独立验证的小步骤，每步写明目标与验证方式。\n"
+                     "4. 将完整计划作为文档输出（文字/列表，或 write_file 写入计划文件），"
+                     "并请用户审核：确认计划、或提出修改与补充意见。\n"
+                     "5. 用户审核通过后才开始执行；执行中每步完成后验证再继续，任何变更先与用户确认。")},
     {"name": "writing-plans", "description": "为多步骤任务制定详细执行计划",
-     "instruction": ("1. 把任务拆解为可独立执行的小步骤，每步写明目标与验证方式。\n"
-                     "2. 用文字/列表输出计划，必要时用 ask_user 请用户确认。\n"
-                     "3. 按计划逐步执行，每步完成后截图或读取结果验证再继续。")},
+     "instruction": ("1. 把任务拆解为可独立执行的小步骤，每步写明目标、动作与验证方式，按依赖顺序排列。\n"
+                     "2. 将完整计划作为文档输出（文字/列表，或 write_file 写入计划文件），"
+                     "并请用户审核确认后再执行。\n"
+                     "3. 按计划逐步执行，每步完成后截图或读取结果验证再继续；计划变更先与用户确认。")},
     {"name": "test-driven-development", "description": "测试驱动开发：先写测试再实现",
      "instruction": ("1. 先用 write_file 编写针对目标行为的测试用例。\n"
                      "2. 运行测试确认失败（红）。\n"
@@ -309,6 +316,56 @@ def create_md_skill(name: str, description: str, instruction: str) -> tuple:
         return True, f"已创建技能「{name}」（{d / 'SKILL.md'}），已加载生效"
     except OSError as e:
         return False, f"创建技能失败: {e}"
+
+
+def import_skill_file(path: str) -> tuple:
+    """导入市场标准技能：SKILL.md 单文件 或 含 SKILL.md 的 zip 包。
+
+    单文件 → 复制为 skills/<name>/SKILL.md（name 取 frontmatter 或文件名）；
+    zip → 按包内目录解压到 skills/（含 resources 等附属文件），
+    防止路径穿越。返回 (ok, message)；导入后 load_skills 立即生效。
+    """
+    import re as _re
+    import zipfile
+    p = Path(path or "")
+    if not p.is_file():
+        return False, "文件不存在"
+    try:
+        if p.suffix.lower() == ".zip":
+            with zipfile.ZipFile(p) as z:
+                md_entries = [i for i in z.infolist()
+                              if not i.is_dir()
+                              and i.filename.replace("\\", "/").endswith("SKILL.md")]
+                if not md_entries:
+                    return False, "压缩包内未找到 SKILL.md"
+                root = _skills_dir()
+                root.mkdir(parents=True, exist_ok=True)
+                for info in z.infolist():
+                    if info.is_dir():
+                        continue
+                    rel = info.filename.replace("\\", "/")
+                    if rel.startswith("/") or ".." in rel.split("/"):
+                        return False, "压缩包内含非法路径（拒绝导入）"
+                    target = (root / rel).resolve()
+                    if not str(target).startswith(str(root.resolve())):
+                        return False, "压缩包内含越界路径（拒绝导入）"
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    target.write_bytes(z.read(info))
+            md_path = root / md_entries[0].filename.replace("\\", "/")
+        else:
+            text = p.read_text(encoding="utf-8", errors="replace")
+            name = (_parse_skill_md(text).get("name") or "").strip() or p.stem.strip()
+            if not _re.match(r"^[A-Za-z0-9_-]{1,50}$", name):
+                return False, "技能名仅支持字母/数字/下划线/连字符（≤50 字符）"
+            md_path = _skills_dir() / name / "SKILL.md"
+            md_path.parent.mkdir(parents=True, exist_ok=True)
+            md_path.write_text(text, encoding="utf-8")
+        s = _parse_skill_md(md_path.read_text(encoding="utf-8", errors="replace"))
+        if not s:
+            return False, "SKILL.md 内容为空或格式不正确"
+        return True, f"已导入技能「{s.get('name') or md_path.parent.name}」并即时生效"
+    except OSError as e:
+        return False, f"导入失败: {e}"
 
 
 def load_skills() -> list:

@@ -532,6 +532,16 @@ class _AgentSettingsDialog(QDialog):
         self.send_effort_check.setChecked(cfg.get("send_effort", False))
         root.addWidget(self.send_effort_check)
 
+        # 导入市场标准技能（Claude Skills / Trae Skill 格式的 SKILL.md 或 zip）
+        imp = QPushButton("导入市场标准技能（SKILL.md 或 zip 包）…")
+        imp.setStyleSheet(f"background: {PANEL}; color: {TEXT};"
+                          f"border: 1px solid {BORDER};")
+        imp.setAutoDefault(False)
+        imp.setToolTip("选择市场标准的 SKILL.md 文件或含 SKILL.md 的 zip 包，"
+                       "导入到技能目录并即时生效（/技能名 或对话描述即可调用）")
+        imp.clicked.connect(self._import_skill)
+        root.addWidget(imp)
+
         btns = QHBoxLayout()
         ok = QPushButton(_std_icon(QStyle.StandardPixmap.SP_DialogYesButton), "保存")
         ok.setStyleSheet(f"background: {OK}; color: #06281B;")
@@ -577,6 +587,19 @@ class _AgentSettingsDialog(QDialog):
             self.accept()
         else:
             QMessageBox.warning(self, "错误", "保存设置失败（无写入权限）")
+
+    def _import_skill(self):
+        """导入市场标准技能文件：SKILL.md 单文件或含 SKILL.md 的 zip 包"""
+        path, _ = QFileDialog.getOpenFileName(
+            self, "选择市场标准技能文件", "",
+            "技能文件 (*.md);;压缩包 (*.zip);;所有文件 (*.*)")
+        if not path:
+            return
+        ok, msg = agent_skills.import_skill_file(path)
+        if ok:
+            QMessageBox.information(self, "导入技能", msg)
+        else:
+            QMessageBox.warning(self, "导入失败", msg)
 
 
 class _McpServerDialog(QDialog):

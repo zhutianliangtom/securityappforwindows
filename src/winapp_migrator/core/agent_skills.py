@@ -252,6 +252,32 @@ def save_mcp_servers(servers: list) -> bool:
         return False
 
 
+def load_settings() -> dict:
+    """加载用户设置 settings.json：
+    custom_rules(规则数组) / custom_system_prompt(提示词补充) /
+    custom_safe_commands(bash 白名单) / memory_enabled(记忆开关) /
+    model({base_url, api_key, model})
+    """
+    path = CONFIG_DIR / "settings.json"
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def save_settings(s: dict) -> bool:
+    """写入用户设置 settings.json"""
+    try:
+        CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+        with open(CONFIG_DIR / "settings.json", "w", encoding="utf-8") as f:
+            json.dump(s, f, ensure_ascii=False, indent=2)
+        return True
+    except OSError:
+        return False
+
+
 def skill_instructions(skill_names: list) -> str:
     """把所选技能的 instruction 拼装成 system prompt 附加段落"""
     by_name = {s.get("name"): s for s in load_skills()}
@@ -263,10 +289,14 @@ def skill_instructions(skill_names: list) -> str:
     return "\n".join(parts)
 
 
-def build_system_prompt(agent_name: str = "", extra_skills: list = None) -> str:
+def build_system_prompt(agent_name: str = "", extra_skills: list = None,
+                        text_only: bool = False, memory_enabled: bool = True) -> str:
     """构造 system prompt：人设 persona + 基础提示 + 严格规则 + 工具执行规范 + 技能说明 + 工具列表
 
     extra_skills: 手动调用的技能名列表（/技能名 提示），其 instruction 注入本任务系统提示词。
+    text_only: 纯文本模型（无视觉输入），追加禁用截图/视觉引导。
+    memory_enabled: 记忆开关，关闭时追加禁用记忆工具引导。
+    自定义规则 / 自定义系统提示词从 settings.json 读取并追加。
     """
     agent = next((a for a in load_agents() if a.get("name") == agent_name), None) \
         or DEFAULT_AGENTS[0]
@@ -320,4 +350,18 @@ def build_system_prompt(agent_name: str = "", extra_skills: list = None) -> str:
     prompt += ("\n\n记忆：你有本地长期记忆文件 memory.md。遇到用户偏好、重要结论、约定、常用路径等"
                "值得长期记住的信息时，调用 save_memory 保存；新任务开始或需要回忆过往信息时，"
                "自行决定是否调用 load_memory 查看。")
+    if text_only:
+        prompt += ("\n\n当前为纯文本模型（不支持图像输入）：禁止调用任何截图/窗口截图/视觉定位相关工具"
+                   "（screenshot、capture_window、capture_zoom 等），本环境不会提供图像。"
+                   "请通过文本工具（read_file、run_command、list_directory 等）完成用户请求。")
+    if not memory_enabled:
+        prompt += "\n\n当前未开启记忆功能：不要调用 save_memory / load_memory。"
+    settings = load_settings()
+    rules = settings.get("custom_rules") or []
+    valid = [str(r).strip() for r in rules if str(r).strip()]
+    if valid:
+        prompt += "\n\n用户自定义规则（必须遵守）：\n" + "\n".join(f"- {r}" for r in valid)
+    extra_prompt = (settings.get("custom_system_prompt") or "").strip()
+    if extra_prompt:
+        prompt += "\n\n用户自定义系统提示词补充：\n" + extra_prompt
     return prompt

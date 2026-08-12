@@ -27,7 +27,7 @@ from PyQt6.QtWidgets import (
     QVBoxLayout, QHBoxLayout, QMessageBox, QFormLayout, QWidget,
     QApplication, QStyle, QListWidget, QGraphicsOpacityEffect,
     QCompleter, QRadioButton, QCheckBox, QFileIconProvider, QListWidgetItem,
-    QStackedWidget, QMenu, QFileDialog,
+    QStackedWidget, QMenu, QFileDialog, QPlainTextEdit,
 )
 
 from winapp_migrator.core import agent_llm, agent_engine, agent_skills, agent_sandbox, agent_tools, agent_screen
@@ -422,6 +422,116 @@ def _split_args(s: str) -> list:
     return out
 
 
+class _AgentSettingsDialog(QDialog):
+    """AI 设置：自定义规则 / 系统提示词 / bash 白名单 / 记忆开关 / 模型接入"""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("AI 设置")
+        self.setMinimumSize(540, 600)
+        self.setStyleSheet(
+            f"QDialog {{ background: {PANEL}; }}"
+            f"QLabel {{ color: {TEXT}; font-size: 13px; }}"
+            f"QLineEdit, QPlainTextEdit {{ background: {BG}; color: {TEXT};"
+            f"border: 1px solid {BORDER}; border-radius: 6px; padding: 6px 8px; }}")
+        s = agent_skills.load_settings()
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(18, 16, 18, 16)
+        root.setSpacing(10)
+
+        def _lbl(text, bold=False):
+            lb = QLabel(text)
+            lb.setStyleSheet(f"color: {TEXT}; font-size: 13px;"
+                             + ("font-weight: 700;" if bold else ""))
+            return lb
+
+        # 自定义规则
+        root.addWidget(_lbl("自定义规则（每行一条，追加到系统提示词末尾）"))
+        self.rules_edit = QPlainTextEdit()
+        self.rules_edit.setPlaceholderText("如：\n操作注册表前必须先 ask_user 确认\n不要移动正在运行的应用")
+        self.rules_edit.setPlainText("\n".join(str(r) for r in (s.get("custom_rules") or [])))
+        self.rules_edit.setFixedHeight(72)
+        root.addWidget(self.rules_edit)
+
+        # 自定义系统提示词
+        root.addWidget(_lbl("自定义系统提示词（追加，不覆盖默认人设）"))
+        self.prompt_edit = QPlainTextEdit()
+        self.prompt_edit.setPlaceholderText("补充的提示词…")
+        self.prompt_edit.setPlainText(str(s.get("custom_system_prompt") or ""))
+        self.prompt_edit.setFixedHeight(84)
+        root.addWidget(self.prompt_edit)
+
+        # bash 白名单
+        root.addWidget(_lbl("自定义 bash 命令白名单（每行一条，白名单命令免确认）"))
+        self.safe_edit = QPlainTextEdit()
+        self.safe_edit.setPlaceholderText("如：\nnpm\npip\npython\ngit")
+        self.safe_edit.setPlainText(
+            "\n".join(str(c) for c in (s.get("custom_safe_commands") or [])))
+        self.safe_edit.setFixedHeight(72)
+        root.addWidget(self.safe_edit)
+
+        # 记忆开关
+        self.memory_check = QCheckBox("开启长期记忆（save_memory / load_memory）")
+        self.memory_check.setChecked(bool(s.get("memory_enabled", True)))
+        self.memory_check.setStyleSheet(f"color: {TEXT}; font-size: 13px; spacing: 8px;")
+        root.addWidget(self.memory_check)
+
+        # 模型接入
+        root.addWidget(_lbl("模型接入（模型名含 deepseek 等关键字自动视为纯文本，"
+                            "禁用图片上传与截图工具）", bold=True))
+        m = s.get("model") or {}
+        form = QFormLayout()
+        form.setSpacing(8)
+        self.base_edit = QLineEdit(str(m.get("base_url") or ""))
+        self.base_edit.setPlaceholderText(agent_llm.DEFAULT_BASE_URL)
+        form.addRow("接口地址", self.base_edit)
+        self.key_edit = QLineEdit(str(m.get("api_key") or ""))
+        self.key_edit.setEchoMode(QLineEdit.EchoMode.Password)
+        self.key_edit.setPlaceholderText(agent_llm.DEFAULT_API_KEY)
+        form.addRow("API Key", self.key_edit)
+        self.model_edit = QLineEdit(str(m.get("model") or ""))
+        self.model_edit.setPlaceholderText(agent_llm.DEFAULT_MODEL)
+        form.addRow("模型名", self.model_edit)
+        root.addLayout(form)
+
+        btns = QHBoxLayout()
+        ok = QPushButton(_std_icon(QStyle.StandardPixmap.SP_DialogYesButton), "保存")
+        ok.setStyleSheet(f"background: {OK}; color: #06281B;")
+        ok.setAutoDefault(False)
+        ok.clicked.connect(self._save)
+        cancel = QPushButton("取消")
+        cancel.setStyleSheet(f"background: {PANEL}; color: {TEXT};"
+                             f"border: 1px solid {BORDER};")
+        cancel.setAutoDefault(False)
+        cancel.clicked.connect(self.reject)
+        btns.addWidget(ok)
+        btns.addWidget(cancel)
+        root.addLayout(btns)
+
+    def _save(self):
+        model = {
+            "base_url": self.base_edit.text().strip(),
+            "api_key": self.key_edit.text().strip(),
+            "model": self.model_edit.text().strip(),
+        }
+        if not any(model.values()):   # 全部留空：不使用自定义模型
+            model = {}
+        data = {
+            "custom_rules": [ln.strip() for ln in self.rules_edit.toPlainText().splitlines()
+                             if ln.strip()],
+            "custom_system_prompt": self.prompt_edit.toPlainText().strip(),
+            "custom_safe_commands": [ln.strip() for ln in self.safe_edit.toPlainText().splitlines()
+                                     if ln.strip()],
+            "memory_enabled": self.memory_check.isChecked(),
+            "model": model,
+        }
+        if agent_skills.save_settings(data):
+            self.accept()
+        else:
+            QMessageBox.warning(self, "错误", "保存设置失败（无写入权限）")
+
+
 class _McpServerDialog(QDialog):
     """单个 MCP 服务器配置：stdio（命令+参数）或 SSE（URL）"""
     def __init__(self, server: dict = None, parent=None):
@@ -756,6 +866,12 @@ class AgentPanel(QDialog):
         self._ask_evt = threading.Event()
         self._ask_result = ""
         self._mcp = McpManager()
+        # 用户设置：纯文本模型自动识别、记忆开关
+        _s = agent_skills.load_settings()
+        _cfg = _s.get("model") or {}
+        self._text_only = agent_llm.is_text_only_model(
+            _cfg.get("model") or agent_llm.DEFAULT_MODEL)
+        self._memory_enabled = bool(_s.get("memory_enabled", True))
 
         # 拖入的附件：图片（data URL，发给模型）与非图片文件（路径文本）
         self._pending_images: list = []
@@ -863,9 +979,10 @@ class AgentPanel(QDialog):
         self.workdir_btn.clicked.connect(self._choose_workdir)
         top.addWidget(self.workdir_btn)
 
-        # 执行模式：AskBeforeEdit（默认，每步确认） / YOLO（无确认直行）
+        # 执行模式：AskBeforeEdit（每步确认）/ Edit（仅非白名单 bash 弹确认）/ YOLO（无确认）
         self.mode_combo = QComboBox()
         self.mode_combo.addItem("每步确认", "ask")
+        self.mode_combo.addItem("Edit 模式", "edit")
         self.mode_combo.addItem("无确认直行", "yolo")
         self.mode_combo.setMinimumWidth(110)
         self.mode_combo.setMaximumWidth(140)
@@ -891,6 +1008,17 @@ class AgentPanel(QDialog):
             f"QPushButton:hover {{ background: #16233C; }}")
         self.mcp_btn.clicked.connect(self._open_mcp_manager)
         top.addWidget(self.mcp_btn)
+
+        self.settings_btn = QPushButton(_std_icon(QStyle.StandardPixmap.SP_FileDialogDetailedView), "设置")
+        self.settings_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.settings_btn.setAutoDefault(False)
+        self.settings_btn.setToolTip("AI 设置：规则 / 系统提示词 / bash 白名单 / 记忆 / 模型接入")
+        self.settings_btn.setStyleSheet(
+            f"QPushButton {{ background: {PANEL}; color: {ACCENT}; border: 1px solid {ACCENT};"
+            "border-radius: 8px; padding: 6px 12px; font-size: 12px; font-weight: 600; }}"
+            f"QPushButton:hover {{ background: #16233C; }}")
+        self.settings_btn.clicked.connect(self._open_settings)
+        top.addWidget(self.settings_btn)
 
         top.addStretch(1)
 
@@ -1238,6 +1366,8 @@ class AgentPanel(QDialog):
         self._apply_mode_style()
         if self._mode == "yolo":
             self._add_status("YOLO 模式：AI 操作不再弹窗确认（危险命令一律拒绝）", WARN)
+        elif self._mode == "edit":
+            self._add_status("Edit 模式：仅非白名单 bash 命令弹确认，其余操作直接执行", OK)
         else:
             self._add_status("AskBeforeEdit 模式：每步操作弹窗确认", OK)
 
@@ -1310,7 +1440,8 @@ class AgentPanel(QDialog):
             self.mode_combo.setMinimumWidth(190)
             self.mode_combo.setMaximumWidth(240)
             self.mode_combo.setItemText(0, "AskBeforeEdit（每步确认）")
-            self.mode_combo.setItemText(1, "YOLO（无确认直行）")
+            self.mode_combo.setItemText(1, "Edit（仅 bash 需确认）")
+            self.mode_combo.setItemText(2, "YOLO（无确认直行）")
         else:
             self.session_combo.setMinimumWidth(110)
             self.session_combo.setMaximumWidth(180)
@@ -1318,7 +1449,8 @@ class AgentPanel(QDialog):
             self.mode_combo.setMinimumWidth(110)
             self.mode_combo.setMaximumWidth(140)
             self.mode_combo.setItemText(0, "每步确认")
-            self.mode_combo.setItemText(1, "无确认直行")
+            self.mode_combo.setItemText(1, "Edit")
+            self.mode_combo.setItemText(2, "无确认直行")
         self._refresh_meta()   # token 文本按当前模式重渲染
 
     def resizeEvent(self, e):
@@ -1676,6 +1808,30 @@ class AgentPanel(QDialog):
         dlg = _McpManagerDialog(on_saved=self._reconnect_mcp, parent=self)
         dlg.exec()
 
+    def _open_settings(self):
+        """打开 AI 设置；保存后应用（刷新纯文本/记忆状态，空闲时重建引擎）"""
+        dlg = _AgentSettingsDialog(parent=self)
+        if dlg.exec():
+            self._apply_agent_settings()
+            self._add_status("AI 设置已保存并生效", OK)
+
+    def _apply_agent_settings(self):
+        """设置变更后：刷新纯文本模型/记忆状态；引擎空闲则重建以应用新配置"""
+        s = agent_skills.load_settings()
+        cfg = s.get("model") or {}
+        self._text_only = agent_llm.is_text_only_model(
+            cfg.get("model") or agent_llm.DEFAULT_MODEL)
+        self._memory_enabled = bool(s.get("memory_enabled", True))
+        if self._text_only:
+            self._add_status("纯文本模型：已禁用图片上传与截图工具", WARN)
+        if self._engine is not None:
+            busy = self._engine._thread and self._engine._thread.is_alive()
+            if busy:
+                self._add_status("当前有任务进行中，新设置将在任务结束后生效", WARN)
+                return
+            self._engine = None   # 空闲：丢弃旧引擎，重建应用新模型/开关
+        self._ensure_engine()
+
     def _reconnect_mcp(self):
         threading.Thread(target=self._init_mcp, daemon=True).start()
 
@@ -1783,12 +1939,8 @@ class AgentPanel(QDialog):
 
     # ---------- 发送 / 停止 ----------
     def _llm_config(self) -> dict:
-        # 模型、接口与 API Key 全部写死为 Agnes 2.5，禁止用户自定义
-        return {
-            "base_url": agent_llm.DEFAULT_BASE_URL,
-            "model": agent_llm.DEFAULT_MODEL,
-            "api_key": agent_llm.DEFAULT_API_KEY,
-        }
+        # 模型/接口/API Key 从 settings.json 读取（未配置时用默认 Agnes 2.5）
+        return agent_llm.load_model_config()
 
     def _ensure_engine(self):
         """复用同一引擎：保留跨任务对话上下文"""
@@ -1802,7 +1954,9 @@ class AgentPanel(QDialog):
                 on_result=lambda n, t, im: self.result_signal.emit(n, t, im),
                 on_reasoning=lambda s: self.reasoning_signal.emit(s),
                 confirm=self._confirm_tool,
-                ask_user=self._ask_user_tool)
+                ask_user=self._ask_user_tool,
+                text_only=self._text_only,
+                memory_enabled=self._memory_enabled)
         return self._engine
 
     def _send(self):
@@ -2117,6 +2271,9 @@ class AgentPanel(QDialog):
         if not os.path.exists(path):
             self._add_status(f"文件不存在: {path}", WARN)
             return
+        if self._text_only and os.path.splitext(path)[1].lower() in self._IMG_EXTS:
+            self._add_status("当前为纯文本模型，不支持图片输入，已忽略", WARN)
+            return
         if os.path.splitext(path)[1].lower() in self._IMG_EXTS:
             img = QImage(path)
             if img.isNull():
@@ -2299,6 +2456,10 @@ class AgentPanel(QDialog):
         if self._mode == "yolo":
             # YOLO 无人工确认，危险命令（删除/关机等）一律拒绝，保证安全底线
             return level != "dangerous"
+        if self._mode == "edit":
+            # Edit 模式：仅非白名单 bash 命令弹确认；白名单命令与其他工具直接执行
+            if name != "run_command" or level == "safe":
+                return True
         self._confirm_evt.clear()
         self.confirm_signal.emit(name, json.dumps(args, ensure_ascii=False), level)
         self._confirm_evt.wait(timeout=600)

@@ -19,6 +19,30 @@ _UA = "WinAppMigrator/1.0 AgentClient"
 _MAX_RETRIES = 3    # 请求失败（429/5xx/网络）自动重试次数
 _RETRY_DELAY = 2.0  # 重试基础延迟（秒），指数退避
 
+# 纯文本模型关键字（子串匹配）：命中即视为不支持图像输入，禁用截图/视觉能力
+TEXT_ONLY_KEYS = ("deepseek",)
+
+
+def is_text_only_model(model: str) -> bool:
+    """自动识别纯文本模型：模型名含 TEXT_ONLY_KEYS 任一关键字"""
+    m = (model or "").lower()
+    return any(k in m for k in TEXT_ONLY_KEYS)
+
+
+def load_model_config() -> dict:
+    """从 settings.json 读取模型配置（base_url/api_key/model），未配置时返回默认"""
+    try:
+        from winapp_migrator.core import agent_skills
+        m = agent_skills.load_settings().get("model") or {}
+        return {
+            "base_url": m.get("base_url") or DEFAULT_BASE_URL,
+            "api_key": m.get("api_key") or DEFAULT_API_KEY,
+            "model": m.get("model") or DEFAULT_MODEL,
+        }
+    except Exception:
+        return {"base_url": DEFAULT_BASE_URL, "api_key": DEFAULT_API_KEY,
+                "model": DEFAULT_MODEL}
+
 
 class AgentLLMError(Exception):
     pass

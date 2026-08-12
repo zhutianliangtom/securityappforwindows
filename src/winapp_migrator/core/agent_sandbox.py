@@ -57,6 +57,17 @@ def to_int(v) -> int:
     return 0
 
 
+def _custom_safe() -> set:
+    """用户自定义 bash 白名单命令（settings.json custom_safe_commands，追加放行）"""
+    try:
+        from winapp_migrator.core import agent_skills
+        s = agent_skills.load_settings()
+        return {str(c).strip().lower() for c in (s.get("custom_safe_commands") or [])
+                if str(c).strip()}
+    except Exception:
+        return set()
+
+
 def assess_command(cmd: str) -> tuple:
     """评估命令。返回 (level, reason)，level ∈ safe/risky/dangerous"""
     cmd = (cmd or "").strip()
@@ -77,7 +88,7 @@ def assess_command(cmd: str) -> tuple:
                 return "dangerous", f"禁止删除系统关键目录: {d}"
     first = low.split()[0]
     base = os.path.basename(first.replace("\\", "/"))
-    if base in SAFE_COMMANDS:
+    if base in SAFE_COMMANDS or base in _custom_safe():
         return "safe", ""
     # 含重定向/管道/复杂脚本视为 risky
     if any(s in low for s in ("|", ">", "&", "&&", ";")):

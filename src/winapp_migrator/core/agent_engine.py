@@ -88,7 +88,8 @@ class AgentEngine:
     def __init__(self, llm: agent_llm.LLMClient,
                  mcp_manager=None,
                  on_delta=None, on_status=None, on_result=None, confirm=None,
-                 ask_user=None, on_reasoning=None, auto_vd: bool = False):
+                 ask_user=None, on_reasoning=None, auto_vd: bool = False,
+                 text_only: bool = False, memory_enabled: bool = True):
         """
         on_delta: Callable[[str], None]      流式文本增量
         on_status: Callable[[str], None]     步骤状态（如"正在思考/执行工具 click"）
@@ -98,6 +99,8 @@ class AgentEngine:
         on_reasoning: Callable[[str], None]  流式思考过程增量
         auto_vd: bool 任务自动在独立虚拟桌面执行（开始新建并切入，结束自动返回主桌面），
                  实现"完全静默无感"：AI 操作不打扰用户主桌面
+        text_only: bool 纯文本模型（无图像输入），过滤截图/视觉工具
+        memory_enabled: bool 记忆开关，关闭时过滤 save_memory/load_memory 工具
         """
         self.llm = llm
         self.mcp = mcp_manager
@@ -108,6 +111,8 @@ class AgentEngine:
         self.ask_user = ask_user
         self.on_reasoning = on_reasoning
         self.auto_vd = auto_vd
+        self.text_only = text_only
+        self.memory_enabled = memory_enabled
         self._messages: list = []
         self.tokens = {"prompt": 0, "completion": 0}
         self.last_estimate = 0       # 最近一次请求前的预计算（输入 tokens）
@@ -258,6 +263,14 @@ class AgentEngine:
         if self.auto_vd:
             # 自动虚拟桌面接管时，不再暴露 virtual_desktop 工具（避免 AI 重复切桌面）
             tools = [t for t in tools if t["function"]["name"] != "virtual_desktop"]
+        if self.text_only:
+            # 纯文本模型：禁用截图/视觉定位类工具（产生图像或依赖图像定位）
+            tools = [t for t in tools
+                     if t["function"]["name"] not in ("screenshot", "capture_window", "click_text")]
+        if not self.memory_enabled:
+            # 记忆关闭：不暴露 save_memory/load_memory
+            tools = [t for t in tools
+                     if t["function"]["name"] not in ("save_memory", "load_memory")]
         if self.mcp:
             tools.extend(self.mcp.tool_schemas())
         return tools
@@ -301,7 +314,9 @@ class AgentEngine:
     def run(self, user_input: str, agent_name: str = "", images: list = None,
             skills: list = None):
         self.end_state = ""
-        system = agent_skills.build_system_prompt(agent_name, extra_skills=skills)
+        system = agent_skills.build_system_prompt(agent_name, extra_skills=skills,
+                                                  text_only=self.text_only,
+                                                  memory_enabled=self.memory_enabled)
         if not self._messages or self._messages[0].get("role") != "system":
             self._messages.insert(0, {"role": "system", "content": system})
         else:

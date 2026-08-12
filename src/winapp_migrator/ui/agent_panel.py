@@ -22,15 +22,16 @@ from pathlib import Path
 
 from PyQt6.QtCore import (Qt, QTimer, QSettings, QPropertyAnimation, pyqtSignal,
                           pyqtProperty, QEasingCurve, QByteArray, QBuffer, QIODevice,
-                          QEvent, QRect)
+                          QEvent, QRect, QSize, QPoint)
 from PyQt6.QtGui import (QIcon, QFont, QPainter, QPen, QColor, QPixmap, QImage,
-                         QPainterPath, QKeySequence)
+                         QPainterPath, QKeySequence, QTextOption)
 from PyQt6.QtWidgets import (
     QDialog, QLabel, QLineEdit, QPushButton, QComboBox, QScrollArea,
     QVBoxLayout, QHBoxLayout, QMessageBox, QFormLayout, QWidget,
     QApplication, QStyle, QListWidget, QGraphicsOpacityEffect,
-    QCompleter, QRadioButton, QCheckBox, QListWidgetItem,
+    QRadioButton, QCheckBox, QListWidgetItem,
     QStackedWidget, QMenu, QFileDialog, QPlainTextEdit, QSlider,
+    QLayout, QWidgetItem,
 )
 
 from winapp_migrator.core import agent_llm, agent_engine, agent_skills, agent_sandbox, agent_tools, agent_screen
@@ -939,17 +940,95 @@ class _ArrowComboBox(QComboBox):
         p.end()
 
 
-class _DropLineEdit(QLineEdit):
-    """输入框子类：直接在控件层处理文件拖放（不依赖拖放事件向父级冒泡）。
+class FlowLayout(QLayout):
+    """自动换行布局：子项宽度超出可用宽度时自动折行（附件缩略图条用）"""
 
-    QLineEdit 默认 acceptDrops=True 但只认文本，文件 URL 会显示禁用样式且不冒泡；
-    重写 drag/drop 后文件拖入即转附件，纯文本拖放仍走默认逻辑。
-    """
-    fileDropped = pyqtSignal(list)   # 拖入的文件路径列表
+    def __init__(self, parent=None, margin: int = 0, spacing: int = 8):
+        super().__init__(parent)
+        self._items = []
+        self.setContentsMargins(margin, margin, margin, margin)
+        self.setSpacing(spacing)
+
+    def addWidget(self, w: QWidget):
+        self.addItem(QWidgetItem(w))
+
+    def addItem(self, item):
+        self._items.append(item)
+
+    def count(self) -> int:
+        return len(self._items)
+
+    def itemAt(self, i):
+        return self._items[i] if 0 <= i < len(self._items) else None
+
+    def takeAt(self, i):
+        return self._items.pop(i) if 0 <= i < len(self._items) else None
+
+    def expandingDirections(self):
+        return Qt.Orientation(0)
+
+    def hasHeightForWidth(self) -> bool:
+        return True
+
+    def heightForWidth(self, w: int) -> int:
+        return self._do_layout(QRect(0, 0, w, 0), True)
+
+    def setGeometry(self, rect):
+        super().setGeometry(rect)
+        self._do_layout(rect, False)
+
+    def sizeHint(self):
+        return self.minimumSize()
+
+    def minimumSize(self):
+        size = QSize()
+        for it in self._items:
+            size = size.expandedTo(it.minimumSize())
+        m = self.contentsMargins()
+        return size + QSize(m.left() + m.right(), m.top() + m.bottom())
+
+    def _do_layout(self, rect: QRect, test_only: bool) -> int:
+        m = self.contentsMargins()
+        x, y = rect.x() + m.left(), rect.y() + m.top()
+        line_h = 0
+        for it in self._items:
+            w = it.sizeHint().width()
+            if x + w > rect.right() - m.right():   # 放不下 → 折行
+                x = rect.x() + m.left()
+                y += line_h + self.spacing()
+                line_h = 0
+            if not test_only:
+                it.setGeometry(QRect(QPoint(x, y), it.sizeHint()))
+            x += w + self.spacing()
+            line_h = max(line_h, it.sizeHint().height())
+        return y + line_h + m.bottom() - rect.y()
+
+
+class _DropTextEdit(QPlainTextEdit):
+    """多行输入框：自动换行、高度自适应（42~140px）、Enter 发送（Shift+Enter 换行）、
+    文件拖放（重写 drag/drop，不依赖事件冒泡）。"""
+    submit = pyqtSignal()          # 用户按 Enter（发送）
+    fileDropped = pyqtSignal(list)  # 拖入的文件路径列表
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setAcceptDrops(True)
+        self.setWordWrapMode(QTextOption.WrapMode.WrapAtWordBoundaryOrAnywhere)
+        self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.textChanged.connect(lambda: QTimer.singleShot(0, self._auto_height))
+
+    def _auto_height(self):
+        """高度随内容自适应：单行 42px，多行增高，最高 140px（超出内部滚动）"""
+        h = int(self.document().size().height()) + 16   # 内容高度 + 内边距
+        self.setFixedHeight(min(max(h, 42), 140))
+
+    def keyPressEvent(self, e):
+        # Enter 发送；Shift+Enter 换行
+        if e.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter) and \
+                not (e.modifiers() & Qt.KeyboardModifier.ShiftModifier):
+            self.submit.emit()
+            return
+        super().keyPressEvent(e)
 
     def _has_files(self, e) -> bool:
         return e.mimeData().hasUrls()
@@ -1253,34 +1332,27 @@ class AgentPanel(QDialog):
         self.cmd_list.itemClicked.connect(self._on_cmd_selected)
         root.addWidget(self.cmd_list)
 
-        # 附件缩略图条：拖入的图片/文件在此预览（隐藏时无高度）
+        # 附件缩略图条：拖入的图片/文件在此预览（隐藏时无高度；子项自动换行不挤压）
         self._attach_bar = QWidget()
         self._attach_bar.setStyleSheet("background: transparent;")
-        self._attach_lay = QHBoxLayout(self._attach_bar)
-        self._attach_lay.setContentsMargins(0, 0, 0, 0)
-        self._attach_lay.setSpacing(8)
-        self._attach_lay.addStretch(1)
+        self._attach_lay = FlowLayout(self._attach_bar, margin=0, spacing=8)
         self._attach_bar.setVisible(False)
         root.addWidget(self._attach_bar)
 
         # 输入栏
         bottom = QHBoxLayout()
         bottom.setSpacing(10)
-        self.input = QLineEdit()
+        self.input = _DropTextEdit()
         self.input.setPlaceholderText("描述任务，例如：打开记事本，输入一段文字，再截图给我看（输入 / 查看命令）")
         self.input.setMinimumHeight(42)
+        self.input.setMaximumHeight(140)
         self.input.setStyleSheet(
-            f"QLineEdit {{ background: {PANEL}; color: {TEXT}; border: 1px solid {BORDER};"
-            "border-radius: 10px; padding: 0 14px; font-size: 14px; }}"
-            f"QLineEdit:focus {{ border: 1px solid #4B6BD6; }}")
-        self.input.returnPressed.connect(self._send)
+            f"QPlainTextEdit {{ background: {PANEL}; color: {TEXT}; border: 1px solid {BORDER};"
+            "border-radius: 10px; padding: 8px 12px; font-size: 14px; }}"
+            f"QPlainTextEdit:focus {{ border: 1px solid #4B6BD6; }}")
+        self.input.submit.connect(self._send)   # Enter 发送（Shift+Enter 换行）
         self.input.textChanged.connect(self._update_cmd_suggestions)
         self.input.textChanged.connect(self._refresh_route_label)
-        # 内联预测：输入 /com 时半透明显示 /compact 完成部分
-        self._completer = QCompleter(self._all_commands(), self)
-        self._completer.setCompletionMode(QCompleter.CompletionMode.InlineCompletion)
-        self._completer.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
-        self.input.setCompleter(self._completer)
         self.input.installEventFilter(self)   # 拦截 Ctrl+V：剪贴板图片转附件
         self.input.fileDropped.connect(self._on_input_files_dropped)   # 文件拖入 → 附件
         bottom.addWidget(self.input, 1)
@@ -2183,7 +2255,7 @@ class AgentPanel(QDialog):
         if self._model_override:
             self.route_model_label.setText(f"模型: {self._model_override}")
             return
-        effort = self._resolve_effort(self.input.text())
+        effort = self._resolve_effort(self.input.toPlainText())
         model = agent_llm.resolve_model(cfg, effort)
         tag = "自动·" if self._auto_effort else ""
         self.route_model_label.setText(f"{tag}模型: {model}")
@@ -2195,7 +2267,7 @@ class AgentPanel(QDialog):
         """重建输入框右侧模型下拉：首项「自动(按力度)」+ 全部模型名"""
         cfg = self._model_cfg
         models = cfg.get("models") or [cfg.get("model") or agent_llm.DEFAULT_MODEL]
-        routed = routed or agent_llm.resolve_model(cfg, self._resolve_effort(self.input.text()))
+        routed = routed or agent_llm.resolve_model(cfg, self._resolve_effort(self.input.toPlainText()))
         self.model_combo.blockSignals(True)
         self.model_combo.clear()
         self.model_combo.addItem(f"自动 · {routed}", None)
@@ -2286,12 +2358,6 @@ class AgentPanel(QDialog):
         return "(无参数)"
 
     def _update_cmd_suggestions(self, text: str):
-        # 空 "/" 时禁用内联补全（禁止预测 /compact），输入字符后恢复
-        if text == "/":
-            if self.input.completer() is not None:
-                self.input.setCompleter(None)
-        elif self.input.completer() is None:
-            self.input.setCompleter(self._completer)
         # 输入 "/" 时展示全部可调用项（系统命令 + 全部技能 + 全部内置工具）；否则按前缀过滤
         if text.startswith("/"):
             matches = [c for c in self._all_commands() if c.startswith(text)]
@@ -2317,7 +2383,7 @@ class AgentPanel(QDialog):
         self.cmd_list.setFixedHeight(min(count, 5) * row_h)
 
     def _on_cmd_selected(self, item):
-        self.input.setText(item.text())
+        self.input.setPlainText(item.text())
         self.input.setFocus()
         self.cmd_list.hide()
 
@@ -2347,7 +2413,7 @@ class AgentPanel(QDialog):
         return self._engine
 
     def _send(self):
-        text = self.input.text().strip()
+        text = self.input.toPlainText().strip()
         images = list(self._pending_images)
         files = list(self._pending_files)
         if (not text and not images) or \

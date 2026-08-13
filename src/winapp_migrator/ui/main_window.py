@@ -2,6 +2,7 @@ import os
 import sys
 import ctypes
 import threading
+import webbrowser
 from pathlib import Path
 from typing import List
 
@@ -22,6 +23,7 @@ from winapp_migrator.ui.widgets import (
 )
 from winapp_migrator.ui.download_dialog import DownloadDialog
 from winapp_migrator.ui.agent_panel import AgentPanel
+from winapp_migrator.update_check import UpdateChecker, APP_VERSION
 from winapp_migrator.core.app_scanner import AppScanner, AppInfo
 from winapp_migrator.core.data_dirs import detect_data_dirs
 from winapp_migrator.core.orchestrator import MigrationOrchestrator
@@ -306,6 +308,7 @@ class MainWindow(QMainWindow):
         if self._settings.value("security_auto", False, type=bool) and is_admin():
             QTimer.singleShot(0, self._start_security)
         self._start_scan()
+        self._init_update_check()
 
     def _setup_ui(self):
         central = QWidget()
@@ -1098,6 +1101,32 @@ class MainWindow(QMainWindow):
         QMessageBox.information(
             self, "关于我们",
             "开发者是一名14岁的初中生，通过vibe coding开发而来")
+
+    # ---------- 自动更新检查（30s 轮询更新服务器） ----------
+    def _init_update_check(self):
+        self._update_checker = UpdateChecker(self)
+        self._update_checker.update_found.connect(self._on_update_found)
+        self._update_checker.start()
+
+    def _on_update_found(self, info: dict):
+        """发现新版本：普通更新弹确认框；强制更新无忽略选项"""
+        notes = (info.get("notes") or "").strip()
+        size = info.get("size") or 0
+        text = f"发现新版本 v{info['latest']}（当前 v{APP_VERSION}）"
+        if size:
+            text += f"，大小 {size // 1024 // 1024} MB"
+        if notes:
+            text += f"\n\n更新说明：\n{notes}"
+        if info.get("force"):
+            QMessageBox.warning(self, "发现强制更新", text + "\n\n当前版本已停止服务，必须更新后才能继续使用。")
+            webbrowser.open(info["url"])
+            return
+        ret = QMessageBox.question(
+            self, "发现新版本", text + "\n\n是否前往下载更新？",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No)
+        if ret == QMessageBox.StandardButton.Yes:
+            webbrowser.open(info["url"])
 
     def _start_memory_optimize(self):
         """一键优化内存"""

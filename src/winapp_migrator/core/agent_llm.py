@@ -183,9 +183,13 @@ def resolve_model(cfg: dict, effort: str = "medium", vision_needed: bool = False
     if name:
         return name
     all_models = m.get("models") or []
-    # 视觉任务：先在视觉模型内路由；无视觉模型则回退全部
-    pool = [x for x in all_models if is_vision_model(m, x)] if vision_needed else list(all_models)
-    if not pool:
+    # 视觉任务：只在视觉模型内路由；无视觉模型时回退内置 agnes（视为视觉模型），
+    # 否则纯文本模型看不到截图/图片，电脑操控必然乱移鼠标
+    if vision_needed:
+        pool = [x for x in all_models if is_vision_model(m, x)]
+        if not pool:
+            return DEFAULT_MODEL
+    else:
         pool = list(all_models)
     if not pool:
         return m.get("model") or DEFAULT_MODEL

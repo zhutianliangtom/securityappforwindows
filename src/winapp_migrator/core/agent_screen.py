@@ -565,7 +565,7 @@ def click_physical(x: int, y: int, button: str = "left", clicks: int = 1, interv
 def drag(x1: int, y1: int, x2: int, y2: int, duration: float = 0.4):
     x1, y1 = map_to_screen(x1, y1)
     x2, y2 = map_to_screen(x2, y2)
-    move_mouse(x1, y1)
+    move_mouse_physical(x1, y1)   # 已换算为物理坐标，勿再 map_to_screen（避免二次换算乱移）
     with ai_suppress():
         user32.mouse_event(_MOUSE_LEFTDOWN, 0, 0, 0, 0)
         time.sleep(0.05)

@@ -1,0 +1,264 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>WinAppMigrator · 管理后台</title>
+<link rel="stylesheet" href="admin.css">
+</head>
+<body>
+
+<!-- ============ 登录页 ============ -->
+<div id="loginView" class="login-view hidden">
+  <div class="login-grid" aria-hidden="true"></div>
+  <div class="login-card">
+    <div class="login-mark" aria-hidden="true">
+      <svg viewBox="0 0 48 48" width="52" height="52" fill="none">
+        <rect x="4" y="4" width="40" height="40" rx="6" stroke="#2563EB" stroke-width="2.5"/>
+        <path d="M14 17h20M14 24h20M14 31h11" stroke="#F5F5F5" stroke-width="2.5" stroke-linecap="round"/>
+        <circle cx="38" cy="38" r="3.5" fill="#2563EB"/>
+      </svg>
+    </div>
+    <h1 class="login-title">WinAppMigrator</h1>
+    <p class="login-subtitle">管理控制台 · 需要授权访问</p>
+    <form id="loginForm" autocomplete="off">
+      <label class="field-label" for="password">访问密码</label>
+      <div class="field-wrap">
+        <input type="password" id="password" class="input" placeholder="输入访问密码" autocomplete="current-password" required>
+        <button type="button" id="togglePwd" class="pwd-toggle" aria-label="显示密码">
+          <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M2 12s3.5-6.5 10-6.5S22 12 22 12s-3.5 6.5-10 6.5S2 12 2 12Z"/>
+            <circle cx="12" cy="12" r="2.8"/>
+          </svg>
+        </button>
+      </div>
+      <p id="loginError" class="login-error hidden"></p>
+      <button type="submit" id="loginBtn" class="btn btn-primary btn-block">登 录</button>
+    </form>
+    <p class="login-foot">仅限 SSH 隧道内网访问 · 127.0.0.1</p>
+  </div>
+</div>
+
+<!-- ============ 主面板 ============ -->
+<div id="mainView" class="main-view hidden">
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-dot" aria-hidden="true"></span>
+      <span class="brand-name">WinAppMigrator</span>
+      <span class="brand-sep" aria-hidden="true"></span>
+      <span class="brand-tag">ADMIN</span>
+    </div>
+    <nav class="tabs" role="tablist">
+      <button class="tab active" data-tab="content" role="tab">内容管理</button>
+      <button class="tab" data-tab="release" role="tab">版本发布</button>
+      <button class="tab" data-tab="stats" role="tab">统计图表</button>
+    </nav>
+    <div class="topbar-right">
+      <span id="onlineDot" class="online-dot" aria-hidden="true"></span>
+      <button id="logoutBtn" class="btn btn-ghost">退出登录</button>
+    </div>
+  </header>
+
+  <main class="content">
+
+    <!-- ---------- 面板：内容管理 ---------- -->
+    <section id="panel-content" class="panel active" role="tabpanel">
+      <div class="panel-head">
+        <div>
+          <h2 class="panel-title">内容管理</h2>
+          <p class="panel-desc">编辑官网首页的文案、主图与数据展示内容，保存后即时生效</p>
+        </div>
+        <button id="saveSiteBtn" class="btn btn-primary">保存修改</button>
+      </div>
+
+      <div class="card">
+        <h3 class="card-title">基础信息</h3>
+        <div class="form-grid">
+          <div class="form-field span-2">
+            <label class="field-label" for="siteTitle">网站标题 title</label>
+            <input type="text" id="siteTitle" class="input" placeholder="WinAppMigrator">
+          </div>
+          <div class="form-field">
+            <label class="field-label" for="siteSlogan">标语 slogan</label>
+            <input type="text" id="siteSlogan" class="input" placeholder="一句话宣传语">
+          </div>
+          <div class="form-field">
+            <label class="field-label" for="siteDescription">描述 description</label>
+            <input type="text" id="siteDescription" class="input" placeholder="产品简介">
+          </div>
+          <div class="form-field span-2">
+            <label class="field-label" for="siteHeroImage">主图 heroImage</label>
+            <div class="inline-group">
+              <input type="text" id="siteHeroImage" class="input" placeholder="/uploads/img/xxx.png">
+              <button type="button" id="uploadHeroBtn" class="btn btn-secondary">上传图片</button>
+              <input type="file" id="heroFileInput" accept="image/*" class="hidden-input">
+            </div>
+            <p id="heroUploadHint" class="field-hint hidden"></p>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-head-row">
+          <h3 class="card-title">特性列表 features</h3>
+          <button type="button" id="addFeatureBtn" class="btn btn-secondary btn-sm">添加特性</button>
+        </div>
+        <div id="featureList" class="list-editor"></div>
+      </div>
+
+      <div class="card">
+        <div class="card-head-row">
+          <h3 class="card-title">数据统计 stats</h3>
+          <button type="button" id="addStatBtn" class="btn btn-secondary btn-sm">添加数据</button>
+        </div>
+        <div id="statList" class="list-editor"></div>
+      </div>
+    </section>
+
+    <!-- ---------- 面板：版本发布 ---------- -->
+    <section id="panel-release" class="panel" role="tabpanel">
+      <div class="panel-head">
+        <div>
+          <h2 class="panel-title">版本发布</h2>
+          <p class="panel-desc">上传安装包并填写更新说明，客户端将按版本号与强制标记升级</p>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3 class="card-title">发布新版本</h3>
+        <form id="releaseForm" autocomplete="off">
+          <div class="form-grid">
+            <div class="form-field">
+              <label class="field-label" for="releaseVersion">版本号 version</label>
+              <input type="text" id="releaseVersion" class="input" placeholder="1.2.0" required>
+            </div>
+            <div class="form-field">
+              <label class="field-label" for="releaseFile">安装包 file</label>
+              <label class="file-drop" for="releaseFile">
+                <input type="file" id="releaseFile" class="hidden-input" required>
+                <span class="file-drop-icon" aria-hidden="true">
+                  <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M12 16V4m0 0 4 4m-4-4L8 8"/>
+                    <path d="M4 16v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3"/>
+                  </svg>
+                </span>
+                <span id="releaseFileName" class="file-drop-name">选择安装包文件</span>
+              </label>
+            </div>
+            <div class="form-field span-2">
+              <label class="field-label" for="releaseNotes">更新说明 notes</label>
+              <textarea id="releaseNotes" class="textarea" rows="3" placeholder="本次更新的内容说明"></textarea>
+            </div>
+            <div class="form-field span-2">
+              <label class="check-row">
+                <input type="checkbox" id="releaseForce">
+                <span class="check-box" aria-hidden="true"></span>
+                <span class="check-label">强制更新 <em>客户端检测到该版本时强制升级，不可跳过</em></span>
+              </label>
+            </div>
+          </div>
+          <div class="form-actions">
+            <p id="releaseMsg" class="field-hint hidden"></p>
+            <button type="submit" id="releaseBtn" class="btn btn-primary">发布版本</button>
+          </div>
+        </form>
+      </div>
+
+      <div class="card">
+        <div class="card-head-row">
+          <h3 class="card-title">已发布版本</h3>
+          <span id="versionCount" class="count-badge">0</span>
+        </div>
+        <div class="table-wrap">
+          <table class="table">
+            <thead>
+              <tr>
+                <th>版本号</th>
+                <th>文件名</th>
+                <th>大小</th>
+                <th>更新说明</th>
+                <th>发布日期</th>
+                <th>强制</th>
+                <th class="th-right">操作</th>
+              </tr>
+            </thead>
+            <tbody id="versionTbody">
+              <tr class="empty-row"><td colspan="7">暂无已发布版本</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- ---------- 面板：统计图表 ---------- -->
+    <section id="panel-stats" class="panel" role="tabpanel">
+      <div class="panel-head">
+        <div>
+          <h2 class="panel-title">统计图表</h2>
+          <p class="panel-desc">近 30 天安装包下载趋势，数据来自服务器实时统计</p>
+        </div>
+      </div>
+
+      <div class="stat-banner">
+        <div class="stat-banner-meta">TOTAL DOWNLOADS</div>
+        <div class="stat-banner-value" id="totalDownloads">--</div>
+        <div class="stat-banner-foot">累计下载次数 · 实时更新</div>
+      </div>
+
+      <div class="card">
+        <div class="card-head-row">
+          <h3 class="card-title">下载趋势</h3>
+          <div class="chart-legend" aria-hidden="true">
+            <span class="legend-line"></span>
+            <span class="legend-text">每日下载量</span>
+          </div>
+        </div>
+        <div id="chartBox" class="chart-box">
+          <canvas id="trendCanvas"></canvas>
+          <div id="chartTip" class="chart-tip hidden"></div>
+          <div id="chartEmpty" class="chart-empty hidden">暂无下载数据</div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-head-row">
+          <h3 class="card-title">版本信息</h3>
+        </div>
+        <div class="table-wrap">
+          <table class="table">
+            <thead>
+              <tr>
+                <th>版本号</th>
+                <th>文件名</th>
+                <th>发布日期</th>
+                <th>大小</th>
+              </tr>
+            </thead>
+            <tbody id="statsVersionTbody">
+              <tr class="empty-row"><td colspan="4">暂无版本数据</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+  </main>
+</div>
+
+<div id="toast" class="toast hidden"></div>
+
+<!-- 自定义确认对话框 -->
+<div id="confirmMask" class="confirm-mask hidden">
+  <div class="confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="confirmTitle">
+    <div class="confirm-title" id="confirmTitle">确认操作</div>
+    <p class="confirm-text" id="confirmText"></p>
+    <div class="confirm-actions">
+      <button type="button" id="confirmCancel" class="btn btn-secondary">取消</button>
+      <button type="button" id="confirmOk" class="btn btn-danger">删除</button>
+    </div>
+  </div>
+</div>
+
+<script src="admin.js"></script>
+</body>
+</html>

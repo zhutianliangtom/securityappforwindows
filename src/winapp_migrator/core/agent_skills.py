@@ -174,11 +174,13 @@ web_fetch(url=地址)，默认 GET；
 ## 2. 定位应用
 find_app(query=应用名)：秒查已安装应用的可启动路径，比逐层截图找图标高效。
 
-## 3. 重量级操作（工具内部会弹用户确认）
+## 3. 重量级操作（ask/edit 模式工具内部会弹用户确认；YOLO 模式直接执行）
 - optimize_memory：清理内存（终止可安全退出的后台进程、压缩工作集）
 - uninstall_app(name)：卸载应用（先调自带卸载器再清理残留）
 - migrate_app(name, target)：把应用迁移到其他盘
-先向用户说明影响，确认后再执行；完成后汇报结果。""",
+ask/edit 模式下先向用户说明影响，确认后再执行；YOLO 模式下直接执行即可。
+若用 run_command 辅助卸载（如 taskkill /f /im 应用进程、rd /s /q 应用目录），
+目标是非系统进程/非系统目录时可正常执行；系统关键目录与系统进程仍会被拒绝。""",
     },
     "ui-automation": {
         "description": "界面自动化：screenshot 截图观察、click_text 按文字点击、move_mouse/click/zoom_in 精确鼠标操作、type_text/press_key 键盘输入、list_windows/capture_window 只截指定窗口、clipboard 剪贴板",

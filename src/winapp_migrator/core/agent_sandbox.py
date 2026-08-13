@@ -51,6 +51,39 @@ def _system_dirs() -> list:
     return [d for d in cands if d.exists()]
 
 
+# 系统关键进程：禁止 taskkill（防止杀系统进程导致系统崩溃/锁屏/桌面重启）
+_SYSTEM_PROCS = frozenset({
+    "system", "system idle process", "registry", "smss", "csrss", "wininit",
+    "winlogon", "services", "lsass", "lsm", "svchost", "dwm", "explorer",
+    "conhost", "spoolsv", "taskhost", "taskhostw", "fontdrvhost",
+    "searchindexer", "wmiprvse", "runtimebroker", "sihost",
+    "shellexperiencehost", "textinputhost", "startmenuexperiencehost",
+    "ctfmon", "audiodg", "securityhealthservice", "msmpeng",
+})
+
+# 卸载/清理流程可豁免的危险词：目标安全（非系统进程/非系统目录）时降级为 risky
+# （ask/edit 弹确认、YOLO 放行），目标为系统对象时仍按 dangerous 硬拒绝。
+# 注册表/服务删除（reg delete / sc delete）等高风险操作不豁免，引导走 uninstall_app 工具。
+_EXEMPT_KW = frozenset({
+    "taskkill /f", "rd /s", "rmdir /s", "del /s", "del /f", "del /q",
+    "rd /q", "rmdir /q", "move /y",
+})
+
+
+def _exempt_uninstall_op(low: str, kw: str) -> bool:
+    """豁免判断：taskkill /f 目标必须是非系统进程；
+    强制/递归删除与覆盖移动（rd /s、del /f、move /y 等）目标必须不含系统关键目录。"""
+    if kw == "taskkill /f":
+        m = _re.search(r"/im\s+([\w\-.]+)", low)
+        proc = m.group(1).lower().rstrip(".exe") if m else ""
+        return bool(proc and proc not in _SYSTEM_PROCS)
+    flat = low.replace("\\", "/").replace('"', "").replace("'", "")
+    for d in _system_dirs():
+        if str(d).lower().replace("\\", "/") in flat:
+            return False
+    return True
+
+
 def to_int(v) -> int:
     """健壮数值转换：容忍 LLM 返回的 '16, 980' 等字符串，取第一个数字"""
     if isinstance(v, bool):
@@ -97,9 +130,12 @@ def assess_command(cmd: str) -> tuple:
                       low_nourl):
             return "dangerous", "禁止 curl 管道执行（下载即执行高危模式）"
     else:
-        # 危险优先
+        # 危险优先；卸载/清理类命令（杀应用进程、删非系统目录）在目标安全时
+        # 降级为 risky（ask/edit 弹确认、YOLO 放行），其余危险词硬拒绝
         for kw in DANGEROUS_KW:
             if kw in low_nourl:
+                if kw in _EXEMPT_KW and _exempt_uninstall_op(low, kw):
+                    return "risky", f"卸载/清理类命令: {kw}（目标非系统，需确认）"
                 return "dangerous", f"命令含危险操作: {kw}"
     # 删除命令 + 目标位于系统关键目录 → 拒绝（如 del C:\Program Files\xxx）
     if del_base in ("del", "erase", "rd", "rmdir", "rm", "deltree"):

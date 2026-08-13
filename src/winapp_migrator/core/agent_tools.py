@@ -447,7 +447,7 @@ TOOLS = [
         "function": {
             "name": "optimize_memory",
             "description": "一键清理系统内存：终止可安全退出的后台进程、压缩工作集并清理内存。"
-                           "属于重量级操作，执行前会请用户确认。",
+                           "ask/edit 模式执行前会请用户确认；YOLO 模式直接执行。",
             "parameters": {"type": "object", "properties": {}, "required": []},
         },
     },
@@ -456,7 +456,8 @@ TOOLS = [
         "function": {
             "name": "uninstall_app",
             "description": "卸载已安装应用（优先调用应用自带卸载器，再清理数据目录/注册表/快捷方式）。"
-                           "需要先扫描已安装应用并匹配名称；属于重量级操作，执行前会请用户确认。",
+                           "需要先扫描已安装应用并匹配名称；ask/edit 模式执行前会请用户确认，"
+                           "YOLO 模式直接执行（仅系统关键目录/进程仍受保护）。",
             "parameters": {"type": "object",
                            "properties": {"name": {"type": "string", "description": "应用名称（支持模糊匹配）"}},
                            "required": ["name"]},
@@ -467,7 +468,8 @@ TOOLS = [
         "function": {
             "name": "migrate_app",
             "description": "把已安装应用迁移到其他盘符（移动主目录/数据目录并更新注册表、快捷方式）。"
-                           "需要先扫描应用匹配名称；属于重量级操作，执行前会请用户确认。",
+                           "需要先扫描应用匹配名称；ask/edit 模式执行前会请用户确认，"
+                           "YOLO 模式直接执行（仅系统关键目录仍受保护）。",
             "parameters": {"type": "object",
                            "properties": {
                                "name": {"type": "string", "description": "应用名称（支持模糊匹配）"},

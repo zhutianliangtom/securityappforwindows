@@ -673,18 +673,20 @@ def _shipped_skills_dir() -> Path:
 
 
 def ensure_md_skills() -> None:
-    """确保内置 md 技能存在：内置模板（_BUILTIN_MD_SKILLS）+ 随包分发的技能资源，
-    用户技能目录缺失时自动生成/复制（不覆盖用户已有或修改过的技能）"""
+    """确保内置 md 技能存在并同步到最新模板：内置模板（_BUILTIN_MD_SKILLS）+ 随包分发的技能资源。
+    内置模板技能启动时与最新模板比对，内容不一致则更新（保证规则/流程改动生效）；
+    用户自建技能与随包分发技能仅缺失时生成，不覆盖。"""
     root = _skills_dir()
     for name, cfg in _BUILTIN_MD_SKILLS.items():
         f = root / name / "SKILL.md"
-        if f.is_file():
-            continue
+        template = f"---\nname: {name}\ndescription: {cfg['description']}\n---\n\n{cfg['instruction'].strip()}\n"
         try:
-            f.parent.mkdir(parents=True, exist_ok=True)
-            f.write_text(
-                f"---\nname: {name}\ndescription: {cfg['description']}\n---\n\n"
-                f"{cfg['instruction'].strip()}\n", encoding="utf-8")
+            if f.is_file():
+                if f.read_text(encoding="utf-8", errors="replace") == template:
+                    continue   # 与模板一致，无需更新
+            else:
+                f.parent.mkdir(parents=True, exist_ok=True)
+            f.write_text(template, encoding="utf-8")
         except OSError:
             pass
     # 随包分发技能：用户目录缺失同名技能时整体复制（含 resources 附属文件）

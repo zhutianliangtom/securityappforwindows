@@ -15,6 +15,8 @@ from PyQt6.QtCore import QBuffer, QByteArray, QIODevice, Qt
 from PyQt6.QtGui import QColor, QFont, QImage, QPainter, QPainterPath, QPen
 from PyQt6.QtWidgets import QApplication
 
+from winapp_migrator.core.input_guard import ai_suppress
+
 user32 = ctypes.windll.user32
 
 # 鼠标事件标志
@@ -415,24 +417,27 @@ def virtual_desktop(action: str = "new"):
            "next": (0x5B, 0x11, 0x27),    # Win + Ctrl + Right
            "prev": (0x5B, 0x11, 0x25)}    # Win + Ctrl + Left
     keys = seq.get(action, seq["new"])
-    for vk in keys:                        # 依次按下
-        user32.keybd_event(vk, 0, 0, 0)
-        time.sleep(0.02)
-    for vk in reversed(keys):              # 逆序释放
-        user32.keybd_event(vk, 0, 0x0002, 0)
-        time.sleep(0.02)
+    with ai_suppress():
+        for vk in keys:                        # 依次按下
+            user32.keybd_event(vk, 0, 0, 0)
+            time.sleep(0.02)
+        for vk in reversed(keys):              # 逆序释放
+            user32.keybd_event(vk, 0, 0x0002, 0)
+            time.sleep(0.02)
     time.sleep(0.5)                        # 等待桌面切换动画完成
 
 
 # ---- 鼠标 ----
 def move_mouse(x: int, y: int):
     x, y = map_to_screen(x, y)   # 截图像素 → 屏幕物理像素（防 DPI 缩放偏移）
-    user32.SetCursorPos(int(x), int(y))
+    with ai_suppress():
+        user32.SetCursorPos(int(x), int(y))
 
 
 def move_mouse_physical(x: int, y: int):
     """物理像素直接移动（不经过模型坐标换算），供 UIA/OCR 等非视觉定位结果使用"""
-    user32.SetCursorPos(int(x), int(y))
+    with ai_suppress():
+        user32.SetCursorPos(int(x), int(y))
 
 
 def click(x=None, y=None, button: str = "left", clicks: int = 1, interval: float = 0.1):
@@ -442,16 +447,18 @@ def click(x=None, y=None, button: str = "left", clicks: int = 1, interval: float
         x, y = _cursor_pos()   # 当前物理坐标，直接点击当前位置
     else:
         x, y = map_to_screen(x, y)
-        user32.SetCursorPos(int(x), int(y))
+        with ai_suppress():
+            user32.SetCursorPos(int(x), int(y))
     down = {"left": _MOUSE_LEFTDOWN, "right": _MOUSE_RIGHTDOWN,
             "middle": _MOUSE_MIDDLEDOWN}[button]
     up = {"left": _MOUSE_LEFTUP, "right": _MOUSE_RIGHTUP,
           "middle": _MOUSE_MIDDLEUP}[button]
-    for _ in range(clicks):
-        user32.mouse_event(down, 0, 0, 0, 0)
-        time.sleep(interval)
-        user32.mouse_event(up, 0, 0, 0, 0)
-        time.sleep(interval)
+    with ai_suppress():
+        for _ in range(clicks):
+            user32.mouse_event(down, 0, 0, 0, 0)
+            time.sleep(interval)
+            user32.mouse_event(up, 0, 0, 0, 0)
+            time.sleep(interval)
 
 
 def click_physical(x: int, y: int, button: str = "left", clicks: int = 1, interval: float = 0.06):
@@ -461,29 +468,33 @@ def click_physical(x: int, y: int, button: str = "left", clicks: int = 1, interv
             "middle": _MOUSE_MIDDLEDOWN}[button]
     up = {"left": _MOUSE_LEFTUP, "right": _MOUSE_RIGHTUP,
           "middle": _MOUSE_MIDDLEUP}[button]
-    for _ in range(clicks):
-        user32.mouse_event(down, 0, 0, 0, 0)
-        time.sleep(interval)
-        user32.mouse_event(up, 0, 0, 0, 0)
-        time.sleep(interval)
+    with ai_suppress():
+        for _ in range(clicks):
+            user32.mouse_event(down, 0, 0, 0, 0)
+            time.sleep(interval)
+            user32.mouse_event(up, 0, 0, 0, 0)
+            time.sleep(interval)
 
 
 def drag(x1: int, y1: int, x2: int, y2: int, duration: float = 0.4):
     x1, y1 = map_to_screen(x1, y1)
     x2, y2 = map_to_screen(x2, y2)
     move_mouse(x1, y1)
-    user32.mouse_event(_MOUSE_LEFTDOWN, 0, 0, 0, 0)
-    time.sleep(0.05)
-    steps = max(int(duration / 0.02), 5)
-    for i in range(1, steps + 1):
-        move_mouse(x1 + (x2 - x1) * i // steps, y1 + (y2 - y1) * i // steps)
-        time.sleep(duration / steps)
-    user32.mouse_event(_MOUSE_LEFTUP, 0, 0, 0, 0)
+    with ai_suppress():
+        user32.mouse_event(_MOUSE_LEFTDOWN, 0, 0, 0, 0)
+        time.sleep(0.05)
+        steps = max(int(duration / 0.02), 5)
+        for i in range(1, steps + 1):
+            user32.SetCursorPos(int(x1 + (x2 - x1) * i // steps),
+                                int(y1 + (y2 - y1) * i // steps))
+            time.sleep(duration / steps)
+        user32.mouse_event(_MOUSE_LEFTUP, 0, 0, 0, 0)
 
 
 def scroll(delta: int):
     """滚轮：正值向上，负值向下（120 为 1 格）"""
-    user32.mouse_event(_MOUSE_WHEEL, 0, 0, int(delta), 0)
+    with ai_suppress():
+        user32.mouse_event(_MOUSE_WHEEL, 0, 0, int(delta), 0)
 
 
 # ---- 键盘 ----
@@ -495,9 +506,10 @@ def key_press(key_name: str):
         code = 0x70 + int(name[1:]) - 1  # F1=0x70
     if not code:
         raise ValueError(f"未知按键: {key_name}")
-    user32.keybd_event(code, 0, 0, 0)
-    time.sleep(0.03)
-    user32.keybd_event(code, 0, 0x0002, 0)  # KEYEVENTF_KEYUP
+    with ai_suppress():
+        user32.keybd_event(code, 0, 0, 0)
+        time.sleep(0.03)
+        user32.keybd_event(code, 0, 0x0002, 0)  # KEYEVENTF_KEYUP
 
 
 def type_text(text: str, interval: float = 0.01):
@@ -525,8 +537,9 @@ def _send_unicode(ch: str):
         _anonymous_ = ("u",)
         _fields_ = [("type", wintypes.DWORD), ("u", _U)]
 
-    for down in (True, False):
-        ki = KEYBDINPUT(0, ord(ch), 0x0004 if down else 0x0004 | 0x0002,
-                        0, ctypes.pointer(ctypes.c_ulong(0)))
-        inp = INPUT(1, ki)  # INPUT_KEYBOARD=1
-        user32.SendInput(1, ctypes.byref(inp), ctypes.sizeof(INPUT))
+    with ai_suppress():
+        for down in (True, False):
+            ki = KEYBDINPUT(0, ord(ch), 0x0004 if down else 0x0004 | 0x0002,
+                            0, ctypes.pointer(ctypes.c_ulong(0)))
+            inp = INPUT(1, ki)  # INPUT_KEYBOARD=1
+            user32.SendInput(1, ctypes.byref(inp), ctypes.sizeof(INPUT))

@@ -43,6 +43,7 @@ from PyQt6.QtWidgets import (
 from winapp_migrator.core import agent_llm, agent_engine, agent_skills, agent_sandbox, agent_tools, agent_screen
 from winapp_migrator.core.agent_mcp import McpManager
 from winapp_migrator.core.agent_screen import capture_screen_data_url
+from winapp_migrator.core.input_guard import guard as user_guard
 from winapp_migrator.ui.widgets import add_brand_footer
 from winapp_migrator.utils.helpers import is_admin
 
@@ -1740,6 +1741,7 @@ class AgentPanel(QDialog):
     ask_signal = pyqtSignal(str)           # ask_user 提问（args_json）
     mcp_signal = pyqtSignal(str)
     compact_signal = pyqtSignal(int)   # /compact 压缩完成（后台线程 → 主线程，参数=合并条数）
+    user_input_signal = pyqtSignal()   # 钩子线程检测到用户手动鼠标/键盘操作 → 主线程停止 AI
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -1832,6 +1834,10 @@ class AgentPanel(QDialog):
         self._last_activity = 0.0      # 最近一次有输出/状态的时间戳
         self._task_active = False      # 是否有任务在执行（结束收尾的可靠依据）
         self._eval_pending = None      # 任务难度评估待启动参数 (ai_text, send_images, skill_names)
+        # 操控电脑字幕：AI 调用鼠标/键盘工具时在屏幕中下部显示实时操作说明+AI文本
+        self._subtitle_active = False  # 是否正处于 AI 操控电脑中（显示字幕 + 启用用户输入接管停止）
+        self._subtitle_op = ""         # 当前字幕中的操作说明（工具名）
+        self._subtitle = None          # 全局置顶悬浮字幕窗
         # 管理员权限下的原生拖放（UIPI 绕行，仅提权时启用）
         self._admin_dnd = False
         self._admin_drop_filter = None
@@ -1850,6 +1856,7 @@ class AgentPanel(QDialog):
         self._action_anim_angle = 0
 
         self._build_ui()
+        self._init_subtitle()   # 全局置顶悬浮字幕窗（AI 操控电脑时显示操作字幕）
         self._sync_model_combo()   # 填充输入框右侧模型下拉（设置里的模型列表）
         self._connect_signals()
         self._restore_workdir()   # 恢复上次选择的工作目录（QSettings 持久化）
@@ -2045,6 +2052,72 @@ class AgentPanel(QDialog):
         self.ask_signal.connect(self._on_ask)
         self.eval_signal.connect(self._on_assess_done)
         self.compact_signal.connect(self._on_compact_done)
+        self.user_input_signal.connect(self._on_user_input)
+
+    # ---------- 操控电脑字幕（全局置顶悬浮窗） ----------
+    # AI 调用鼠标/键盘工具时，在屏幕中下部显示实时操作说明 + AI 文本（不显示图片缩略图）
+    _CONTROL_TOOLS = frozenset({"move_mouse", "click", "click_text", "drag",
+                                "scroll", "press_key", "type_text"})
+
+    def _init_subtitle(self):
+        self._subtitle = QWidget(None)
+        self._subtitle.setWindowFlags(
+            Qt.WindowType.FramelessWindowHint
+            | Qt.WindowType.WindowStaysOnTopHint
+            | Qt.WindowType.Tool
+            | Qt.WindowType.WindowDoesNotAcceptFocus)
+        self._subtitle.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        self._sub_label = QLabel()
+        self._sub_label.setWordWrap(True)
+        self._sub_label.setStyleSheet(
+            f"background: rgba(0,0,0,205); color: #FFFFFF; border-radius: 12px;"
+            "padding: 10px 16px; font-size: 14px;")
+        lay = QVBoxLayout(self._subtitle)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.addWidget(self._sub_label)
+
+    def _show_subtitle(self, op: str):
+        self._subtitle_active = True
+        self._subtitle_op = op
+        self._subtitle_ai = ""
+        self._render_subtitle()
+
+    def _render_subtitle(self):
+        if not self._subtitle:
+            return
+        parts = [f"<b>AI 操控中 · {_esc(self._subtitle_op)}</b>"]
+        if self._subtitle_ai:
+            parts.append(_esc(self._subtitle_ai))
+        self._sub_label.setText("<br/>".join(parts))
+        self._sub_label.adjustSize()
+        scr = QApplication.primaryScreen().availableGeometry()
+        w = max(self._sub_label.width(), 240) + 32
+        self._subtitle.setFixedWidth(w)
+        x = scr.center().x() - w // 2
+        y = scr.bottom() - int(scr.height() * 0.16) - self._subtitle.sizeHint().height()
+        self._subtitle.move(x, y)
+        self._subtitle.show()
+        self._subtitle.raise_()
+
+    def _hide_subtitle(self):
+        self._subtitle_active = False
+        self._subtitle_op = ""
+        self._subtitle_ai = ""
+        if self._subtitle:
+            self._subtitle.hide()
+
+    def _on_user_guard_cb(self):
+        """钩子线程回调（低级钩子在独立线程）→ 经信号转发到主线程执行停止逻辑"""
+        self.user_input_signal.emit()
+
+    def _on_user_input(self):
+        """钩子检测到用户手动操作鼠标/键盘 → 立即停止 AI 操控电脑"""
+        if not self._subtitle_active:
+            return
+        self._hide_subtitle()
+        if self._engine:
+            self._engine.stop()
+        self._add_status("检测到用户手动操作鼠标/键盘，已停止 AI 操控", WARN)
 
     # ---------- 欢迎页（无对话时居中介绍 AI 功能） ----------
     def _build_welcome(self) -> QWidget:
@@ -3223,6 +3296,8 @@ class AgentPanel(QDialog):
 
         self._clear_attachments()   # 发送后清空附件条
         self._task_active = True
+        # 启动用户输入监控：AI 操控鼠标/键盘期间，用户手动操作立即停止（钩子常驻，仅更新回调）
+        user_guard.start(self._on_user_guard_cb)
         # 模型路由：自动模式先用默认 agnes-2.5-flash 评估任务难度（后台线程），
         # 评估完成后再按难度选合适模型启动；手动指定模型/关闭自动则直接启动
         if self._auto_effort and not self._model_override:
@@ -3882,6 +3957,10 @@ class AgentPanel(QDialog):
         self._finish_thinking()   # 开始输出正文即视为思考完成
         self._stop_send_spin()
         self._last_activity = time.time()
+        if self._subtitle_active:
+            # 操控电脑期间：AI 文本实时追加到字幕（不进入对话气泡缩略图）
+            self._subtitle_ai += s
+            self._render_subtitle()
         self._ensure_ai_bubble()
         self._ensure_text_segment()
         self._segments[-1]["raw"] += s
@@ -3924,16 +4003,22 @@ class AgentPanel(QDialog):
                 self._segments.append({"type": "op", "html": f"▎{_esc(name)} …"})
             self._refresh_ai_html()
             self._scroll_bottom()
+            # 操控电脑工具：显示全局置顶字幕（操作说明 + 后续 AI 文本），并启用用户输入接管
+            if name in self._CONTROL_TOOLS:
+                self._show_subtitle(name)
         elif s == "完成":
             self._hide_spinner()   # 任务结束，停掉转圈
+            self._hide_subtitle()
         elif s.startswith("错误"):
             self._hide_spinner()
             self._ensure_ai_bubble()
             self._segments.append({"type": "mark", "html": _esc(s)})
             self._refresh_ai_html()
             self._scroll_bottom()
+            self._hide_subtitle()
         elif s == "已停止" or "已停止" in s:
             self._hide_spinner()   # 用户手动停止/包含“已停止”字样的状态均不输出小字
+            self._hide_subtitle()
 
     # ---------- 每步确认（engine 线程调用 → 信号 → 主线程弹窗） ----------
     def _confirm_tool(self, name: str, args: dict) -> bool:

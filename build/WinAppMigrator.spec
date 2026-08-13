@@ -40,6 +40,8 @@ a = Analysis(
         'win32gui',
         'win32security',
         'win32con',
+        # agent_panel 的 _svg_icon 渲染 Lucide SVG 矢量图标依赖 QtSvg
+        'PyQt6.QtSvg',
         # win32com 为动态包，需完整收集子模块（快捷方式 TargetPath 读取依赖）
         *collect_submodules('win32com'),
         # 三件套图片依赖：docx/pptx/openpyxl 的 add_picture/add_image 运行时 import PIL，显式声明确保随包

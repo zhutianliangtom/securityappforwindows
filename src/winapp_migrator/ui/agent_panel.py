@@ -30,6 +30,7 @@ from PyQt6.QtCore import (Qt, QTimer, QSettings, QPropertyAnimation, pyqtSignal,
 from PyQt6.QtGui import (QIcon, QFont, QPainter, QPen, QColor, QPixmap, QImage,
                          QPainterPath, QKeySequence, QTextOption,
                          QDragEnterEvent, QDragMoveEvent, QDropEvent, QCursor)
+from PyQt6.QtSvg import QSvgRenderer
 from PyQt6.QtWidgets import (
     QDialog, QLabel, QLineEdit, QPushButton, QComboBox, QScrollArea,
     QVBoxLayout, QHBoxLayout, QMessageBox, QFormLayout, QWidget,
@@ -105,9 +106,69 @@ def _app_icon_path() -> str:
     return str(Path(__file__).resolve().parents[3] / "assets" / "icon.ico")
 
 
+def _dark_titlebar(widget) -> None:
+    """把 Windows 系统标题栏设为深色（暗色标题栏 + 纯黑标题栏/边框），与面板纯黑风格统一"""
+    try:
+        hwnd = int(widget.winId())
+        dwm = ctypes.windll.dwmapi
+        on = ctypes.c_int(1)
+        # DWMWA_USE_IMMERSIVE_DARK_MODE=20（Win10 1903+ / Win11）
+        dwm.DwmSetWindowAttribute(hwnd, 20, ctypes.byref(on), ctypes.sizeof(on))
+        black = ctypes.c_int(0x000000)
+        # DWMWA_BORDER_COLOR=34 / DWMWA_CAPTION_COLOR=35（Win11 22H2+，旧系统失败自动忽略）
+        for attr in (34, 35):
+            try:
+                dwm.DwmSetWindowAttribute(hwnd, attr,
+                                          ctypes.byref(black), ctypes.sizeof(black))
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+
+# 统一给所有 QDialog 子类深色标题栏（AgentPanel 等自实现 showEvent 经 super() 同样生效）
+_orig_dialog_show = QDialog.showEvent
+
+
+def _dialog_show(self, e):
+    _orig_dialog_show(self, e)
+    _dark_titlebar(self)
+
+
+QDialog.showEvent = _dialog_show
+
+
 def _std_icon(sp) -> QIcon:
     """系统矢量图标（无 emoji）"""
     return QApplication.style().standardIcon(sp)
+
+
+# 齿轮（设置）：Lucide 开源简约线条矢量图（stroke 用 {color} 占位，由 _svg_icon 着色）
+_GEAR_SVG = ('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" '
+             'stroke="{color}" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">'
+             '<path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08'
+             'a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74'
+             'l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25'
+             'a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25'
+             'a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74'
+             'v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08'
+             'a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/>'
+             '<circle cx="12" cy="12" r="3"/></svg>')
+
+
+def _svg_icon(svg: str, size: int = 18, color: str = TEXT_DIM) -> QIcon:
+    """渲染内联 SVG 线条矢量图标（开源矢量路径，统一着色，线条风格一致）"""
+    pm = QPixmap(size, size)
+    pm.fill(Qt.GlobalColor.transparent)
+    try:
+        r = QSvgRenderer(svg.replace("{color}", color).encode("utf-8"))
+        p = QPainter(pm)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        r.render(p)
+        p.end()
+    except Exception:
+        pass
+    return QIcon(pm)
 
 
 def _line_icon(kind: str, size: int = 18, color: str = TEXT_DIM) -> QIcon:
@@ -131,14 +192,6 @@ def _line_icon(kind: str, size: int = 18, color: str = TEXT_DIM) -> QIcon:
         r = s * 0.28
         p.drawRoundedRect(QRectF(s * 0.5 - r, s * 0.5 - r, r * 2, r * 2),
                           s * 0.08, s * 0.08)
-    elif kind == "wrench":      # 扳手（设置）：顶部开口套筒 + 下延手柄，与"太阳"式齿轮彻底区分
-        p.setPen(QPen(QColor(color), s * 0.095, cap=Qt.PenCapStyle.RoundCap,
-                      join=Qt.PenJoinStyle.RoundJoin))
-        # 套筒环：缺口朝正上方（40°~140°），其余 260° 闭合
-        p.drawArc(QRectF(s * 0.30, s * 0.10, s * 0.40, s * 0.40), 140 * 16, 260 * 16)
-        # 手柄：从缺口两侧垂直向下延伸
-        p.drawLine(QPointF(s * 0.653, s * 0.429), QPointF(s * 0.66, s * 0.87))
-        p.drawLine(QPointF(s * 0.347, s * 0.429), QPointF(s * 0.34, s * 0.87))
     elif kind == "trash":       # 垃圾桶（清空）
         p.drawLine(QPointF(s * 0.22, s * 0.28), QPointF(s * 0.78, s * 0.28))
         p.drawLine(QPointF(s * 0.36, s * 0.28), QPointF(s * 0.36, s * 0.19))
@@ -1839,7 +1892,7 @@ class AgentPanel(QDialog):
         self.new_btn.clicked.connect(self._new_session)
         top.addWidget(self.new_btn)
 
-        self.settings_btn = QPushButton(_line_icon("wrench"), "")
+        self.settings_btn = QPushButton(_svg_icon(_GEAR_SVG, 20, TEXT_DIM), "")
         self.settings_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.settings_btn.setAutoDefault(False)
         self.settings_btn.setFixedSize(34, 34)
@@ -2287,7 +2340,7 @@ class AgentPanel(QDialog):
                 pass
 
     def showEvent(self, e):
-        super().showEvent(e)
+        super().showEvent(e)   # 统一补丁已为 QDialog 深色化标题栏
         # 默认正常窗口大小（__init__ 中已 resize），不再强制最大化
         # 管理员权限：Windows UIPI 拦截普通 Explorer 的 OLE 拖放，改用 WM_DROPFILES 原生通道
         print(f"[dnd] showEvent is_admin={is_admin()} _admin_dnd={self._admin_dnd}", flush=True)

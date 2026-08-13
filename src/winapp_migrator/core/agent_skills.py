@@ -977,6 +977,39 @@ def skills_covering_tools(tool_names) -> dict:
     return out
 
 
+# 按用户自然语言提示词自动匹配技能的触发词（命中即注入该技能流程）
+_SKILL_KEYWORDS = {
+    "doc-gen": ["ppt", "pptx", "powerpoint", "演示文稿", "word", "docx", "文档",
+                "excel", "xlsx", "表格", "报告", "简历", "计划书", "感言", "总结",
+                "方案", "毕业论文", "宣传单", "邀请函", "收款记录", "清单"],
+    "computer-control": ["操控电脑", "接管电脑", "帮我操作", "替我点", "自动操作"],
+    "ui-automation": ["点击", "输入文字", "操作界面", "打开应用", "操作软件", "自动化"],
+    "screen_operate": ["截图", "屏幕"],
+    "web-search": ["搜索", "查询", "新闻", "最新", "实时", "查一下", "网页", "联网"],
+    "file-ops": ["读取文件", "创建文件", "删除文件", "查找文件", "修改文件", "重命名文件", "整理文件"],
+    "cmd-ops": ["命令行", "终端", "安装软件", "运行程序", "pip 安装", "下载文件", "执行命令"],
+    "system-admin": ["系统信息", "查看进程", "服务状态", "系统体检"],
+    "memory": ["记住这个", "记住"],
+    "sub-agent": ["并行", "并发", "大规模搜索", "分布式"],
+    "download-skill": ["安装技能", "下载技能", "找技能"],
+    "skill-create": ["创建技能", "新技能", "自定义技能"],
+    "test-driven-development": ["写测试", "测试用例", "tdd"],
+    "systematic-debugging": ["调试", "排查问题", "修复bug"],
+    "brainstorming": ["头脑风暴", "想创意", "方案点子"],
+    "writing-plans": ["制定计划", "规划方案", "执行计划"],
+    "complex-task": ["复杂任务", "多步骤任务"],
+}
+
+
+def auto_skill_names(text: str) -> list:
+    """根据用户自然语言提示词匹配命中的技能名（按触发词命中，返回技能名列表）。
+    用于任务开始时把命中技能的规范流程注入系统提示词，让 AI 先走 skill 再动手。"""
+    t = (text or "").lower()
+    if not t:
+        return []
+    return [name for name, kws in _SKILL_KEYWORDS.items() if any(k in t for k in kws)]
+
+
 def _skill_router_block() -> str:
     """技能建议段：列出全部可用技能（name：description）。
     不强制读取——由 AI 判断任务是否命中某技能且读取能提升效果时，再用 read_file
@@ -1040,8 +1073,8 @@ def build_system_prompt(agent_name: str = "", extra_skills: list = None,
         if inst:
             prompt += "\n\n" + inst
     if extra_skills:
-        prompt += ("\n\n本次任务要求严格按上述指定技能（/技能名 手动调用）的流程执行，"
-                   "先按其 instruction 组织步骤再行动。")
+        prompt += ("\n\n当前任务已匹配并指定以下技能，必须严格按各技能 instruction 的规范流程执行，"
+                   "先按其流程组织步骤再行动，不要跳过技能直接调用底层工具。")
     prompt += _skill_router_block()
     prompt += ("\n\n可用内置工具：screenshot(截屏观察)、list_windows/capture_window(枚举并只截指定窗口，"
                "避免其他窗口干扰)、get_screen_size(分辨率)、"

@@ -132,6 +132,7 @@ class AgentEngine:
         self._rules_confirmed = False   # 当前任务是否已确认开发规则
         self._skills_read = set()       # 已注入/已读取规范流程的技能名
         self._skill_consulted = set()   # 已做技能规范化拦截的工具名（每工具最多注入一次）
+        self._auto_skills = []          # 按用户提示词自动匹配并注入的技能名
 
     # ---------- 控制 ----------
     def stop(self):
@@ -515,8 +516,13 @@ class AgentEngine:
     # ---------- 主循环 ----------
     def _system_prompt(self, agent_name: str = "", skills: list = None) -> str:
         """构建系统提示词：每次都重新读取 settings.json，
-        用户中途新增/修改的自定义规则在下一轮立即生效"""
-        return agent_skills.build_system_prompt(agent_name, extra_skills=skills,
+        用户中途新增/修改的自定义规则在下一轮立即生效。
+        自动匹配到的技能（_auto_skills）与手动指定技能合并注入，让 AI 先按技能流程执行。"""
+        merged = list(skills or [])
+        for s in (self._auto_skills or []):
+            if s not in merged:
+                merged.append(s)
+        return agent_skills.build_system_prompt(agent_name, extra_skills=merged,
                                                 text_only=self.text_only,
                                                 memory_enabled=self.memory_enabled,
                                                 direct=self.direct)
@@ -535,6 +541,8 @@ class AgentEngine:
             skills: list = None):
         self.end_state = ""
         self._rules_confirmed = False   # 每个新任务重新强制规则确认
+        # 按用户提示词自动匹配技能并注入：简单提示词（如"生成一个毕业感言PPT"）也先走 skill 流程
+        self._auto_skills = agent_skills.auto_skill_names(user_input)
         if not self._messages or self._messages[0].get("role") != "system":
             self._messages.insert(0, {"role": "system",
                                       "content": self._system_prompt(agent_name, skills)})

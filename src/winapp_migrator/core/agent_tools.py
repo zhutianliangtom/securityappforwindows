@@ -859,6 +859,9 @@ def execute_tool(name: str, args: dict, allow_dangerous: bool = False,
             png = agent_screen.capture_screen_png()
             w, h = agent_screen.screen_size()
             elems = agent_locator.locate_elements(png, w, h)
+            # 元素坐标换算为与截图网格刻度一致的模型坐标，避免模型混用两套坐标乱点
+            for e in elems:
+                e["x"], e["y"] = agent_screen.physical_to_model(e["x"], e["y"])
             return {"text": "已截取屏幕。" + agent_locator.summarize(elems),
                     "images": [url]}
         if name == "get_screen_size":

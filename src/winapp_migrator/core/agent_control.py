@@ -32,8 +32,11 @@ class ComputerController:
         return None
 
     def summarize(self) -> str:
-        """当前屏幕可点文字元素清单（供模型换方案）"""
-        return agent_locator.summarize(agent_locator.get_screen_elements())
+        """当前屏幕可点文字元素清单（坐标换算为与截图一致的模型坐标，供模型换方案）"""
+        elems = agent_locator.get_screen_elements()
+        for e in elems:
+            e["x"], e["y"] = agent_screen.physical_to_model(e["x"], e["y"])
+        return agent_locator.summarize(elems)
 
     # ---------- 移动：真人式最优轨迹 ----------
     def move(self, x, y):
@@ -73,21 +76,29 @@ class ComputerController:
         return (x, y), f"已按文字「{text}」精确定位并点击 ({x},{y})"
 
     def click(self, x=None, y=None, text=None, button: str = "left", clicks: int = 1):
-        """统一点击入口：优先 text 精准定位，其次坐标并自动纠偏+校验，最后当前光标。"""
+        """统一点击入口：优先 text 精准定位，其次坐标并自动纠偏+校验，最后当前光标。
+
+        坐标路径：模型读数(截图空间) → map_to_screen 换算为物理像素一次，
+        吸附/落点校验均在物理空间（元素为物理坐标），再 click_physical 直接点，
+        杜绝二次换算导致的乱点。
+        """
         if text:
             hit = self.find(text)
             if not hit:
                 return None, f"[未找到文字「{text}」] 可用元素：{self.summarize()}"
             x, y = hit
+            agent_screen.click_physical(x, y, button, clicks)
+            return (x, y), f"已按文字「{text}」精确定位并点击 ({x},{y})"
         if x is None or y is None:
             agent_screen.click(None, None, button, clicks)
             return None, f"已点击当前鼠标位置 {button} 键 x{clicks}"
-        # 坐标点击：自动纠偏（吸附到最近文字元素中心）+ 点击后校验落点
+        # 坐标点击：模型读数 → 物理像素；吸附/校验都在物理空间
+        px, py = agent_screen.map_to_screen(int(x), int(y))
         elems = agent_locator.get_screen_elements()
-        sx, sy = self._snap(int(x), int(y), elems)
-        agent_screen.click(sx, sy, button, clicks)
+        sx, sy = self._snap(px, py, elems)
+        agent_screen.click_physical(sx, sy, button, clicks)
         msg = f"已点击 ({sx}, {sy}) {button} 键 x{clicks}"
-        if (sx, sy) != (int(x), int(y)):
+        if (sx, sy) != (px, py):
             msg += "（已吸附到最近文字元素中心自动纠偏）"
         hit_name = self._element_at(sx, sy, elems)
         if hit_name:

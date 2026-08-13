@@ -90,6 +90,28 @@ def map_to_screen(x: int, y: int) -> tuple:
     return int(x * sx), int(y * sy)
 
 
+def physical_to_model(x: int, y: int) -> tuple:
+    """屏幕物理像素 → 当前视觉基准(模型图像)坐标（map_to_screen 的逆运算）。
+
+    用于把元素定位结果换算成与截图网格刻度一致的坐标，避免模型混用
+    物理/截图两套坐标导致乱点。
+    """
+    sx, sy = screen_scale()
+    ox = x / sx if sx else x
+    oy = y / sy if sy else y
+    if _view is not None and _view.get("img_w", 0) > 0:
+        # zoom/窗口态：物理 → 基准区域 → 图像坐标
+        x0, y0, reg = _view["x0"], _view["y0"], _view["region"]
+        return int((ox - x0) * _view["img_w"] / reg), \
+            int((oy - y0) * _view["img_h"] / reg)
+    # 全屏缩放系：物理 → 原始截图 → 模型图像
+    w_orig, h_orig = _shot_size or screen_size()
+    mw, mh = _model_size or (w_orig, h_orig)
+    mx = int(ox * mw / w_orig) if w_orig else int(ox)
+    my = int(oy * mh / h_orig) if h_orig else int(oy)
+    return mx, my
+
+
 def capture_screen_data_url(grid: bool = True, mark_cursor: bool = True) -> str:
     """截取当前前台应用窗口 → data URL（OpenAI 兼容 image_url 输入）。
 

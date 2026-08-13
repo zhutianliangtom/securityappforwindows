@@ -27,13 +27,16 @@ _TOOL_TEXT_MAX = 3000
 _DEV_TOOLS = frozenset({"write_file", "edit_file", "delete_file",
                         "run_command", "create_skill", "dispatch_sub_agents"})
 
-# 技能路由硬拦截的豁免工具：导航/观察/记忆/搜索类不做强制规范门槛，
-# 避免 AI 只是临时看一眼屏幕或问用户就被要求先读技能
+# 技能路由硬拦截的豁免工具：
+# - 导航/观察/记忆/搜索类：不做强制规范门槛，避免 AI 只是临时看一眼屏幕或问用户就被要求先读技能
+# - 三件套生成（create_docx/create_pptx/create_xlsx）及回读验证（extract_text）：
+#   简单需求直接调用工具即等价使用 doc-gen 技能，无需先读 SKILL.md 或走多步流程
 _SKIP_SKILL_GATE = frozenset({
     "ask_user", "read_file", "list_directory", "search_files",
     "screenshot", "get_screen_size", "list_windows", "capture_window",
     "zoom_in", "save_memory", "load_memory", "web_search", "web_fetch",
     "clipboard", "check_command", "virtual_desktop",
+    "create_docx", "create_pptx", "create_xlsx", "extract_text",
 })
 
 # 对话上下文持久化路径

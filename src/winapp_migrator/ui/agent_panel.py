@@ -78,6 +78,11 @@ _BTN_PRIMARY = (f"QPushButton {{ background: {ACCENT}; color: #FFFFFF; border: n
                 f"border-radius: 10px; padding: 0 16px; font-size: 13px; font-weight: 700; }}"
                 f"QPushButton:hover {{ background: {ACCENT_HOVER}; }}"
                 f"QPushButton:disabled {{ background: {CARD}; color: {TEXT_DIM}; }}")
+# 灰蓝：输入框为空时的发送按钮（弱化提示，有内容后切换深蓝 _BTN_PRIMARY）
+_BTN_DIM = (f"QPushButton {{ background: #46536B; color: #A9B6CC; border: none;"
+            f"border-radius: 10px; padding: 0 16px; font-size: 13px; font-weight: 700; }}"
+            f"QPushButton:hover {{ background: #53617C; }}"
+            f"QPushButton:disabled {{ background: {CARD}; color: {TEXT_DIM}; }}")
 _QCOMBO = (f"QComboBox {{ background: {PANEL}; color: {TEXT}; border: 1px solid {BORDER};"
            f"border-radius: 8px; padding: 5px 10px; font-size: 12px; }}"
            f"QComboBox::drop-down {{ border: none; width: 22px; }}"
@@ -1915,6 +1920,7 @@ class AgentPanel(QDialog):
             f"QPlainTextEdit:focus {{ border: 1px solid {ACCENT}; }}")
         self.input.submit.connect(self._send)   # Enter 发送（Shift+Enter 换行）
         self.input.textChanged.connect(self._update_cmd_suggestions)
+        self.input.textChanged.connect(self._sync_action_style)
         self.input.installEventFilter(self)   # 拦截 Ctrl+V：剪贴板图片转附件
         self.input.fileDropped.connect(self._on_input_files_dropped)   # 文件拖入 → 附件
         bottom.addWidget(self.input, 1)
@@ -2382,12 +2388,18 @@ class AgentPanel(QDialog):
         return QIcon(pm)
 
     def _set_action_idle(self):
-        """空闲：深蓝发送按钮（可点击发送）"""
+        """空闲：输入框为空显示灰蓝发送按钮，有内容切换深蓝（可发送）"""
         self._action_anim.stop()
         self.action_btn.setIcon(_line_icon("send", 18, "#FFFFFF"))
-        self.action_btn.setStyleSheet(_BTN_PRIMARY)
+        self.action_btn.setStyleSheet(
+            _BTN_PRIMARY if self.input.toPlainText().strip() else _BTN_DIM)
         self.action_btn.setEnabled(True)
         self.action_btn.setToolTip("发送")
+
+    def _sync_action_style(self):
+        """输入框内容变化：空闲时刷新发送按钮配色（空→灰蓝，有内容→深蓝）"""
+        if not self._task_active and self._eval_pending is None:
+            self._set_action_idle()
 
     def _set_action_busy(self):
         """运行中：白色转圈动画（可点击停止）"""
@@ -2493,10 +2505,22 @@ class AgentPanel(QDialog):
                 parts.append(f'<div style="color:{ACCENT};font-size:{f_op}px;'
                              f'font-family:Consolas;margin-top:16px;">{seg["html"]}</div>')
             elif t == "result":
-                parts.append(f'<div style="color:{TEXT_DIM};font-size:{f_op}px;font-family:Consolas;'
-                             f'border-left:3px solid {BORDER};padding:2px 10px;'
-                             'margin:16px 0 4px 14px;">'
-                             f'{_linkify(seg["html"])}</div>')
+                # 执行结果输出完成即默认折叠，点击展开/收起（与思考过程交互一致）
+                if seg.get("collapsed"):
+                    parts.append(
+                        f'<div style="color:{TEXT_DIM};font-size:{f_sm}px;margin-top:2px;">'
+                        f'<a href="result:toggle" style="color:{ACCENT};text-decoration:none;">'
+                        f'执行结果（已折叠 · 点击展开）</a></div>')
+                else:
+                    parts.append(
+                        f'<div style="color:{TEXT_DIM};font-size:{f_sm}px;margin:2px 0;">'
+                        f'执行结果&nbsp;'
+                        f'<a href="result:toggle" style="color:{TEXT_DIM};font-size:{f_sm}px;'
+                        f'text-decoration:none;">收起 ▲</a></div>'
+                        f'<div style="color:{TEXT_DIM};font-size:{f_op}px;font-family:Consolas;'
+                        f'border-left:3px solid {BORDER};padding:2px 10px;'
+                        f'margin:0 0 4px 14px;">'
+                        f'{_linkify(seg["html"])}</div>')
             elif t == "progress":
                 # 下载进度条：AI 气泡内实时渲染（面板轮询快照更新）
                 pct = max(0, min(100, int(seg.get("pct") or 0)))
@@ -2609,6 +2633,20 @@ class AgentPanel(QDialog):
                 return
             for seg in segs:
                 if seg.get("type") == "think":
+                    seg["collapsed"] = not seg.get("collapsed", False)
+                    break
+            try:
+                bubble.setText(self._build_ai_html(segs))
+            except RuntimeError:
+                pass
+            return
+        if url == "result:toggle":
+            bubble = self.sender()
+            segs = self._bubble_segs.get(id(bubble)) if bubble is not None else None
+            if not segs:
+                return
+            for seg in segs:
+                if seg.get("type") == "result":
                     seg["collapsed"] = not seg.get("collapsed", False)
                     break
             try:
@@ -3437,7 +3475,6 @@ class AgentPanel(QDialog):
             self._admin_drop_filter = _AdminDropFilter(self)
             QApplication.instance().installNativeEventFilter(self._admin_drop_filter)
             self._admin_dnd = True
-            self._add_status("已启用管理员拖放通道（系统限制，拖拽图标不可见）", TEXT_DIM)
             print("[dnd] 管理员拖放通道启用成功", flush=True)
         except Exception as e:
             self._admin_dnd = False
@@ -3768,7 +3805,7 @@ class AgentPanel(QDialog):
         if len(shown) > 20000:
             shown = shown[:20000] + " …（输出过长已截断显示，完整内容已返回模型）"
         shown = _esc(shown).replace("\n", "<br/>")
-        self._segments.append({"type": "result", "html": shown})
+        self._segments.append({"type": "result", "html": shown, "collapsed": True})
         # 截图段（AI 主动截图：screenshot/capture_window 等工具返回的图）渲染进主对话气泡
         for u in images or []:
             self._segments.append({"type": "image", "url": u, "caption": "已截屏"})

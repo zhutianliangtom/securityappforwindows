@@ -235,16 +235,20 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "click",
-            "description": "在指定坐标点击鼠标（可指定左右中键与次数）。"
-                           "文字类目标优先用 click_text；图标/图形目标用准星对齐法："
-                           "先用 move_mouse 移到目标附近，截图看红色准星是否套住目标，"
-                           "未对准则修正坐标再移动，对准后 click（坐标=鼠标当前位置）一次点准。"
-                           "系统会自动把坐标换算为真实屏幕坐标。目标太小可先 zoom_in 放大。",
+            "description": "点击鼠标（可指定左右中键与次数）。"
+                           "文字类目标优先用 click_text；图标/图形目标用准星对齐法分步操控："
+                           "先 move_mouse 移到目标附近，截图看红色准星是否套住目标，"
+                           "未对准则修正坐标再 move_mouse 纠正；对准后不带 x/y 调用 click，"
+                           "直接点击当前鼠标位置（一次点准）。带 x/y 时则移动并点击。"
+                           "目标太小可先 zoom_in 放大。",
             "parameters": {"type": "object",
-                           "properties": {"x": {"type": "integer"}, "y": {"type": "integer"},
+                           "properties": {"x": {"type": "integer",
+                                                "description": "目标坐标（可选）：提供则移动鼠标到该坐标再点击"},
+                                          "y": {"type": "integer",
+                                                "description": "目标坐标（可选）：提供则移动鼠标到该坐标再点击"},
                                           "button": {"type": "string", "enum": ["left", "right", "middle"]},
                                           "clicks": {"type": "integer"}},
-                           "required": ["x", "y"]},
+                           "required": []},
         },
     },
     {
@@ -823,7 +827,16 @@ def execute_tool(name: str, args: dict, allow_dangerous: bool = False,
                                     agent_sandbox.to_int(args.get("y")))
             return {"text": f"鼠标已移动到 ({args.get('x')}, {args.get('y')})", "images": []}
         if name == "click":
-            x, y = agent_sandbox.to_int(args.get("x")), agent_sandbox.to_int(args.get("y"))
+            x = args.get("x")
+            y = args.get("y")
+            if x is None or y is None:
+                # 不带坐标：点击当前鼠标位置（配合 move_mouse 先移动对准、截图纠正后点准）
+                agent_screen.click(None, None,
+                                   str(args.get("button", "left")),
+                                   agent_sandbox.to_int(args.get("clicks", 1)))
+                return {"text": f"已点击当前鼠标位置 {args.get('button', 'left')} 键 x{args.get('clicks', 1)}",
+                        "images": []}
+            x, y = agent_sandbox.to_int(x), agent_sandbox.to_int(y)
             px, py = agent_screen.map_to_screen(x, y)   # 换算后的真实屏幕坐标（供模型核对）
             agent_screen.click(x, y,
                                str(args.get("button", "left")),

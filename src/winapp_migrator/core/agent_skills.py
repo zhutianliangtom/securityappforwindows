@@ -937,19 +937,20 @@ def skills_covering_tools(tool_names) -> dict:
 
 
 def _skill_router_block() -> str:
-    """技能路由段：列出全部可用技能（name：description），
-    强制 AI 任务命中技能时先 read_file 读取对应 SKILL.md 完整流程再执行，
-    禁止跳过技能直接裸调工具（保证规范流程优先于裸工具调用）。"""
+    """技能建议段：列出全部可用技能（name：description）。
+    不强制读取——由 AI 判断任务是否命中某技能且读取能提升效果时，再用 read_file
+    读取对应 SKILL.md 作为规范流程参考；简单/不匹配任务可直接调用底层工具。"""
     skills = [s for s in load_skills()
               if s.get("name") and s.get("description")]
     if not skills:
         return ""
     lines = [f"- {s['name']}：{s['description']}" for s in skills]
-    return ("\n\n技能路由（必须遵守）：执行任务前先判断下方技能列表是否有匹配项；"
-            "命中时必须先用 read_file 读取技能目录 "
-            "~/.winapp_migrator/agent/skills/<技能名>/SKILL.md 获取完整流程"
-            "（找不到该文件时用 list_directory/search_files 在 skills 目录定位），"
-            "严格按其 instruction 组织步骤后再调用底层工具，禁止跳过技能直接裸调工具：\n"
+    return ("\n\n技能手册（可选参考）：下方技能收录了对应任务的规范流程。"
+            "当你的任务正好命中某个技能、且读取其流程能显著提升效果时，"
+            "可先 read_file 读取技能目录 "
+            "~/.winapp_migrator/agent/skills/<技能名>/SKILL.md（找不到时用 "
+            "list_directory/search_files 在 skills 目录定位）作为参考；"
+            "不匹配或简单任务无需读取，直接调用底层工具即可：\n"
             + "\n".join(lines))
 
 

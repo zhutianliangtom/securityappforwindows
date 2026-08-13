@@ -23,18 +23,6 @@ from winapp_migrator.core.agent_screen import virtual_desktop
 _DEV_TOOLS = frozenset({"write_file", "edit_file", "delete_file",
                         "run_command", "create_skill", "dispatch_sub_agents"})
 
-# 技能路由硬拦截的豁免工具：
-# - 导航/观察/记忆/搜索类：不做强制规范门槛，避免 AI 只是临时看一眼屏幕或问用户就被要求先读技能
-# - 三件套生成（create_docx/create_pptx/create_xlsx）及回读验证（extract_text）：
-#   简单需求直接调用工具即等价使用 doc-gen 技能，无需先读 SKILL.md 或走多步流程
-_SKIP_SKILL_GATE = frozenset({
-    "ask_user", "read_file", "list_directory", "search_files",
-    "screenshot", "get_screen_size", "list_windows", "capture_window",
-    "zoom_in", "save_memory", "load_memory", "web_search", "web_fetch",
-    "clipboard", "check_command", "virtual_desktop",
-    "create_docx", "create_pptx", "create_xlsx", "extract_text",
-})
-
 # 对话上下文持久化路径
 CONTEXT_FILE = agent_skills.CONFIG_DIR / "context.json"
 
@@ -141,8 +129,6 @@ class AgentEngine:
         self._thread: threading.Thread = None
         self._builtin_names = {t["function"]["name"] for t in agent_tools.TOOLS}
         self._rules_confirmed = False   # 当前任务是否已确认开发规则
-        self._skills_read: set = set()  # 本轮已 read_file 的技能名（技能路由硬拦截放行）
-        self._skill_gate: dict = {}     # {工具名: [技能名,...]} 懒构建
 
     # ---------- 控制 ----------
     def stop(self):
@@ -412,25 +398,6 @@ class AgentEngine:
 
     def _execute(self, name: str, args: dict, allow_dangerous: bool = False) -> dict:
         """执行内置或 MCP 工具，返回 {"text", "images"}"""
-        # 技能路由硬拦截：被技能覆盖的底层工具，须先 read_file 对应 SKILL.md 规范流程。
-        # direct 直行模式跳过（用户已授权直接工作，不再要求先读技能）
-        if name not in _SKIP_SKILL_GATE and not self.direct:
-            if not self._skill_gate:
-                self._skill_gate = agent_skills.skills_covering_tools(list(self._builtin_names))
-            missing = [s for s in self._skill_gate.get(name, []) if s not in self._skills_read]
-            if missing:
-                sp = agent_skills.skill_md_path(missing[0])
-                return {"text": (f"[技能路由] 调用「{name}」前须先读取技能完整流程：\n"
-                                 f"read_file 读取 {sp}\n"
-                                 f"严格按其 instruction 组织步骤后再调用本工具。"), "images": []}
-        if name == "read_file":
-            # 记录已读技能：read_file 读取 skills/<技能名>/SKILL.md 即放行该技能覆盖的工具
-            try:
-                p = Path(os.path.abspath(os.path.expanduser(str(args.get("path", "")))))
-                if p.name.upper() == "SKILL.MD" and "skills" in p.parts:
-                    self._skills_read.add(p.parent.name)
-            except Exception:
-                pass
         if self.auto_vd and name == "virtual_desktop":
             # 自动虚拟桌面接管时，禁止 AI 手动切换桌面（防止重复 new/back 打乱静默流程）
             return {"text": "[自动模式] 系统已在独立虚拟桌面执行本任务，结束后自动返回主桌面，无需手动切换", "images": []}
@@ -557,7 +524,6 @@ class AgentEngine:
             skills: list = None):
         self.end_state = ""
         self._rules_confirmed = False   # 每个新任务重新强制规则确认
-        self._skills_read.clear()       # 新任务重新要求先读命中技能的 SKILL.md
         if not self._messages or self._messages[0].get("role") != "system":
             self._messages.insert(0, {"role": "system",
                                       "content": self._system_prompt(agent_name, skills)})

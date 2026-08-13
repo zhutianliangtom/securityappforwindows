@@ -435,9 +435,14 @@ def move_mouse_physical(x: int, y: int):
     user32.SetCursorPos(int(x), int(y))
 
 
-def click(x: int, y: int, button: str = "left", clicks: int = 1, interval: float = 0.1):
-    x, y = map_to_screen(x, y)
-    move_mouse(x, y)
+def click(x=None, y=None, button: str = "left", clicks: int = 1, interval: float = 0.1):
+    """点击。x/y 提供时换算并移动过去再点击；x/y 为空时点击当前鼠标位置（不移动）。
+    后者供 AI 分步操控：先用 move_mouse 移动指针对准（截图看准星），纠正后再点当前指针。"""
+    if x is None or y is None:
+        x, y = _cursor_pos()   # 当前物理坐标，直接点击当前位置
+    else:
+        x, y = map_to_screen(x, y)
+        user32.SetCursorPos(int(x), int(y))
     down = {"left": _MOUSE_LEFTDOWN, "right": _MOUSE_RIGHTDOWN,
             "middle": _MOUSE_MIDDLEDOWN}[button]
     up = {"left": _MOUSE_LEFTUP, "right": _MOUSE_RIGHTUP,
@@ -482,16 +487,6 @@ def scroll(delta: int):
 
 
 # ---- 键盘 ----
-def _vk_for_char(ch: str) -> int:
-    """单字符 → 虚拟键码（ASCII/常见符号）；失败返回 0"""
-    if ch in VK:
-        return VK[ch]
-    if len(ch) == 1:
-        vk = user32.VkKeyScanW(ord(ch)) & 0xFF
-        return vk if vk != 0xFF else 0
-    return 0
-
-
 def key_press(key_name: str):
     """按虚拟键（如 enter / tab / up / down / f5 等）"""
     name = key_name.strip().lower().replace(" ", "")
@@ -506,20 +501,15 @@ def key_press(key_name: str):
 
 
 def type_text(text: str, interval: float = 0.01):
-    """SendInput Unicode 输入文本（支持中文）；特殊名（enter/tab/...）转虚拟键"""
+    """SendInput Unicode 输入文本（支持中文/大写/符号）；特殊名（enter/tab/...）转虚拟键"""
     for ch in text:
         if ch in ("\n", "\r"):
             key_press("enter")
             continue
-        vk = _vk_for_char(ch)
-        if vk and ch.isascii():
-            user32.keybd_event(vk, 0, 0, 0)
-            time.sleep(interval)
-            user32.keybd_event(vk, 0, 0x0002, 0)
-            time.sleep(interval)
-        else:
-            _send_unicode(ch)
-            time.sleep(interval)
+        # 统一走 SendInput Unicode：keybd_event 发 VK 码不处理 Shift 修饰，
+        # 大写字母与上档符号（@!#...）会输入错误；Unicode 输入不依赖键盘布局，最可靠
+        _send_unicode(ch)
+        time.sleep(interval)
 
 
 def _send_unicode(ch: str):

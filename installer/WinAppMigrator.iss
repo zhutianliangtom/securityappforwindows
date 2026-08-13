@@ -5,7 +5,7 @@
 ; ╚══════════════════════════════════════════════════════════╝
 
 #define MyAppName "zhuzhu Copilot"
-#define MyAppVersion "2.0.1"
+#define MyAppVersion "2.0.2"
 #define MyAppPublisher "zhuzhu Copilot"
 #define MyAppExeName "zhuzhu Copilot.exe"
 

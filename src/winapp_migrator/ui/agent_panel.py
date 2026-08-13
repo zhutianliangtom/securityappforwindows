@@ -45,19 +45,46 @@ from winapp_migrator.core.agent_screen import capture_screen_data_url
 from winapp_migrator.ui.widgets import add_brand_footer
 from winapp_migrator.utils.helpers import is_admin
 
-# ---------- 深色"星际控制台"主题 ----------
+# ---------- 深色"星际控制台"主题（极简精修） ----------
 BG = "#0B1220"            # 窗口底色（深蓝黑）
+BG_BOTTOM = "#0E1A2E"     # 窗口底色渐变收尾
 PANEL = "#111A2E"         # 面板底色
+CARD = "#141F36"          # 卡片/气泡底色（比 PANEL 略亮）
 BORDER = "#1E2A44"        # 边框
+BORDER_SOFT = "#19263F"   # 更柔和的边框
 TEXT = "#E6EDF7"          # 主文本
 TEXT_DIM = "#8A9BB8"      # 次要文本
 ACCENT = "#22D3EE"        # 强调（青）
+ACCENT_HOVER = "#67E8F9"  # 强调悬停
 LINK_COLOR = "#4B89FF"    # 可点击链接（蓝）
-USER_BG = "#0EA5E9"       # 用户气泡/发送按钮底色（纯色）
-AI_BG = "#1A2540"         # AI 气泡底色
+USER_BG = "#0EA5E9"       # 用户气泡/发送按钮底色
+AI_BG = "#141F36"         # AI 气泡底色
 OK = "#34D399"
 WARN = "#FBBF24"
 ERR = "#F87171"
+HOVER = "#16233C"         # 幽灵按钮 hover 背景
+
+# 面板级控件样式（统一控件语言，避免各处内联重复）
+_BTN_GHOST = (f"QPushButton {{ background: transparent; color: {TEXT_DIM};"
+              f"border: 1px solid {BORDER}; border-radius: 8px; padding: 6px 12px;"
+              f"font-size: 12px; font-weight: 600; }}"
+              f"QPushButton:hover {{ border-color: {ACCENT}; color: {ACCENT};"
+              f"background: {HOVER}; }}")
+_BTN_GHOST_ACCENT = (f"QPushButton {{ background: transparent; color: {ACCENT};"
+                     f"border: 1px solid {BORDER_SOFT}; border-radius: 8px;"
+                     f"padding: 6px 12px; font-size: 12px; font-weight: 600; }}"
+                     f"QPushButton:hover {{ border-color: {ACCENT}; background: {HOVER}; }}")
+_BTN_PRIMARY = (f"QPushButton {{ background: qlineargradient(x1:0, y1:0, x2:1, y2:1,"
+                f"stop:0 {ACCENT}, stop:1 {USER_BG}); color: #06281B; border: none;"
+                f"border-radius: 10px; padding: 0 16px; font-size: 13px; font-weight: 700; }}"
+                f"QPushButton:hover {{ background: {ACCENT}; }}"
+                f"QPushButton:disabled {{ background: {CARD}; color: {TEXT_DIM}; }}")
+_QCOMBO = (f"QComboBox {{ background: {PANEL}; color: {TEXT}; border: 1px solid {BORDER};"
+           f"border-radius: 8px; padding: 5px 10px; font-size: 12px; }}"
+           f"QComboBox::drop-down {{ border: none; width: 22px; }}"
+           f"QComboBox QAbstractItemView {{ background: {PANEL}; color: {TEXT};"
+           f"border: 1px solid {BORDER}; selection-background-color: {HOVER};"
+           f"selection-color: {ACCENT}; }}")
 
 
 def _app_icon_path() -> str:
@@ -1399,13 +1426,9 @@ class AgentPanel(QDialog):
         self.resize(900, 660)
         self.setFont(QFont("Microsoft YaHei UI", 10))
         self.setStyleSheet(
-            f"QDialog {{ background: {BG}; }}"
-            f"QComboBox {{ background: {PANEL}; color: {TEXT}; border: 1px solid {BORDER};"
-            f"border-radius: 8px; padding: 5px 10px; font-size: 12px; }}"
-            f"QComboBox::drop-down {{ border: none; width: 22px; }}"
-            f"QComboBox QAbstractItemView {{ background: {PANEL}; color: {TEXT};"
-            f"border: 1px solid {BORDER}; selection-background-color: {ACCENT};"
-            f"selection-color: #06281B; }}")
+            f"QDialog {{ background: qlineargradient(x1:0, y1:0, x2:0, y2:1,"
+            f"stop:0 {BG}, stop:1 {BG_BOTTOM}); }}"
+            + _QCOMBO)
 
         self._settings = QSettings("WinAppMigrator", "WinAppMigrator")
         self._engine: agent_engine.AgentEngine = None
@@ -1518,10 +1541,7 @@ class AgentPanel(QDialog):
         self.new_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.new_btn.setAutoDefault(False)
         self.new_btn.setToolTip("新对话")
-        self.new_btn.setStyleSheet(
-            f"QPushButton {{ background: {PANEL}; color: {ACCENT}; border: 1px solid {ACCENT};"
-            "border-radius: 8px; padding: 6px 10px; font-size: 12px; font-weight: 600; }}"
-            f"QPushButton:hover {{ background: #16233C; }}")
+        self.new_btn.setStyleSheet(_BTN_GHOST_ACCENT)
         self.new_btn.clicked.connect(self._new_session)
         top.addWidget(self.new_btn)
 
@@ -1532,10 +1552,7 @@ class AgentPanel(QDialog):
         self.workdir_btn.setAutoDefault(False)
         self.workdir_btn.setToolTip(
             "选择 AI 工作目录：文件查找/创建/修改/删除/读取与命令默认在此目录执行，重启后自动恢复")
-        self.workdir_btn.setStyleSheet(
-            f"QPushButton {{ background: {PANEL}; color: {TEXT}; border: 1px solid {BORDER};"
-            "border-radius: 8px; padding: 6px 10px; font-size: 12px; font-weight: 600; }}"
-            f"QPushButton:hover {{ border-color: {ACCENT}; color: {ACCENT}; }}")
+        self.workdir_btn.setStyleSheet(_BTN_GHOST)
         self.workdir_btn.clicked.connect(self._choose_workdir)
         top.addWidget(self.workdir_btn)
 
@@ -1562,10 +1579,7 @@ class AgentPanel(QDialog):
         self.mcp_btn = QPushButton(_std_icon(QStyle.StandardPixmap.SP_ComputerIcon), "MCP")
         self.mcp_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.mcp_btn.setAutoDefault(False)
-        self.mcp_btn.setStyleSheet(
-            f"QPushButton {{ background: {PANEL}; color: {ACCENT}; border: 1px solid {ACCENT};"
-            "border-radius: 8px; padding: 6px 12px; font-size: 12px; font-weight: 600; }}"
-            f"QPushButton:hover {{ background: #16233C; }}")
+        self.mcp_btn.setStyleSheet(_BTN_GHOST_ACCENT)
         self.mcp_btn.clicked.connect(self._open_mcp_manager)
         top.addWidget(self.mcp_btn)
 
@@ -1573,10 +1587,7 @@ class AgentPanel(QDialog):
         self.settings_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.settings_btn.setAutoDefault(False)
         self.settings_btn.setToolTip("AI 设置：规则 / 系统提示词 / bash 白名单 / 记忆 / 模型接入")
-        self.settings_btn.setStyleSheet(
-            f"QPushButton {{ background: {PANEL}; color: {ACCENT}; border: 1px solid {ACCENT};"
-            "border-radius: 8px; padding: 6px 12px; font-size: 12px; font-weight: 600; }}"
-            f"QPushButton:hover {{ background: #16233C; }}")
+        self.settings_btn.setStyleSheet(_BTN_GHOST_ACCENT)
         self.settings_btn.clicked.connect(self._open_settings)
         top.addWidget(self.settings_btn)
 
@@ -1591,10 +1602,7 @@ class AgentPanel(QDialog):
         clear_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         clear_btn.setToolTip("清空上下文并永久删除该对话（二次弹窗确认，不可恢复）")
         clear_btn.setAutoDefault(False)
-        clear_btn.setStyleSheet(
-            f"QPushButton {{ background: {PANEL}; color: {TEXT}; border: 1px solid {BORDER};"
-            "border-radius: 8px; padding: 6px 12px; font-size: 12px; font-weight: 600; }}"
-            f"QPushButton:hover {{ border-color: {ACCENT}; color: {ACCENT}; }}")
+        clear_btn.setStyleSheet(_BTN_GHOST)
         clear_btn.clicked.connect(self._clear_chat)
         top.addWidget(clear_btn)
 
@@ -1604,7 +1612,7 @@ class AgentPanel(QDialog):
         effort_row = QHBoxLayout()
         effort_row.setSpacing(8)
         eff_lbl = QLabel("工作力度")
-        eff_lbl.setStyleSheet(f"color: {TEXT}; font-size: 12px;")
+        eff_lbl.setStyleSheet(f"color: {TEXT_DIM}; font-size: 12px;")
         effort_row.addWidget(eff_lbl)
         self.effort_slider = QSlider(Qt.Orientation.Horizontal)
         self.effort_slider.setRange(0, len(agent_llm.EFFORTS) - 1)
@@ -1612,6 +1620,14 @@ class AgentPanel(QDialog):
         self.effort_slider.setPageStep(1)
         self.effort_slider.setToolTip("拖动切换工作力度（决定使用哪个模型）："
                                       + " / ".join(agent_llm.EFFORTS))
+        self.effort_slider.setStyleSheet(
+            f"QSlider::groove:horizontal {{ height: 4px; background: {BORDER};"
+            "border-radius: 2px; }}"
+            f"QSlider::sub-page:horizontal {{ background: qlineargradient(x1:0, y1:0, x2:1, y2:0,"
+            f"stop:0 {ACCENT}, stop:1 {USER_BG}); border-radius: 2px; }}"
+            f"QSlider::handle:horizontal {{ width: 14px; height: 14px; margin: -5px 0;"
+            f"background: {ACCENT}; border: 2px solid {BG}; border-radius: 7px; }}"
+            f"QSlider::handle:horizontal:hover {{ background: {ACCENT_HOVER}; }}")
         self.effort_slider.valueChanged.connect(self._on_effort_changed)
         effort_row.addWidget(self.effort_slider)
         self.effort_label = QLabel("medium")
@@ -1654,7 +1670,7 @@ class AgentPanel(QDialog):
             f"border: 1px solid {BORDER}; border-radius: 8px;"
             "font-size: 13px; padding: 4px; }}"
             f"QListWidget::item {{ padding: 2px 12px 4px 12px; border-radius: 6px; }}"
-            f"QListWidget::item:hover {{ background: #16233C; }}"
+            f"QListWidget::item:hover {{ background: {HOVER}; }}"
             f"QListWidget::item:selected {{ background: {ACCENT}; color: #06281B; }}")
         self.cmd_list.hide()
         self.cmd_list.itemClicked.connect(self._on_cmd_selected)
@@ -1677,7 +1693,7 @@ class AgentPanel(QDialog):
         self.input.setStyleSheet(
             f"QPlainTextEdit {{ background: {PANEL}; color: {TEXT}; border: 1px solid {BORDER};"
             "border-radius: 10px; padding: 8px 12px; font-size: 14px; }}"
-            f"QPlainTextEdit:focus {{ border: 1px solid #4B6BD6; }}")
+            f"QPlainTextEdit:focus {{ border: 1px solid {ACCENT}; }}")
         self.input.submit.connect(self._send)   # Enter 发送（Shift+Enter 换行）
         self.input.textChanged.connect(self._update_cmd_suggestions)
         self.input.textChanged.connect(self._refresh_route_label)
@@ -1703,12 +1719,7 @@ class AgentPanel(QDialog):
         self.model_combo = _ArrowComboBox()
         self.model_combo.setMinimumWidth(150)
         self.model_combo.setMaximumWidth(230)
-        self.model_combo.setStyleSheet(
-            f"QComboBox {{ background: {PANEL}; color: {TEXT}; border: 1px solid {BORDER};"
-            "border-radius: 10px; padding: 6px 10px; font-size: 12px; }}"
-            f"QComboBox::drop-down {{ border: none; width: 22px; }}"
-            f"QComboBox QAbstractItemView {{ background: {PANEL}; color: {TEXT};"
-            "border: 1px solid #4B6BD6; selection-background-color: #16233C; }}")
+        self.model_combo.setStyleSheet(_QCOMBO)
         self.model_combo.setToolTip("手动切换本次使用的模型；「自动选择」= 按工作力度路由")
         self.model_combo.currentIndexChanged.connect(self._on_model_combo)
         self.model_combo.setAcceptDrops(False)   # 文件拖放由面板统一接收
@@ -1719,11 +1730,7 @@ class AgentPanel(QDialog):
         self.send_btn.setAutoDefault(False)
         self.send_btn.setMinimumHeight(42)
         self.send_btn.setMinimumWidth(96)
-        self.send_btn.setStyleSheet(
-            f"QPushButton {{ background: {USER_BG}; color: white; border: none;"
-            "border-radius: 10px; padding: 0 16px; font-size: 13px; font-weight: 700; }}"
-            f"QPushButton:hover {{ border: 1px solid {ACCENT}; }}"
-            f"QPushButton:disabled {{ background: #1A2540; color: {TEXT_DIM}; }}")
+        self.send_btn.setStyleSheet(_BTN_PRIMARY)
         self.send_btn.clicked.connect(self._send)
         bottom.addWidget(self.send_btn)
 
@@ -1737,7 +1744,7 @@ class AgentPanel(QDialog):
             f"QPushButton {{ background: {ERR}; color: white; border: none;"
             "border-radius: 10px; padding: 0 14px; font-size: 13px; font-weight: 700; }}"
             f"QPushButton:hover {{ background: #EF4444; }}"
-            f"QPushButton:disabled {{ background: #1A2540; color: {TEXT_DIM}; }}")
+            f"QPushButton:disabled {{ background: {CARD}; color: {TEXT_DIM}; }}")
         self.stop_btn.clicked.connect(self._stop)
         bottom.addWidget(self.stop_btn)
         root.addLayout(bottom)
@@ -1770,7 +1777,7 @@ class AgentPanel(QDialog):
         card = QWidget()
         card.setMaximumWidth(520)
         card.setStyleSheet(
-            f"background: {PANEL}; border: none; border-radius: 12px;")
+            f"background: {CARD}; border: 1px solid {BORDER}; border-radius: 14px;")
         cl = QVBoxLayout(card)
         cl.setContentsMargins(28, 24, 28, 24)
         cl.setSpacing(10)
@@ -2147,11 +2154,12 @@ class AgentPanel(QDialog):
             # 用户消息：默认纯文本；带图片时用富文本渲染缩略图（不显示源文本）
             bubble.setTextFormat(Qt.TextFormat.RichText if rich else Qt.TextFormat.PlainText)
             bubble.setStyleSheet(f"background: {USER_BG}; color: white;"
-                                 "border-radius: 14px; padding: 10px 14px; font-size: 14px;")
+                                 "border: none; border-radius: 16px;"
+                                 "padding: 10px 14px; font-size: 14px;")
         else:
             bubble.setTextFormat(Qt.TextFormat.RichText)    # AI 消息富文本（思考/操作/正文）
-            bubble.setStyleSheet(f"background: {AI_BG}; color: {TEXT};"
-                                 f"border: 1px solid {BORDER}; border-radius: 14px;"
+            bubble.setStyleSheet(f"background: rgba(20, 31, 54, 0.75); color: {TEXT};"
+                                 f"border: 1px solid {BORDER_SOFT}; border-radius: 16px;"
                                  "padding: 10px 14px; font-size: 14px;")
         row = QHBoxLayout()
         row.setContentsMargins(0, 0, 0, 0)
@@ -3151,7 +3159,7 @@ class AgentPanel(QDialog):
             f"QMessageBox QPushButton {{ color: {TEXT}; background: {AI_BG};"
             f"border: 1px solid {BORDER}; border-radius: 8px; padding: 6px 20px;"
             "font-size: 13px; font-weight: 600; }}"
-            f"QMessageBox QPushButton:hover {{ background: #16233C; border-color: {ACCENT}; }}")
+            f"QMessageBox QPushButton:hover {{ background: {HOVER}; border-color: {ACCENT}; }}")
         box.exec()
         return box.clickedButton() is yes
 

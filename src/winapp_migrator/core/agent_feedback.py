@@ -45,32 +45,38 @@ class _FeedbackOverlay(QWidget):
 
     # ---- 生命周期 ----
     def init_overlay(self):
-        """在 GUI 线程创建后调用：铺满虚拟屏幕"""
+        """在 GUI 线程创建后调用：铺满虚拟屏幕并启动常驻动画定时器。
+
+        定时器常驻但仅在队列非空时显示窗口；队列由任意线程追加，显示/隐藏/推进
+        全部在 GUI 线程的 _tick 中完成，避免跨线程调用 QWidget 方法导致不显示。
+        """
         user32 = ctypes.windll.user32
         self._vx = user32.GetSystemMetrics(76)   # SM_XVIRTUALSCREEN
         self._vy = user32.GetSystemMetrics(77)   # SM_YVIRTUALSCREEN
         ww = max(user32.GetSystemMetrics(78), 1)  # SM_CXVIRTUALSCREEN
         hh = max(user32.GetSystemMetrics(79), 1)  # SM_CYVIRTUALSCREEN
         self.setGeometry(self._vx, self._vy, ww, hh)
-        # 不主动 show：有动画时由 add() 显示，动画结束自动隐藏，避免常驻顶层透明窗
+        self._timer.start()   # 常驻轮询队列（GUI 线程）
 
     def add(self, anim: dict):
+        # 仅追加到带锁队列（可能来自工作线程），不做任何 GUI 操作
         with self._lock:
             self._anims.append(anim)
             if len(self._anims) > _MAX_ANIMS:
                 self._anims.pop(0)
-        self.show()
-        self.raise_()
-        self._timer.start()
 
     def _tick(self):
         now = time.time()
         with self._lock:
             self._anims = [a for a in self._anims if now - a["t0"] < a["dur"]]
             alive = bool(self._anims)
-        self.update()
-        if not alive:
-            self._timer.stop()
+        # 显示/隐藏与推进都在 GUI 线程完成
+        if alive:
+            if not self.isVisible():
+                self.show()
+                self.raise_()
+            self.update()
+        elif self.isVisible():
             self.hide()
 
     # ---- 渲染 ----

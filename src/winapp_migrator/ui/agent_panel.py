@@ -3557,7 +3557,7 @@ class AgentPanel(QDialog):
             shown = shown[:2000] + " …（输出过长已截断显示，完整内容已返回模型）"
         shown = _esc(shown).replace("\n", "<br/>")
         self._segments.append({"type": "result", "html": shown})
-        # 截图段（screenshot/get_screen_size 工具结果或操作后自动验证截图）渲染进主对话气泡
+        # 截图段（AI 主动截图：screenshot/capture_window 等工具返回的图）渲染进主对话气泡
         for u in images or []:
             self._segments.append({"type": "image", "url": u, "caption": "已截屏"})
         self._refresh_ai_html()

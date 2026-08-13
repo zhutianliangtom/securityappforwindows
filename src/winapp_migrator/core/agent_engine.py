@@ -2,7 +2,7 @@
 
 - 流式输出：LLM 逐 token 回调（UI 实时显示）
 - 工具调用：内置工具 + MCP 工具；每个工具执行前回调 confirm（UI 弹窗每步确认）
-- 截图验证闭环：工具执行后自动截屏并作为下一轮视觉输入
+- 截图：AI 按需调用 screenshot/capture_window 工具主动截图，返回的图像作为视觉输入
 - 沙盒：危险工具即使批准也由 agent_tools 硬拒绝
 - tokens：发送前预计算（estimate），响应后累计实际 usage
 """
@@ -16,11 +16,7 @@ from PyQt6.QtCore import Qt, QByteArray, QBuffer, QIODevice
 from PyQt6.QtGui import QImage
 
 from winapp_migrator.core import agent_llm, agent_tools, agent_skills, agent_subagent
-from winapp_migrator.core.agent_screen import capture_screen_data_url, virtual_desktop
-
-# 会改变屏幕、需要执行后自动截图验证的工具
-_SCREEN_CHANGING = {"click", "click_text", "drag", "scroll", "press_key", "type_text",
-                    "move_mouse", "run_command", "virtual_desktop"}
+from winapp_migrator.core.agent_screen import virtual_desktop
 
 # 工具结果进入对话上下文的长度上限：长输出（如 run_command 回显）截断后仍进上下文，
 # 完整内容由 AI 按需用 read_file/check_command 查看，避免上下文无限膨胀烧 tokens
@@ -559,13 +555,6 @@ class AgentEngine:
                             self.on_status(f"正在执行: {name}")
                         res = self._execute(name, args, allow_dangerous=approved)
                         text, imgs = res["text"], res["images"]
-                        # 操作类工具（点击/输入等）无截图时自动截屏验证（点击完成后必须截图验证闭环）；
-                        # 纯文本模型看不到图，跳过自动截图，改用文本验证
-                        if not imgs and name in _SCREEN_CHANGING and not self.text_only:
-                            try:
-                                imgs = [capture_screen_data_url()]
-                            except Exception:
-                                imgs = []
                         if self.on_result:
                             # 压缩缩略图副本给 UI 展示（原图仍喂给模型视觉验证）
                             self.on_result(name, text,

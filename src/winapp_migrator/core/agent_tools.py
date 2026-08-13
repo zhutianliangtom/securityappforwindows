@@ -2,7 +2,7 @@
 
 执行结果统一为 {"text": str, "images": [data_url]}：
 - text 作为 tool 消息文本返回给模型
-- images 中的截图 data URL 由引擎并入下一轮视觉输入（截图验证闭环）
+- images 中的截图 data URL 由引擎并入下一轮视觉输入（AI 主动截图时作为视觉输入）
 """
 
 import html as _html

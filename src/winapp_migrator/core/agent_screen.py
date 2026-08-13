@@ -6,6 +6,7 @@
 """
 
 import ctypes
+import math
 import os
 import struct
 import time
@@ -462,12 +463,10 @@ def click_at_physical(x: int, y: int, button: str = "left", clicks: int = 1,
                       interval: float = 0.04):
     """高精度点击（不经过模型坐标换算）。
 
-    先用 SetCursorPos 把光标精确移动到物理坐标 (x,y)，再 SendInput 相对按下/抬起（点在光标处）。
-    相比绝对坐标归一化，SetCursorPos 在多显示器/虚拟屏下更精确，且省去每次移动；SendInput
-    比 mouse_event 更可靠，多数应用都能正确响应。
+    先用真人式平滑移动把光标移动到物理坐标 (x,y)，再 SendInput 相对按下/抬起（点在光标处）。
+    SetCursorPos 精确落点 + SendInput 比 mouse_event 更可靠，多数应用都能正确响应。
     """
-    with ai_suppress():
-        user32.SetCursorPos(int(x), int(y))
+    _move_human(int(x), int(y))   # 真人式移动轨迹（从当前光标位置到目标）
     agent_feedback.notify_click(int(x), int(y))   # 点击位置反馈动画
     down = {"left": _F_LEFTDOWN, "right": _F_RIGHTDOWN, "middle": _F_MIDDLEDOWN}[button]
     up = {"left": _F_LEFTUP, "right": _F_RIGHTUP, "middle": _F_MIDDLEUP}[button]
@@ -479,16 +478,41 @@ def click_at_physical(x: int, y: int, button: str = "left", clicks: int = 1,
             time.sleep(interval)
 
 
+def _move_human(x2: int, y2: int, duration: float = 0.22):
+    """真人式平滑移动：从当前光标位置到目标 (x2,y2)。
+
+    走最短直线路径，带 ease-in-out 加速/减速与轻微垂直弧度（真人很少走完美直线），
+    分步 SetCursorPos 插值，末段精确落到目标。用于代替"瞬移"式移动，更接近真人操作。
+    """
+    x1, y1 = _cursor_pos()
+    dx, dy = x2 - x1, y2 - y1
+    dist = math.hypot(dx, dy)
+    if dist < 2:
+        with ai_suppress():
+            user32.SetCursorPos(int(x2), int(y2))
+        return
+    steps = max(int(duration / 0.008), 8)
+    arc = min(dist * 0.10, 42)            # 弧度幅度随距离，限幅
+    px, py = -dy / dist, dx / dist        # 路径垂直单位向量
+    with ai_suppress():
+        for i in range(1, steps + 1):
+            t = i / steps
+            ease = t * t * (3 - 2 * t)                       # ease-in-out
+            bend = math.sin(math.pi * t) * arc               # 两端归零的弧度
+            user32.SetCursorPos(int(x1 + dx * ease + px * bend),
+                                int(y1 + dy * ease + py * bend))
+            time.sleep(duration / steps)
+        user32.SetCursorPos(int(x2), int(y2))   # 精确落点保证
+
+
 def move_mouse(x: int, y: int):
     x, y = map_to_screen(x, y)   # 截图像素 → 屏幕物理像素（防 DPI 缩放偏移）
-    with ai_suppress():
-        user32.SetCursorPos(int(x), int(y))
+    _move_human(x, y)
 
 
 def move_mouse_physical(x: int, y: int):
     """物理像素直接移动（不经过模型坐标换算），供 UIA/OCR 等非视觉定位结果使用"""
-    with ai_suppress():
-        user32.SetCursorPos(int(x), int(y))
+    _move_human(x, y)
 
 
 def click(x=None, y=None, button: str = "left", clicks: int = 1, interval: float = 0.05):

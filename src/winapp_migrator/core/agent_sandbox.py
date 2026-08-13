@@ -83,15 +83,24 @@ def assess_command(cmd: str) -> tuple:
     low = cmd.lower()
     if not low:
         return "risky", "空命令"
+    first_tok = low.split()[0]
+    del_base = os.path.basename(first_tok.replace("\\", "/"))
+    is_curl = del_base == "curl"
     # 剥离 URL token：URL 只是访问目标，避免 format/shutdown 等词及 & 查询参数误伤
     # （如 curl https://x/api/format-report、curl "…?a=1&b=2" 均属正常请求）
     low_nourl = _re.sub(r'https?://[^\s"\'<>]+', "URL", low)
-    # 危险优先
-    for kw in DANGEROUS_KW:
-        if kw in low_nourl:
-            return "dangerous", f"命令含危险操作: {kw}"
-    first_tok = low.split()[0]
-    del_base = os.path.basename(first_tok.replace("\\", "/"))
+    if is_curl:
+        # curl 的 URL/请求头/表单数据（-d/-H/--data-urlencode 等）里的任意字符串
+        # 不构成当地危险操作（curl 无删除/格式化能力），跳过危险词子串匹配；
+        # 危险面仅在：管道执行、写入系统目录
+        if _re.search(r"\|\s*(sh|bash|cmd(\.exe)?|powershell|pwsh|python(3)?|perl|ruby)\b",
+                      low_nourl):
+            return "dangerous", "禁止 curl 管道执行（下载即执行高危模式）"
+    else:
+        # 危险优先
+        for kw in DANGEROUS_KW:
+            if kw in low_nourl:
+                return "dangerous", f"命令含危险操作: {kw}"
     # 删除命令 + 目标位于系统关键目录 → 拒绝（如 del C:\Program Files\xxx）
     if del_base in ("del", "erase", "rd", "rmdir", "rm", "deltree"):
         flat = low.replace("\\", "/").replace('"', "")
@@ -99,7 +108,7 @@ def assess_command(cmd: str) -> tuple:
             if str(d).lower().replace("\\", "/") in flat:
                 return "dangerous", f"禁止删除系统关键目录: {d}"
     # curl 下载到系统关键目录 → 拒绝（防止覆盖系统文件）
-    if del_base == "curl":
+    if is_curl:
         flat = low.replace("\\", "/").replace('"', "")
         for d in _system_dirs():
             if str(d).lower().replace("\\", "/") in flat:

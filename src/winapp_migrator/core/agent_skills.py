@@ -12,6 +12,7 @@ skills.json 仅保留用户自建的非内置 JSON 技能（内置旧 JSON 条�
 
 import json
 import os
+import re
 import shutil
 import sys
 import time
@@ -893,6 +894,27 @@ def skill_instructions(skill_names: list) -> str:
         if s and s.get("instruction"):
             parts.append(s["instruction"])
     return "\n".join(parts)
+
+
+def skill_md_path(name: str) -> str:
+    """技能 SKILL.md 绝对路径（引擎技能路由拦截的提示用）"""
+    return str(_skills_dir() / name / "SKILL.md")
+
+
+def skills_covering_tools(tool_names) -> dict:
+    """返回 {工具名: [技能名, ...]}：instruction 文本中明确提及该底层工具的技能。
+    引擎硬拦截用：被技能覆盖的工具，调用前须先 read_file 对应 SKILL.md 获取规范流程。
+    工具名按词边界匹配（前后非字母数字下划线），避免 click 误匹配 click_text 等。"""
+    out = {}
+    for s in load_skills():
+        inst = s.get("instruction", "") or ""
+        name = s.get("name", "") or ""
+        if not inst or not name:
+            continue
+        for t in tool_names:
+            if re.search(rf"(?<![A-Za-z0-9_]){re.escape(t)}(?![A-Za-z0-9_])", inst):
+                out.setdefault(t, []).append(name)
+    return out
 
 
 def _skill_router_block() -> str:

@@ -545,9 +545,9 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "create_docx",
-            "description": "生成 Word 文档（.docx）：可选大标题 + 段落文本列表 + 图片（可选）。"
+            "description": "生成 Word 文档（.docx）：可选大标题 + 段落文本列表 + 图片（可选）+ 艺术字（可选）。"
                            "适合报告、说明文档、合同文本、简历等文字型文档。"
-                           "支持 style 参数自定义配色与排版，不传则用默认商务风。",
+                           "支持 style 参数自定义配色/排版/背景，不传则用默认商务风。",
             "parameters": {"type": "object",
                            "properties": {
                                "path": {"type": "string", "description": "保存路径（.docx，相对路径基于工作目录）"},
@@ -557,9 +557,27 @@ TOOLS = [
                                                               "'# '一级标题 / '## '二级标题 / '### '三级标题 / '- '项目符号",
                                               "items": {"type": "string"}},
                                "images": {"type": "array",
-                                          "description": "图片路径列表（可选，相对路径基于工作目录；"
-                                                          "每张作为独立居中段落插入文档末尾）",
-                                          "items": {"type": "string"}},
+                                          "description": "图片列表（可选，相对路径基于工作目录）。每项为路径字符串，"
+                                                          "或 {path: 图片路径, align: left/center/right 水平对齐, width: 宽(英寸)}；"
+                                                          "默认居中、宽6英寸，自动等比缩放防溢出页面",
+                                          "items": {"type": "object",
+                                                    "properties": {
+                                                        "path": {"type": "string", "description": "图片路径"},
+                                                        "align": {"type": "string", "description": "水平对齐：left/center/right，默认center"},
+                                                        "width": {"type": "number", "description": "图片宽度（英寸），默认6"}},
+                                                    "required": ["path"]}},
+                               "wordart": {"type": "array",
+                                          "description": "艺术字（样式化大字）列表（可选）：每项 {text: 文字, "
+                                                          "size: 字号(默认36), color: 颜色HEX, font: 字体名, "
+                                                          "align: left/center/right}，大幅加粗彩色文字，用于标题/强调",
+                                          "items": {"type": "object",
+                                                    "properties": {
+                                                        "text": {"type": "string", "description": "艺术字文字"},
+                                                        "size": {"type": "integer", "description": "字号，默认36"},
+                                                        "color": {"type": "string", "description": "颜色HEX，默认主题主色"},
+                                                        "font": {"type": "string", "description": "字体名，默认正文用字体"},
+                                                        "align": {"type": "string", "description": "水平对齐：left/center/right，默认center"}},
+                                                    "required": ["text"]}},
                                "style": {"type": "object",
                                          "description": "样式配置（可选）。不传则用默认商务风；传了可大胆自定义："
                                                          "theme=配色主题(business深蓝/green墨绿/warm橙棕/purple紫/"
@@ -568,7 +586,8 @@ TOOLS = [
                                                          "text_color=正文色HEX，font_name=字体名(如'宋体'/'仿宋'/'楷体')，"
                                                          "align=正文对齐(left/center/right/justify)，"
                                                          "line_spacing=行距倍数(1.0-2.0)，title_size=大标题字号，"
-                                                         "body_size=正文字号，page=纸张方向(portrait/landscape)"}},
+                                                         "body_size=正文字号，page=纸张方向(portrait/landscape)，"
+                                                         "bg_color=页面背景色HEX"}},
                            "required": ["path", "paragraphs"]},
         },
     },
@@ -577,15 +596,17 @@ TOOLS = [
         "function": {
             "name": "create_pptx",
             "description": "生成 PowerPoint 演示文稿（.pptx）：可选首页标题 + 多页幻灯片，"
-                           "每页包含页标题与要点列表，可带本页插图。适合汇报、产品介绍、培训课件等演示文档。"
-                           "支持 style 参数自定义配色与封面布局，不传则用默认商务风。",
+                           "每页包含页标题与要点列表，可带本页插图与艺术字。适合汇报、产品介绍、培训课件等演示文档。"
+                           "支持 style 参数自定义配色/封面布局/背景，不传则用默认商务风。",
             "parameters": {"type": "object",
                            "properties": {
                                "path": {"type": "string", "description": "保存路径（.pptx）"},
                                "title": {"type": "string", "description": "演示文稿标题（可选，用作首页）"},
                                "slides": {"type": "array",
                                           "description": "幻灯片列表，每项 {title: 页标题, bullets: [要点, ...], "
-                                                          "image: 本页插图路径(可选), bg_color: 本页背景色HEX(可选), "
+                                                          "image: 本页插图(可选，路径字符串或 {path, align, width}), "
+                                                          "wordart: 本页艺术字(可选，{text,size,color}), "
+                                                          "bg_color: 本页背景色HEX(可选), "
                                                           "title_color: 本页标题色HEX(可选)}",
                                           "items": {"type": "object",
                                                     "properties": {
@@ -593,8 +614,22 @@ TOOLS = [
                                                         "bullets": {"type": "array",
                                                                     "description": "本页要点列表",
                                                                     "items": {"type": "string"}},
-                                                        "image": {"type": "string",
-                                                                  "description": "本页插图路径（可选，相对路径基于工作目录）"},
+                                                        "image": {"type": "object",
+                                                                  "description": "本页插图（可选）：路径字符串或 {path, "
+                                                                                  "align: left/center/right, width: 宽(英寸)}",
+                                                                  "properties": {
+                                                                      "path": {"type": "string", "description": "图片路径"},
+                                                                      "align": {"type": "string", "description": "水平对齐：left/center/right，默认center"},
+                                                                      "width": {"type": "number", "description": "图片宽度（英寸），默认8"}},
+                                                                  "required": ["path"]},
+                                                        "wordart": {"type": "object",
+                                                                    "description": "本页艺术字（可选）：{text, size, color}，"
+                                                                                    "大幅加粗彩色装饰文字",
+                                                                    "properties": {
+                                                                        "text": {"type": "string", "description": "艺术字文字"},
+                                                                        "size": {"type": "integer", "description": "字号，默认44"},
+                                                                        "color": {"type": "string", "description": "颜色HEX，默认主题主色"}},
+                                                                    "required": ["text"]},
                                                         "bg_color": {"type": "string",
                                                                      "description": "本页背景色 HEX（可选，覆盖全局背景）"},
                                                         "title_color": {"type": "string",
@@ -615,14 +650,16 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "create_xlsx",
-            "description": "生成 Excel 工作簿（.xlsx）：多个工作表，每表 {name, rows, image(可选)}，"
+            "description": "生成 Excel 工作簿（.xlsx）：多个工作表，每表 {name, rows, image(可选), wordart(可选)}，"
                            "rows 为二维数组（首行可作为表头）。适合数据表、统计报表、清单等。"
-                           "支持 style 参数自定义表头配色/隔行/边框，不传则用默认商务风。",
+                           "支持 style 参数自定义表头配色/隔行/边框/背景，不传则用默认商务风。",
             "parameters": {"type": "object",
                            "properties": {
                                "path": {"type": "string", "description": "保存路径（.xlsx）"},
                                "sheets": {"type": "array",
-                                          "description": "工作表列表，每项 {name: 表名, rows: [[单元格,...],...], image: 表插图路径(可选)}",
+                                          "description": "工作表列表，每项 {name: 表名, rows: [[单元格,...],...], "
+                                                          "image: 表插图(可选，路径字符串或 {path, width}), "
+                                                          "wordart: 表标题艺术字(可选，{text,size,color})}",
                                           "items": {"type": "object",
                                                     "properties": {
                                                         "name": {"type": "string", "description": "工作表名"},
@@ -630,8 +667,21 @@ TOOLS = [
                                                                  "description": "数据行二维数组",
                                                                  "items": {"type": "array",
                                                                            "items": {}}},
-                                                        "image": {"type": "string",
-                                                                  "description": "表插图路径（可选，相对路径基于工作目录，插入数据下方）"}},
+                                                        "image": {"type": "object",
+                                                                  "description": "表插图（可选）：路径字符串或 "
+                                                                                  "{path, width: 宽(像素,默认800)}",
+                                                                  "properties": {
+                                                                      "path": {"type": "string", "description": "图片路径"},
+                                                                      "width": {"type": "number", "description": "图片宽度(像素)，默认800"}},
+                                                                  "required": ["path"]},
+                                                        "wordart": {"type": "object",
+                                                                    "description": "表标题艺术字（可选）：{text, size, "
+                                                                                    "color}，顶部大号加粗彩色标题行",
+                                                                    "properties": {
+                                                                        "text": {"type": "string", "description": "标题文字"},
+                                                                        "size": {"type": "integer", "description": "字号，默认16"},
+                                                                        "color": {"type": "string", "description": "颜色HEX，默认主题主色"}},
+                                                                    "required": ["text"]}},
                                                     "required": ["name", "rows"]}},
                                "style": {"type": "object",
                                          "description": "样式配置（可选）。不传则用默认商务风；传了可大胆自定义："
@@ -641,7 +691,8 @@ TOOLS = [
                                                          "freeze_header=冻结首行(true/false，默认true)，"
                                                          "auto_filter=自动筛选(true/false，默认true)，"
                                                          "border_color=边框色HEX，header_size=表头字号，"
-                                                         "body_size=数据字号，header_bold=表头加粗(true/false，默认true)"}},
+                                                         "body_size=数据字号，header_bold=表头加粗(true/false，默认true)，"
+                                                         "bg_color=工作表背景色HEX(填充数据区域)"}},
                            "required": ["path", "sheets"]},
         },
     },
@@ -936,7 +987,8 @@ def execute_tool(name: str, args: dict, allow_dangerous: bool = False,
             return _create_docx(str(args.get("path", "")), str(args.get("title", "")),
                                 args.get("paragraphs") if isinstance(args.get("paragraphs"), list) else [],
                                 args.get("images") if isinstance(args.get("images"), list) else [],
-                                args.get("style") if isinstance(args.get("style"), dict) else {})
+                                args.get("style") if isinstance(args.get("style"), dict) else {},
+                                args.get("wordart") if isinstance(args.get("wordart"), list) else [])
         if name == "create_pptx":
             return _create_pptx(str(args.get("path", "")), str(args.get("title", "")),
                                 args.get("slides") if isinstance(args.get("slides"), list) else [],
@@ -1687,13 +1739,23 @@ def _docx_set_font(run, size=None, bold=None, color=None, font=None):
         run.font.color.rgb = RGBColor.from_string(color)
 
 
+def _docx_set_bg(doc, hex_color: str):
+    """设置 Word 整页背景色（w:background 颜色）"""
+    from docx.oxml import OxmlElement
+    from docx.oxml.ns import qn
+    bg = OxmlElement("w:background")
+    bg.set(qn("w:color"), hex_color.strip().lstrip("#"))
+    doc.element.insert(0, bg)
+
+
 def _create_docx(path: str, title: str, paragraphs: list, images: list = None,
-                 style: dict = None) -> dict:
-    """生成 Word 文档（python-docx）：默认商务专业风，支持 style 自定义配色/字体/排版。
+                 style: dict = None, wordart: list = None) -> dict:
+    """生成 Word 文档（python-docx）：默认商务专业风，支持 style 自定义配色/字体/排版/背景。
     段落支持轻量标记：'# '/'## '/'### ' 为标题层级，'- '/'* ' 为项目符号，其余为正文。
-    images：图片路径列表，每张作为独立居中段落插入文档末尾（宽 6 英寸，按比例缩放）。
+    images：图片列表，每项为路径字符串或 {path, align, width}（默认居中、宽6英寸，等比缩放防溢出）。
+    wordart：艺术字（样式化大字）列表 [{text, size, color, font, align}]。
     style：可选 dict，字段见 schema（theme/base_color/heading_color/text_color/font_name/
-           align/line_spacing/title_size/body_size/page）。"""
+           align/line_spacing/title_size/body_size/page/bg_color）。"""
     try:
         from docx import Document
         from docx.shared import Pt, RGBColor, Inches
@@ -1716,12 +1778,26 @@ def _create_docx(path: str, title: str, paragraphs: list, images: list = None,
             sec = doc.sections[0]
             sec.orientation = WD_ORIENT.LANDSCAPE
             sec.page_width, sec.page_height = sec.page_height, sec.page_width
+        # 页面背景色（整页背景）
+        bgc = str(style.get("bg_color") if isinstance(style, dict) else "").strip() or ""
+        if bgc:
+            _docx_set_bg(doc, bgc)
         if (title or "").strip():
             h = doc.add_paragraph()
             h.alignment = WD_ALIGN_PARAGRAPH.CENTER
             r = h.add_run(str(title))
             _docx_set_font(r, size=title_size, bold=True, color=base, font=f)
             h.paragraph_format.space_after = Pt(14)
+        # 艺术字（样式化大字）：大幅加粗彩色文字，用于标题/强调
+        for wa in (wordart or []):
+            wp = doc.add_paragraph()
+            wp.alignment = align_map.get(str(wa.get("align") or "center").lower(),
+                                         WD_ALIGN_PARAGRAPH.CENTER)
+            wr = wp.add_run(str(wa.get("text") or ""))
+            _docx_set_font(wr, size=int(wa.get("size") or 36), bold=True,
+                           color=str(wa.get("color") or base).strip() or base,
+                           font=str(wa.get("font") or f).strip() or f)
+            wp.paragraph_format.space_after = Pt(6)
         for para in (paragraphs or []):
             para = str(para).strip()
             if not para:
@@ -1761,23 +1837,32 @@ def _create_docx(path: str, title: str, paragraphs: list, images: list = None,
                 pf.line_spacing = ls
                 if body_align != WD_ALIGN_PARAGRAPH.LEFT:
                     body.alignment = body_align
-        # 图片：每张作为独立居中段落插入文档末尾（自动等比缩放防溢出页面）
+        # 图片：每张作为独立段落插入文档末尾（支持水平对齐 + 宽度，等比缩放防溢出页面）
         missing = []
         for img in (images or []):
-            img_p = _resolve(str(img))
+            if isinstance(img, str):
+                img_src, ialign, iwidth = img, "center", 6.0
+            else:
+                img_src = str(img.get("path") or "")
+                ialign = str(img.get("align") or "center").lower()
+                try:
+                    iwidth = float(img.get("width") or 6.0)
+                except (TypeError, ValueError):
+                    iwidth = 6.0
+            img_p = _resolve(img_src)
             if not img_p.is_file():
-                missing.append(str(img))
+                missing.append(str(img_src))
                 continue
             para = doc.add_paragraph()
-            para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            para.alignment = align_map.get(ialign, WD_ALIGN_PARAGRAPH.CENTER)
             pic = para.add_run()
-            fit = _image_scale(str(img_p), 6.0 * 96, 8.5 * 96)
+            fit = _image_scale(str(img_p), iwidth * 96, 8.5 * 96)
             if fit:
                 sc, w, h = fit
                 pic.add_picture(str(img_p),
                                 width=Inches(w * sc / 96), height=Inches(h * sc / 96))
             else:
-                pic.add_picture(str(img_p), width=Inches(6))
+                pic.add_picture(str(img_p), width=Inches(min(iwidth, 6.0)))
         doc.save(str(p))
     except Exception as e:
         return _blocked(f"[create_docx] 生成失败: {e}")
@@ -1914,23 +1999,48 @@ def _create_pptx(path: str, title: str, slides: list, style: dict = None) -> dic
                 prefix = bullet_fmt.format(j + 1) if "{}" in bullet_fmt else bullet_fmt
                 r.text = (prefix if str(b).strip() else "") + str(b).strip()
                 _pptx_font(r, body_size, bold=(j == 0), color=dark, font=f)
-            # 本页插图：要点下方居中（自动等比缩放放入底部区域，防溢出幻灯片）
-            img = (item.get("image") or "").strip()
+            # 本页插图：要点下方区域（支持水平对齐 + 宽度，等比缩放防溢出幻灯片）
+            img = item.get("image") or ""
             if img:
-                img_p = _resolve(img)
-                if not img_p.is_file():
-                    missing.append(str(img))
+                if isinstance(img, str):
+                    img_src, ialign, iwidth = img, "center", 8.0
                 else:
-                    fit = _image_scale(str(img_p), 12.13 * 96, 1.95 * 96)
+                    img_src = str(img.get("path") or "")
+                    ialign = str(img.get("align") or "center").lower()
+                    try:
+                        iwidth = float(img.get("width") or 8.0)
+                    except (TypeError, ValueError):
+                        iwidth = 8.0
+                img_p = _resolve(img_src)
+                if not img_p.is_file():
+                    missing.append(str(img_src))
+                else:
+                    fit = _image_scale(str(img_p), max(iwidth, 1.0) * 96, 1.95 * 96)
                     if fit:
                         sc, w, h = fit
                         w_in, h_in = w * sc / 96, h * sc / 96
-                        slide.shapes.add_picture(
-                            str(img_p), Inches((13.333 - w_in) / 2), Inches(5.55),
-                            width=Inches(w_in), height=Inches(h_in))
+                        if ialign == "left":
+                            ix = 0.6
+                        elif ialign == "right":
+                            ix = 13.333 - w_in - 0.6
+                        else:
+                            ix = (13.333 - w_in) / 2
+                        slide.shapes.add_picture(str(img_p), Inches(ix), Inches(5.55),
+                                                 width=Inches(w_in), height=Inches(h_in))
                     else:
                         slide.shapes.add_picture(str(img_p), Inches(2.67), Inches(5.55),
-                                                 width=Inches(8))
+                                                 width=Inches(min(iwidth, 8.0)))
+            # 本页艺术字（样式化大字）：居中大幅加粗彩色文字
+            wa = item.get("wordart") or {}
+            if wa and str(wa.get("text") or "").strip():
+                wb = slide.shapes.add_textbox(Inches(0.6), Inches(2.8), Inches(12.13), Inches(1.6))
+                wtf = wb.text_frame
+                wtf.word_wrap = True
+                wr = wtf.paragraphs[0].add_run()
+                wr.text = str(wa["text"])
+                _pptx_font(wr, int(wa.get("size") or 44), bold=True,
+                           color=str(wa.get("color") or base).strip() or base, font=f)
+                wtf.paragraphs[0].alignment = PP_ALIGN.CENTER
             # 页脚页码
             foot = slide.shapes.add_textbox(Inches(11.9), Inches(7.0), Inches(1.0), Inches(0.4))
             fr = foot.text_frame.paragraphs[0].add_run()
@@ -1971,6 +2081,7 @@ def _create_xlsx(path: str, sheets: list, style: dict = None) -> dict:
     try:
         from openpyxl import Workbook
         from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+        from openpyxl.utils import get_column_letter
     except ImportError:
         return _blocked("[create_xlsx] 缺少 openpyxl：run_command 执行 pip install openpyxl")
     p = _resolve(path)
@@ -2001,50 +2112,81 @@ def _create_xlsx(path: str, sheets: list, style: dict = None) -> dict:
                 continue
             ws = wb.create_sheet(title=str(sheet.get("name") or "Sheet")[:31])
             ws.sheet_properties.tabColor = header_fill
+            wa = sheet.get("wordart") or {}
+            title_row = str(wa.get("text") or "").strip() if isinstance(wa, dict) else ""
+            bg_fill = str(s.get("bg_color") or "").strip()
             rows = [r for r in (sheet.get("rows") or []) if isinstance(r, (list, tuple))]
             for row in rows:
                 ws.append([_xlsx_cell(v) for v in row])
-            if not rows:
+            if not rows and not title_row:
                 continue
+            offset = 1 if title_row else 0
+            # 艺术字标题行：顶部大号加粗彩色标题（跨列合并居中）
+            if title_row:
+                ncols = max((len(r) for r in rows), default=1) or 1
+                ws.insert_rows(1)
+                a1 = ws.cell(row=1, column=1, value=title_row)
+                if ncols > 1:
+                    ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=ncols)
+                a1.font = Font(name=font_name, size=int(wa.get("size") or 16), bold=True,
+                               color=str(wa.get("color") or base).strip() or base)
+                a1.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+                ws.row_dimensions[1].height = max(24, int(wa.get("size") or 16) + 10)
+            hdr = offset + 1
+            # 工作表背景色：填充数据区域空单元格（表头/隔行样式覆盖其上）
+            if bg_fill and rows:
+                for row in ws.iter_rows(min_row=1, max_row=offset + len(rows),
+                                        max_col=max((len(r) for r in rows), default=1)):
+                    for c in row:
+                        if c.value is None:
+                            c.fill = PatternFill("solid", fgColor=bg_fill)
             # 表头：主题色底 + 白字加粗居中
-            for c in ws[1]:
+            for c in ws[hdr]:
                 c.font = Font(name=font_name, size=header_size, bold=header_bold, color=header_color)
                 c.fill = PatternFill("solid", fgColor=header_fill)
                 c.alignment = Alignment(horizontal="center", vertical="center")
                 c.border = border
-            ws.row_dimensions[1].height = 22
+            ws.row_dimensions[hdr].height = 22
             # 数据行：字体 + 边框 + 隔行变色 + 数字右对齐
-            for r_idx, row in enumerate(ws.iter_rows(min_row=2), 2):
+            for r_idx, row in enumerate(ws.iter_rows(min_row=hdr + 1), hdr + 1):
                 for c in row:
                     c.font = Font(name=font_name, size=body_size, color="404040")
                     c.border = border
                     c.alignment = Alignment(horizontal=("right" if isinstance(c.value, (int, float))
                                                         else "left"), vertical="center")
-                    if banded and r_idx % 2 == 0:
+                    if banded and (r_idx - offset) % 2 == 0:
                         c.fill = PatternFill("solid", fgColor=band_fill)
-            # 自动列宽 + 冻结首行 + 自动筛选
-            for col in ws.columns:
-                ws.column_dimensions[col[0].column_letter].width = \
-                    _xlsx_col_width([c.value for c in col])
-            if freeze_header:
-                ws.freeze_panes = "A2"
-            if auto_filter:
+            # 自动列宽（按数据行估算）+ 冻结首行 + 自动筛选
+            for ci in range(max((len(r) for r in rows), default=1)):
+                texts = [str(r[ci]) for r in rows if ci < len(r)]
+                ws.column_dimensions[get_column_letter(ci + 1)].width = _xlsx_col_width(texts)
+            if freeze_header and rows:
+                ws.freeze_panes = f"A{hdr + 1}"
+            if auto_filter and rows:
                 ws.auto_filter.ref = ws.dimensions
-            # 表插图：数据下方（锚定首列）
-            img = (sheet.get("image") or "").strip()
+            # 表插图：数据下方（支持宽度，等比缩放）
+            img = sheet.get("image") or ""
             if img:
-                img_p = _resolve(img)
+                if isinstance(img, str):
+                    img_src, iwidth = img, 800.0
+                else:
+                    img_src = str(img.get("path") or "")
+                    try:
+                        iwidth = float(img.get("width") or 800.0)
+                    except (TypeError, ValueError):
+                        iwidth = 800.0
+                img_p = _resolve(img_src)
                 if not img_p.is_file():
-                    missing.append(str(img))
+                    missing.append(str(img_src))
                 else:
                     from openpyxl.drawing.image import Image as _XlImg
                     xl = _XlImg(str(img_p))
-                    fit = _image_scale(str(img_p), 800, 500)
+                    fit = _image_scale(str(img_p), max(iwidth, 1.0), 500)
                     if fit:
                         sc, w, h = fit
                         xl.width = int(w * sc)
                         xl.height = int(h * sc)
-                    ws.add_image(xl, f"A{len(rows) + 2}")
+                    ws.add_image(xl, f"A{offset + len(rows) + 2}")
         wb.save(str(p))
     except Exception as e:
         return _blocked(f"[create_xlsx] 生成失败: {e}")

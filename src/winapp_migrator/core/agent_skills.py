@@ -96,25 +96,31 @@ _BUILTIN_MD_SKILLS = {
 - 每份文档至少换一个配色或布局参数，让作品符合内容气质，而不是套同一个模板。
 
 ## 3. 生成
-- Word（create_docx）：path=保存路径，title=文档标题，paragraphs=[段落文本列表]，style=样式(可选)
+- Word（create_docx）：path=保存路径，title=文档标题，paragraphs=[段落文本列表]，style=样式(可选)，
+  wordart=[{text,size,color}]艺术字(可选)
   段落支持轻量标记增强结构：'# ' 一级标题、'## ' 二级标题、'### ' 三级标题、'- ' 项目符号，其余为正文。
   标题建议用标记分层（如 '# 一、概述' / '## 1.1 现状'），正文直接写内容。
 - PPT（create_pptx）：path，title=总标题，slides=[{title: 页标题, bullets: [要点列表],
-  image: 插图(可选), bg_color: 本页背景色(可选), title_color: 本页标题色(可选)}]，style=样式(可选)
+  image: 插图(可选), wordart:{text,size,color}本页艺术字(可选), bg_color: 本页背景色(可选),
+  title_color: 本页标题色(可选)}]，style=样式(可选)
   自动生成 16:9 标题页；每页为"标题+分隔线+要点"，每页要点建议 3-6 条。
 - Excel（create_xlsx）：path，sheets=[{name: 工作表名, rows: [[单元格值]...],
-  image: 插图(可选)}]，style=样式(可选)
+  image: 插图(可选), wordart:{text,size,color}表标题艺术字(可选)}]，style=样式(可选)
   首行自动作表头（默认深蓝底白字并冻结）；纯数字字符串自动转数值，无需引号包裹数字。
+- 图片：每种工具的 image 均可传路径字符串，或 {path, align: left/center/right, width} 指定水平位置与宽度
+  （Word/PPT 用 align 控制左右中，PPT 里 align→left/right/center；Excel 用 width 控制宽度）。
+  插图自动等比缩放适配页面（不会溢出），系统按宽高比自动选合适大小。
+- 背景：Word 用 style.bg_color 设整页背景色；PPT 每页用 bg_color 设背景色；Excel 用 style.bg_color 设表背景色。
+- 艺术字（样式化大字）：Word 用 wordart=[{text,size,color,font,align}]，PPT 每页幻灯片用
+  wordart={text,size,color}，Excel 每个工作表用 wordart={text,size,color} 生成大号加粗彩色强调文字。
 - 图片素材：可根据实际情况调用 image-gen 技能生成所需图片素材（文生图/图生图），
   生成后自动下载到桌面；生成的图片可以直接插入到 Word/PPT/Excel 文档中。
-  插图会自动等比缩放适配页面（不会溢出页面/幻灯片，无需手动指定尺寸），
-  只需提供图片路径即可，系统按图片宽高比自动选合适大小与居中位置。
 
 ## 4. 验证（必做）
-生成后用 extract_text(path) 读取文件，确认标题、正文、中文、表格数据均正确。
+生成后用 extract_text(path) 读取文件，确认标题、正文、中文、表格数据、图片、艺术字均正确。
 
 ## 5. 汇报
-输出：文件路径、包含的章节/工作表、采用的配色主题与布局风格、内容摘要。""",
+输出：文件路径、包含的章节/工作表、采用的配色主题与布局风格、图片/艺术字/背景的处理、内容摘要。""",
     },
     "web-search": {
         "description": "联网搜索：web_search 搜索实时信息（新闻/文档/教程/代码），web_fetch 抓取网页或调用 API 接口",

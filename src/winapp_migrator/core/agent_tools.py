@@ -539,7 +539,7 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "create_docx",
-            "description": "生成 Word 文档（.docx）：可选大标题 + 段落文本列表。"
+            "description": "生成 Word 文档（.docx）：可选大标题 + 段落文本列表 + 图片（可选）。"
                            "适合报告、说明文档、合同文本、简历等文字型文档。",
             "parameters": {"type": "object",
                            "properties": {
@@ -547,7 +547,11 @@ TOOLS = [
                                "title": {"type": "string", "description": "文档大标题（可选）"},
                                "paragraphs": {"type": "array",
                                               "description": "段落文本列表，每项一个字符串",
-                                              "items": {"type": "string"}}},
+                                              "items": {"type": "string"}},
+                               "images": {"type": "array",
+                                          "description": "图片路径列表（可选，相对路径基于工作目录；"
+                                                          "每张作为独立居中段落插入文档末尾）",
+                                          "items": {"type": "string"}}},
                            "required": ["path", "paragraphs"]},
         },
     },
@@ -556,19 +560,21 @@ TOOLS = [
         "function": {
             "name": "create_pptx",
             "description": "生成 PowerPoint 演示文稿（.pptx）：可选首页标题 + 多页幻灯片，"
-                           "每页包含页标题与要点列表。适合汇报、产品介绍、培训课件等演示文档。",
+                           "每页包含页标题与要点列表，可带本页插图。适合汇报、产品介绍、培训课件等演示文档。",
             "parameters": {"type": "object",
                            "properties": {
                                "path": {"type": "string", "description": "保存路径（.pptx）"},
                                "title": {"type": "string", "description": "演示文稿标题（可选，用作首页）"},
                                "slides": {"type": "array",
-                                          "description": "幻灯片列表，每项 {title: 页标题, bullets: [要点, ...]}",
+                                          "description": "幻灯片列表，每项 {title: 页标题, bullets: [要点, ...], image: 本页插图路径(可选)}",
                                           "items": {"type": "object",
                                                     "properties": {
                                                         "title": {"type": "string", "description": "页标题"},
                                                         "bullets": {"type": "array",
                                                                     "description": "本页要点列表",
-                                                                    "items": {"type": "string"}}},
+                                                                    "items": {"type": "string"}},
+                                                        "image": {"type": "string",
+                                                                  "description": "本页插图路径（可选，相对路径基于工作目录）"}},
                                                     "required": ["title"]}}},
                            "required": ["path", "slides"]},
         },
@@ -577,20 +583,22 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "create_xlsx",
-            "description": "生成 Excel 工作簿（.xlsx）：多个工作表，每表 {name, rows}，"
+            "description": "生成 Excel 工作簿（.xlsx）：多个工作表，每表 {name, rows, image(可选)}，"
                            "rows 为二维数组（首行可作为表头）。适合数据表、统计报表、清单等。",
             "parameters": {"type": "object",
                            "properties": {
                                "path": {"type": "string", "description": "保存路径（.xlsx）"},
                                "sheets": {"type": "array",
-                                          "description": "工作表列表，每项 {name: 表名, rows: [[单元格,...],...]}",
+                                          "description": "工作表列表，每项 {name: 表名, rows: [[单元格,...],...], image: 表插图路径(可选)}",
                                           "items": {"type": "object",
                                                     "properties": {
                                                         "name": {"type": "string", "description": "工作表名"},
                                                         "rows": {"type": "array",
                                                                  "description": "数据行二维数组",
                                                                  "items": {"type": "array",
-                                                                           "items": {}}}},
+                                                                           "items": {}}},
+                                                        "image": {"type": "string",
+                                                                  "description": "表插图路径（可选，相对路径基于工作目录，插入数据下方）"}},
                                                     "required": ["name", "rows"]}}},
                            "required": ["path", "sheets"]},
         },
@@ -861,7 +869,8 @@ def execute_tool(name: str, args: dict, allow_dangerous: bool = False,
             return _extract_text(str(args.get("path", "")))
         if name == "create_docx":
             return _create_docx(str(args.get("path", "")), str(args.get("title", "")),
-                                args.get("paragraphs") if isinstance(args.get("paragraphs"), list) else [])
+                                args.get("paragraphs") if isinstance(args.get("paragraphs"), list) else [],
+                                args.get("images") if isinstance(args.get("images"), list) else [])
         if name == "create_pptx":
             return _create_pptx(str(args.get("path", "")), str(args.get("title", "")),
                                 args.get("slides") if isinstance(args.get("slides"), list) else [])
@@ -1574,12 +1583,13 @@ def _docx_set_font(run, size=None, bold=None, color=None):
         run.font.color.rgb = RGBColor.from_string(color)
 
 
-def _create_docx(path: str, title: str, paragraphs: list) -> dict:
+def _create_docx(path: str, title: str, paragraphs: list, images: list = None) -> dict:
     """生成 Word 文档（python-docx）：商务专业风（微软雅黑 + 深蓝主题）。
-    段落支持轻量标记：'# '/'## ' 为标题层级，'- '/'* ' 为项目符号，其余为正文。"""
+    段落支持轻量标记：'# '/'## ' 为标题层级，'- '/'* ' 为项目符号，其余为正文。
+    images：图片路径列表，每张作为独立居中段落插入文档末尾（宽 6 英寸，按比例缩放）。"""
     try:
         from docx import Document
-        from docx.shared import Pt, RGBColor
+        from docx.shared import Pt, RGBColor, Inches
         from docx.enum.text import WD_ALIGN_PARAGRAPH, WD_LINE_SPACING
     except ImportError:
         return _blocked("[create_docx] 缺少 python-docx：run_command 执行 pip install python-docx")
@@ -1629,10 +1639,23 @@ def _create_docx(path: str, title: str, paragraphs: list) -> dict:
                 pf = body.paragraph_format
                 pf.space_after = Pt(6)
                 pf.line_spacing_rule = WD_LINE_SPACING.ONE_POINT_FIVE
+        # 图片：每张作为独立居中段落插入文档末尾
+        missing = []
+        for img in (images or []):
+            img_p = _resolve(str(img))
+            if not img_p.is_file():
+                missing.append(str(img))
+                continue
+            para = doc.add_paragraph()
+            para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            para.add_run().add_picture(str(img_p), width=Inches(6))
         doc.save(str(p))
     except Exception as e:
         return _blocked(f"[create_docx] 生成失败: {e}")
-    return {"text": f"已生成 Word 文档：{p}", "images": []}
+    msg = f"已生成 Word 文档：{p}"
+    if missing:
+        msg += f"（{len(missing)} 张图片不存在已跳过）"
+    return {"text": msg, "images": []}
 
 
 def _pptx_font(run, size, bold=False, color="404040"):
@@ -1685,6 +1708,7 @@ def _create_pptx(path: str, title: str, slides: list) -> dict:
             _pptx_font(r, 40, bold=True, color="FFFFFF")
             tf.paragraphs[0].alignment = PP_ALIGN.CENTER
         # 内容页
+        missing = []
         for i, item in enumerate(slides or [], 1):
             if not isinstance(item, dict):
                 continue
@@ -1710,6 +1734,14 @@ def _create_pptx(path: str, title: str, slides: list) -> dict:
                 r = para.add_run()
                 r.text = ("•  " if str(b).strip() else "") + str(b).strip()
                 _pptx_font(r, 18, bold=(j == 0), color=_DOC_DARK)
+            # 本页插图：要点下方居中（宽 8 英寸，按比例缩放）
+            img = (item.get("image") or "").strip()
+            if img:
+                img_p = _resolve(img)
+                if not img_p.is_file():
+                    missing.append(str(img))
+                else:
+                    slide.shapes.add_picture(str(img_p), Inches(2.67), Inches(5.55), width=Inches(8))
             # 页脚页码
             foot = slide.shapes.add_textbox(Inches(11.9), Inches(7.0), Inches(1.0), Inches(0.4))
             fr = foot.text_frame.paragraphs[0].add_run()
@@ -1719,7 +1751,10 @@ def _create_pptx(path: str, title: str, slides: list) -> dict:
         prs.save(str(p))
     except Exception as e:
         return _blocked(f"[create_pptx] 生成失败: {e}")
-    return {"text": f"已生成 PPT：{p}", "images": []}
+    msg = f"已生成 PPT：{p}"
+    if missing:
+        msg += f"（{len(missing)} 张图片不存在已跳过）"
+    return {"text": msg, "images": []}
 
 
 def _xlsx_cell(v):
@@ -1755,6 +1790,7 @@ def _create_xlsx(path: str, sheets: list) -> dict:
         wb.remove(wb.active)
         thin = Side(style="thin", color="D9D9D9")
         border = Border(left=thin, right=thin, top=thin, bottom=thin)
+        missing = []
         for sheet in (sheets or []):
             if not isinstance(sheet, dict):
                 continue
@@ -1787,10 +1823,22 @@ def _create_xlsx(path: str, sheets: list) -> dict:
                     _xlsx_col_width([c.value for c in col])
             ws.freeze_panes = "A2"
             ws.auto_filter.ref = ws.dimensions
+            # 表插图：数据下方（锚定首列）
+            img = (sheet.get("image") or "").strip()
+            if img:
+                img_p = _resolve(img)
+                if not img_p.is_file():
+                    missing.append(str(img))
+                else:
+                    from openpyxl.drawing.image import Image as _XlImg
+                    ws.add_image(_XlImg(str(img_p)), f"A{len(rows) + 2}")
         wb.save(str(p))
     except Exception as e:
         return _blocked(f"[create_xlsx] 生成失败: {e}")
-    return {"text": f"已生成 Excel 工作簿：{p}", "images": []}
+    msg = f"已生成 Excel 工作簿：{p}"
+    if missing:
+        msg += f"（{len(missing)} 张图片不存在已跳过）"
+    return {"text": msg, "images": []}
 
 
 def _web_search(query: str, max_results: int = 8) -> dict:

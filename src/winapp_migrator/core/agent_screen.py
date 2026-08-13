@@ -492,9 +492,10 @@ def _move_human(x2: int, y2: int, duration: float = 0):
             user32.SetCursorPos(int(x2), int(y2))
         return
     # 时长随距离自适应：短距快、长距慢（整体温和，不激进）
-    dur = duration or (0.24 + min(dist / 1500.0, 0.20))
+    dur = duration or (0.22 + min(dist / 1500.0, 0.18))
     steps = max(int(dur / 0.010), 12)
-    arc = min(dist * 0.06, 26)            # 温和弧度（限幅）
+    # 弧度仅在中长距离出现且大幅收敛：短距离直线精抵，避免摆动幅度过大/晃动
+    arc = min(dist * 0.04, 14) if dist >= 80 else 0
     px, py = -dy / dist, dx / dist        # 路径垂直单位向量
     pts = [(x1, y1)]
     with ai_suppress():

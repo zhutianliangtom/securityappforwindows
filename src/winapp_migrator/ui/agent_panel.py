@@ -917,34 +917,54 @@ class _AgentSettingsDialog(QDialog):
     def _build_model_page(self, s) -> QWidget:
         w = self._page("模型接入")
         lay = self._page_body(w)
-        sub = QLabel("同服务商多模型，按工作力度路由；模型名含纯文本关键字（如 deepseek）自动禁用图片/截图能力")
+        sub = QLabel("多服务商模型：每个服务商一张卡片，点击卡片编辑其地址/Key/模型；"
+                     "模型名含纯文本关键字（如 deepseek）自动禁用图片/截图能力")
         sub.setStyleSheet(f"color: {self._DIM}; font-size: 12px;")
         sub.setWordWrap(True)
         lay.addWidget(sub)
         m = s.get("model") or {}
         if not isinstance(m, dict):
             m = {}
-        cfg = agent_llm.load_model_config()   # 规范化：models / effort / auto 等
-        form = QFormLayout()
-        form.setSpacing(10)
-        form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
-        self.base_edit = QLineEdit(str(m.get("base_url") or ""))
-        self.base_edit.setPlaceholderText("https://api.example.com/v1（示例地址）")
-        form.addRow("接口地址", self.base_edit)
-        self.key_edit = QLineEdit(str(m.get("api_key") or ""))
-        self.key_edit.setEchoMode(QLineEdit.EchoMode.Password)
-        self.key_edit.setPlaceholderText("sk-xxxxxxxx（示例，填写真实 Key）")
-        form.addRow("API Key", self.key_edit)
-        self.models_edit = QLineEdit(", ".join(cfg["models"]))
-        self.models_edit.setPlaceholderText("模型名逗号分隔，如 deepseek-v4-pro, deepseek-v4-flash")
-        form.addRow("模型列表", self.models_edit)
-        self.protocol_combo = QComboBox()
-        self.protocol_combo.addItem("Chat Completions（/v1/chat/completions）", "chat")
-        self.protocol_combo.addItem("Responses API（/v1/responses）", "responses")
-        pidx = self.protocol_combo.findData(cfg.get("protocol", "chat"))
-        self.protocol_combo.setCurrentIndex(pidx if pidx >= 0 else 0)
-        form.addRow("接口协议", self.protocol_combo)
-        lay.addLayout(form)
+        cfg = agent_llm.load_model_config()
+        self._providers = list(cfg.get("providers") or [])
+        self._active_provider = cfg.get("active") or \
+            (self._providers[0]["name"] if self._providers else "")
+        # 服务商卡片列表
+        self.provider_list = QListWidget()
+        self.provider_list.setStyleSheet(
+            f"QListWidget {{ background: {self._PANEL}; color: {self._TEXT};"
+            f"border: 1px solid {self._BORDER}; border-radius: 8px; padding: 6px; }}"
+            f"QListWidget::item {{ border-radius: 8px; margin: 2px; }}"
+            f"QListWidget::item:selected {{ background: {self._PANEL2}; }}")
+        self.provider_list.itemDoubleClicked.connect(self._on_provider_edit)
+        self.provider_list.itemClicked.connect(self._on_provider_edit)
+        lay.addWidget(self.provider_list, 1)
+        self._reload_provider_list()
+        # 服务商操作按钮
+        prow = QHBoxLayout()
+        prow.setSpacing(8)
+        add_p = QPushButton(_std_icon(QStyle.StandardPixmap.SP_FileDialogNewFolder), "添加服务商")
+        add_p.setStyleSheet(f"background: {self._ACCENT}; color: #FFFFFF; border: none;"
+                            "border-radius: 8px; padding: 7px 16px; font-weight: 700;")
+        add_p.setAutoDefault(False)
+        add_p.clicked.connect(self._on_provider_add)
+        set_a = QPushButton("设为当前")
+        set_a.setStyleSheet(f"background: {self._PANEL}; color: {self._TEXT};"
+                            f"border: 1px solid {self._BORDER}; border-radius: 8px;"
+                            "padding: 7px 16px; font-weight: 600;")
+        set_a.setAutoDefault(False)
+        set_a.clicked.connect(self._on_provider_activate)
+        del_p = QPushButton(_line_icon("trash", 16), "删除")
+        del_p.setStyleSheet(f"background: {self._PANEL}; color: {self._DIM};"
+                            f"border: 1px solid {self._BORDER}; border-radius: 8px;"
+                            "padding: 7px 16px; font-weight: 600;")
+        del_p.setAutoDefault(False)
+        del_p.clicked.connect(self._on_provider_delete)
+        prow.addWidget(add_p)
+        prow.addWidget(set_a)
+        prow.addWidget(del_p)
+        prow.addStretch(1)
+        lay.addLayout(prow)
         # 工作力度：拖动切换（low/medium/high/max/ultra）+ 自动按难度开关
         self._effort = cfg.get("effort", "medium")
         self._auto_effort = bool(cfg.get("auto_effort", True))
@@ -1065,6 +1085,105 @@ class _AgentSettingsDialog(QDialog):
     def _switch_page(self, idx: int):
         self.stack.setCurrentIndex(idx)
 
+    # ---------- 服务商卡片操作 ----------
+    def _make_provider_card(self, p: dict) -> QWidget:
+        card = QWidget()
+        card.setStyleSheet(f"background: {self._PANEL}; border-radius: 8px;")
+        v = QVBoxLayout(card)
+        v.setContentsMargins(12, 8, 12, 8)
+        v.setSpacing(2)
+        top = QHBoxLayout()
+        top.setSpacing(8)
+        name = QLabel(str(p.get("name", "")))
+        name.setStyleSheet(f"color: {self._TEXT}; font-size: 14px; font-weight: 700;")
+        top.addWidget(name)
+        if p.get("active"):
+            tag = QLabel("当前")
+            tag.setStyleSheet(f"background: {self._ACCENT}; color: #FFFFFF;"
+                              "border-radius: 4px; padding: 1px 8px; font-size: 11px;")
+            top.addWidget(tag)
+        top.addStretch(1)
+        url = QLabel(str(p.get("base_url", "")))
+        url.setStyleSheet(f"color: {self._DIM}; font-size: 11px;")
+        url.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        top.addWidget(url)
+        v.addLayout(top)
+        models = QLabel("模型：" + ", ".join(str(x) for x in (p.get("models") or [])))
+        models.setStyleSheet(f"color: {self._DIM}; font-size: 12px;")
+        v.addWidget(models)
+        return card
+
+    def _reload_provider_list(self):
+        self.provider_list.clear()
+        for p in self._providers:
+            p = dict(p)
+            p["active"] = (p.get("name") == self._active_provider)
+            item = QListWidgetItem()
+            item.setData(Qt.ItemDataRole.UserRole, p)
+            item.setSizeHint(QSize(0, 66))
+            self.provider_list.addItem(item)
+            self.provider_list.setItemWidget(item, self._make_provider_card(p))
+
+    def _current_provider(self) -> dict:
+        item = self.provider_list.currentItem()
+        if item is not None:
+            return item.data(Qt.ItemDataRole.UserRole)
+        return None
+
+    def _on_provider_add(self):
+        dlg = _ProviderDialog(parent=self)
+        if dlg.exec() == QDialog.DialogCode.Accepted:
+            p = dlg.provider_data()
+            if any(x.get("name") == p["name"] for x in self._providers):
+                QMessageBox.warning(self, "提示", f"已存在同名服务商「{p['name']}」")
+                return
+            self._providers.append(p)
+            if not self._active_provider:
+                self._active_provider = p["name"]
+            self._reload_provider_list()
+
+    def _on_provider_edit(self, item):
+        idx = self.provider_list.row(item)
+        if not (0 <= idx < len(self._providers)):
+            return
+        dlg = _ProviderDialog(provider=self._providers[idx], parent=self)
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return
+        newp = dlg.provider_data()
+        # 名称可能被改名：同步 active 指向
+        if self._providers[idx].get("name") == self._active_provider:
+            self._active_provider = newp["name"]
+        self._providers[idx] = newp
+        self._reload_provider_list()
+
+    def _on_provider_activate(self):
+        p = self._current_provider()
+        if p is None:
+            QMessageBox.information(self, "提示", "请先点击选择一个服务商")
+            return
+        self._active_provider = p["name"]
+        self._reload_provider_list()
+
+    def _on_provider_delete(self):
+        item = self.provider_list.currentItem()
+        if item is None:
+            QMessageBox.information(self, "提示", "请先点击选择一个服务商")
+            return
+        idx = self.provider_list.row(item)
+        if not (0 <= idx < len(self._providers)):
+            return
+        p = self._providers[idx]
+        reply = QMessageBox.question(
+            self, "删除服务商", f"确定删除服务商「{p.get('name')}」？",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No)
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+        self._providers.pop(idx)
+        if self._active_provider == p.get("name"):
+            self._active_provider = self._providers[0]["name"] if self._providers else ""
+        self._reload_provider_list()
+
     # ---------- MCP 列表操作 ----------
     def _reload_mcp_list(self):
         self.mcp_list.clear()
@@ -1138,24 +1257,25 @@ class _AgentSettingsDialog(QDialog):
         self.effort_label.setText(self._effort)
 
     def _save(self):
-        base_url = self.base_edit.text().strip()
-        api_key = self.key_edit.text().strip()
-        models = [x.strip() for x in self.models_edit.text().replace("，", ",").split(",")
-                  if x.strip()]
-        if not models:
-            models = [agent_llm.DEFAULT_MODEL]
+        # 多服务商：基于卡片列表持久化，当前服务商为 active
+        providers = [dict(p) for p in getattr(self, "_providers", [])]
+        if not providers:
+            providers = [{"name": "默认服务商",
+                          "base_url": agent_llm.DEFAULT_BASE_URL,
+                          "api_key": agent_llm.DEFAULT_API_KEY,
+                          "models": [agent_llm.DEFAULT_MODEL],
+                          "protocol": "chat"}]
+        active = getattr(self, "_active_provider", "") or providers[0]["name"]
         model = {
-            "model": models[0],          # 兼容旧字段：主模型 = 首个
-            "models": models,
+            "providers": providers,
+            "active": active,
+            "model": providers[0]["models"][0],   # 兼容旧字段
+            "models": providers[0]["models"],
             "send_effort": self.send_effort_check.isChecked(),
-            "protocol": self.protocol_combo.currentData() or "chat",
+            "protocol": providers[0]["protocol"] or "chat",
             "effort": self._effort,
             "auto_effort": self.auto_effort_check.isChecked(),
         }
-        if base_url:
-            model["base_url"] = base_url
-        if api_key:
-            model["api_key"] = api_key
         data = {
             "custom_rules": [ln.strip() for ln in self.rules_edit.toPlainText().splitlines()
                              if ln.strip()],
@@ -1335,6 +1455,85 @@ class _McpServerDialog(QDialog):
             if args:
                 d["args"] = args
         return d
+
+
+class _ProviderDialog(QDialog):
+    """单个 AI 服务商配置：名称 / 接口地址 / API Key / 模型列表 / 接口协议"""
+
+    _BG = "#0F172A"
+    _PANEL = "#1E293B"
+    _TEXT = "#F1F5F9"
+    _BORDER = "#334155"
+    _ACCENT = "#1E40AF"
+
+    def __init__(self, provider: dict = None, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("编辑服务商" if provider else "添加服务商")
+        self.setMinimumWidth(480)
+        self.setStyleSheet(
+            f"QDialog {{ background: {self._BG}; }}"
+            f"QLabel {{ color: {self._TEXT}; font-size: 13px; }}"
+            f"QLineEdit, QComboBox {{ background: {self._PANEL}; color: {self._TEXT};"
+            f"border: 1px solid {self._BORDER}; border-radius: 6px; padding: 6px 10px; }}"
+            f"QLineEdit:focus, QComboBox:focus {{ border: 1px solid {self._ACCENT}; }}"
+            f"QComboBox QAbstractItemView {{ background: {self._PANEL}; color: {self._TEXT};"
+            f"border: 1px solid {self._BORDER}; selection-background-color: {self._PANEL}; }}")
+        self._provider = provider or {}
+        form = QFormLayout(self)
+        form.setContentsMargins(18, 16, 18, 16)
+        form.setSpacing(12)
+
+        self.name_edit = QLineEdit(self._provider.get("name", ""))
+        self.name_edit.setPlaceholderText("服务商名称，如 智谱、OpenAI、DeepSeek")
+        form.addRow("名称", self.name_edit)
+
+        self.base_edit = QLineEdit(self._provider.get("base_url", ""))
+        self.base_edit.setPlaceholderText("https://api.example.com/v1")
+        form.addRow("接口地址", self.base_edit)
+
+        self.key_edit = QLineEdit(self._provider.get("api_key", ""))
+        self.key_edit.setEchoMode(QLineEdit.EchoMode.Password)
+        self.key_edit.setPlaceholderText("sk-xxxxxxxx")
+        form.addRow("API Key", self.key_edit)
+
+        self.models_edit = QLineEdit(", ".join(self._provider.get("models", [])))
+        self.models_edit.setPlaceholderText("模型名逗号分隔，如 deepseek-v4-pro, deepseek-v4-flash")
+        form.addRow("模型列表", self.models_edit)
+
+        self.protocol_combo = QComboBox()
+        self.protocol_combo.addItem("Chat Completions（/v1/chat/completions）", "chat")
+        self.protocol_combo.addItem("Responses API（/v1/responses）", "responses")
+        pidx = self.protocol_combo.findData(self._provider.get("protocol", "chat"))
+        self.protocol_combo.setCurrentIndex(pidx if pidx >= 0 else 0)
+        form.addRow("接口协议", self.protocol_combo)
+
+        row = QHBoxLayout()
+        ok = QPushButton("确定")
+        ok.setStyleSheet(f"background: {self._ACCENT}; color: #FFFFFF; border: none;"
+                         "border-radius: 8px; padding: 8px 24px; font-weight: 700;")
+        ok.clicked.connect(self.accept)
+        cancel = QPushButton("取消")
+        cancel.setStyleSheet(f"background: {self._PANEL}; color: {self._TEXT};"
+                             f"border: 1px solid {self._BORDER}; border-radius: 8px;"
+                             "padding: 8px 20px; font-weight: 600;")
+        cancel.clicked.connect(self.reject)
+        row.addStretch(1)
+        row.addWidget(cancel)
+        row.addWidget(ok)
+        form.addRow("", row)
+
+    def provider_data(self) -> dict:
+        models = [x.strip() for x in self.models_edit.text().replace("，", ",").split(",")
+                  if x.strip()]
+        if not models:
+            models = [agent_llm.DEFAULT_MODEL]
+        return {
+            "name": self.name_edit.text().strip() or "服务商",
+            "base_url": self.base_edit.text().strip(),
+            "api_key": self.key_edit.text().strip(),
+            "models": models,
+            "protocol": self.protocol_combo.currentData() or "chat",
+        }
 
 
 class _AskUserDialog(QDialog):

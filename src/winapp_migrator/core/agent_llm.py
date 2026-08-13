@@ -54,40 +54,68 @@ def is_text_only_model(model: str) -> bool:
 def load_model_config() -> dict:
     """从 settings.json 读取模型配置，未配置时返回默认。
 
-    返回完整配置（含同服务商多模型与力度路由）：
-    base_url / api_key / model(主模型=首个) / models(全部模型名) /
-    effort_models(力度→模型) / effort(当前力度) / auto_effort(自动按难度) /
-    send_effort(是否向 API 发送 reasoning_effort)
+    支持多服务商：settings["model"]["providers"] = [{name, base_url, api_key, models, protocol}]，
+    "active" 指定当前使用的服务商名。返回当前服务商的 base_url/api_key/model/models/protocol，
+    并附带完整 providers 列表供 UI 展示；兼容旧版单服务商字段（base_url/api_key/models）。
+    另含 effort_models / effort / auto_effort / send_effort。
     """
     try:
         from winapp_migrator.core import agent_skills
         m = agent_skills.load_settings().get("model") or {}
         if not isinstance(m, dict):
             m = {}
-        models = [str(x).strip() for x in (m.get("models") or []) if str(x).strip()]
-        single = str(m.get("model") or "").strip()
-        if single and single not in models:
-            models.insert(0, single)
-        if DEFAULT_MODEL not in models:
-            # 默认轻量模型始终保留：自动切换时用它先评估任务难度，
-            # 即使用户自定义了 API/模型也不隐藏
-            models.append(DEFAULT_MODEL)
+        providers = [p for p in (m.get("providers") or [])
+                     if isinstance(p, dict) and p.get("base_url")]
+        # 兼容旧单服务商配置：无 providers 时从旧字段构建一个
+        if not providers:
+            single = {
+                "name": str(m.get("provider_name") or "默认服务商"),
+                "base_url": m.get("base_url") or DEFAULT_BASE_URL,
+                "api_key": m.get("api_key") or DEFAULT_API_KEY,
+                "models": [str(x).strip() for x in (m.get("models") or []) if str(x).strip()],
+                "protocol": m.get("protocol") if m.get("protocol") in ("chat", "responses") else "chat",
+            }
+            single_model = str(m.get("model") or "").strip()
+            if single_model and single_model not in single["models"]:
+                single["models"].insert(0, single_model)
+            providers = [single]
+        # 规范化每个服务商
+        active = str(m.get("active") or "")
+        for p in providers:
+            p["name"] = str(p.get("name") or "服务商").strip() or "服务商"
+            p["base_url"] = str(p.get("base_url") or DEFAULT_BASE_URL)
+            p["api_key"] = str(p.get("api_key") or "")
+            p["protocol"] = (p.get("protocol") if p.get("protocol") in ("chat", "responses")
+                             else "chat")
+            pms = [str(x).strip() for x in (p.get("models") or []) if str(x).strip()]
+            if DEFAULT_MODEL not in pms:
+                pms.append(DEFAULT_MODEL)
+            p["models"] = pms
+        # 确定当前服务商
+        ap = next((p for p in providers if p["name"] == active), None) or providers[0]
+        ap["active"] = True
         return {
-            "base_url": m.get("base_url") or DEFAULT_BASE_URL,
-            "api_key": m.get("api_key") or DEFAULT_API_KEY,
-            "model": models[0] if models else DEFAULT_MODEL,
-            "models": models or [DEFAULT_MODEL],
+            "base_url": ap["base_url"],
+            "api_key": ap["api_key"],
+            "model": ap["models"][0],
+            "models": ap["models"],
+            "protocol": ap["protocol"],
+            "providers": providers,
+            "active": ap["name"],
             "effort_models": dict(m.get("effort_models") or {}),
             "effort": m.get("effort") if m.get("effort") in EFFORTS else "medium",
             "auto_effort": bool(m.get("auto_effort", True)),
             "send_effort": bool(m.get("send_effort", False)),
-            "protocol": m.get("protocol") if m.get("protocol") in ("chat", "responses") else "chat",
         }
     except Exception:
+        default = {"name": "默认服务商", "base_url": DEFAULT_BASE_URL,
+                   "api_key": DEFAULT_API_KEY, "models": [DEFAULT_MODEL],
+                   "protocol": "chat", "active": True}
         return {"base_url": DEFAULT_BASE_URL, "api_key": DEFAULT_API_KEY,
                 "model": DEFAULT_MODEL, "models": [DEFAULT_MODEL],
+                "protocol": "chat", "providers": [default], "active": "默认服务商",
                 "effort_models": {}, "effort": "medium",
-                "auto_effort": True, "send_effort": False, "protocol": "chat"}
+                "auto_effort": True, "send_effort": False}
 
 
 def _default_effort_models(models: list) -> dict:

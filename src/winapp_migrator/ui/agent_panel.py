@@ -690,6 +690,8 @@ class _AgentSettingsDialog(QDialog):
     _DIM = "#8A8A8A"
     _ACCENT = "#1E40AF"
     _ACCENT_HOVER = "#2563EB"
+    _DANGER = "#DC2626"
+    _DANGER_HOVER = "#EF4444"
     _BORDER = "#000000"
 
     def __init__(self, parent=None):
@@ -935,7 +937,11 @@ class _AgentSettingsDialog(QDialog):
             f"border: 1px solid {self._BORDER}; border-radius: 8px; padding: 6px; }}"
             f"QListWidget::item {{ border-radius: 8px; margin: 2px; }}"
             f"QListWidget::item:selected {{ background: {self._PANEL2}; }}")
-        self.provider_list.itemClicked.connect(self._on_provider_edit)
+        self.provider_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.provider_list.itemClicked.connect(self._on_provider_select)
+        self.provider_list.itemDoubleClicked.connect(self._on_provider_edit)
+        self.provider_list.itemSelectionChanged.connect(self._update_provider_ui)
+        self.provider_list.customContextMenuRequested.connect(self._on_provider_menu)
         lay.addWidget(self.provider_list, 1)
         self._reload_provider_list()
         # 服务商操作按钮
@@ -946,16 +952,19 @@ class _AgentSettingsDialog(QDialog):
                             "border-radius: 8px; padding: 7px 16px; font-weight: 700;")
         add_p.setAutoDefault(False)
         add_p.clicked.connect(self._on_provider_add)
-        del_p = QPushButton(_line_icon("trash", 16), "删除")
-        del_p.setStyleSheet(f"background: {self._PANEL}; color: {self._DIM};"
-                            f"border: 1px solid {self._BORDER}; border-radius: 8px;"
-                            "padding: 7px 16px; font-weight: 600;")
-        del_p.setAutoDefault(False)
-        del_p.clicked.connect(self._on_provider_delete)
+        self.del_provider_btn = QPushButton(_line_icon("trash", 16), "删除")
+        self.del_provider_btn.setAutoDefault(False)
+        self.del_provider_btn.clicked.connect(self._on_provider_delete)
         prow.addWidget(add_p)
-        prow.addWidget(del_p)
+        prow.addWidget(self.del_provider_btn)
         prow.addStretch(1)
         lay.addLayout(prow)
+        # 选中/右键提示语（状态栏）
+        self.provider_hint = QLabel("点击或右键选中服务商卡片（删除按钮随之变红可用）；双击卡片编辑")
+        self.provider_hint.setStyleSheet(f"color: {self._DIM}; font-size: 12px;")
+        self.provider_hint.setWordWrap(True)
+        lay.addWidget(self.provider_hint)
+        self._update_provider_ui()
         # 工作力度：拖动切换（low/medium/high/max/ultra）+ 自动按难度开关
         self._effort = cfg.get("effort", "medium")
         self._auto_effort = bool(cfg.get("auto_effort", True))
@@ -1115,6 +1124,69 @@ class _AgentSettingsDialog(QDialog):
             return item.data(Qt.ItemDataRole.UserRole)
         return None
 
+    def _on_provider_select(self, item):
+        """单击卡片：选中（itemSelectionChanged 已触发 UI 刷新），不打开编辑"""
+        self._update_provider_ui()
+
+    def _update_provider_ui(self):
+        """选中反馈：删除按钮选中时变红可用、未选中灰色；状态栏提示语；卡片高亮描边"""
+        if not hasattr(self, "del_provider_btn"):   # 初始化中按钮尚未创建时跳过
+            return
+        sel = self._current_provider()
+        if sel is not None:
+            self.del_provider_btn.setStyleSheet(
+                f"background: {self._DANGER}; color: #FFFFFF; border: none;"
+                "border-radius: 8px; padding: 7px 16px; font-weight: 700;")
+            self.del_provider_btn.setToolTip(f"删除服务商「{sel.get('name')}」")
+            models = ", ".join(sel.get("models") or [])
+            self.provider_hint.setText(
+                f"已选中「{sel.get('name')}」｜接口 {sel.get('base_url')}｜模型：{models}")
+            self.provider_hint.setStyleSheet(
+                f"color: {self._ACCENT_HOVER}; font-size: 12px;")
+        else:
+            self.del_provider_btn.setStyleSheet(
+                f"background: {self._PANEL}; color: {self._DIM};"
+                f"border: 1px solid {self._BORDER}; border-radius: 8px;"
+                "padding: 7px 16px; font-weight: 600;")
+            self.del_provider_btn.setToolTip("请先选中一个服务商")
+            self.provider_hint.setText("点击或右键选中服务商卡片（删除按钮随之变红可用）；双击卡片编辑")
+            self.provider_hint.setStyleSheet(f"color: {self._DIM}; font-size: 12px;")
+        # 卡片高亮：选中卡片深蓝描边 + 加亮背景
+        for i in range(self.provider_list.count()):
+            it = self.provider_list.item(i)
+            w = self.provider_list.itemWidget(it)
+            p = it.data(Qt.ItemDataRole.UserRole)
+            if p is not None and sel is not None and p.get("name") == sel.get("name"):
+                if w is not None:
+                    w.setStyleSheet(
+                        f"background: {self._PANEL2}; border: 1px solid {self._ACCENT};"
+                        "border-radius: 8px;")
+            else:
+                if w is not None:
+                    w.setStyleSheet(f"background: {self._PANEL}; border-radius: 8px;")
+
+    def _on_provider_menu(self, pos):
+        """右键菜单：先选中对应卡片，提供「选中提示语 / 编辑 / 删除」"""
+        item = self.provider_list.itemAt(pos)
+        if item is None:
+            return
+        self.provider_list.setCurrentItem(item)
+        sel = self._current_provider()
+        menu = QMenu(self)
+        if sel is not None:
+            hint = menu.addAction(
+                f"已选中「{sel.get('name')}」｜模型：{', '.join(sel.get('models') or [])}")
+            hint.setEnabled(False)
+            menu.addSeparator()
+            act_select = menu.addAction("选中该服务商（加入模型路由）")
+            act_select.triggered.connect(self._update_provider_ui)
+            menu.addSeparator()
+            act_edit = menu.addAction("编辑该服务商…")
+            act_edit.triggered.connect(lambda: self._on_provider_edit(item))
+            act_del = menu.addAction("删除该服务商…")
+            act_del.triggered.connect(self._on_provider_delete)
+        menu.exec(self.provider_list.viewport().mapToGlobal(pos))
+
     def _on_provider_add(self):
         dlg = _ProviderDialog(parent=self)
         if dlg.exec() == QDialog.DialogCode.Accepted:
@@ -1124,6 +1196,8 @@ class _AgentSettingsDialog(QDialog):
                 return
             self._providers.append(p)
             self._reload_provider_list()
+            self.provider_list.setCurrentRow(self.provider_list.count() - 1)
+            self._update_provider_ui()
 
     def _on_provider_edit(self, item):
         idx = self.provider_list.row(item)
@@ -1135,11 +1209,12 @@ class _AgentSettingsDialog(QDialog):
         newp = dlg.provider_data()
         self._providers[idx] = newp
         self._reload_provider_list()
+        self._update_provider_ui()
 
     def _on_provider_delete(self):
         item = self.provider_list.currentItem()
         if item is None:
-            QMessageBox.information(self, "提示", "请先点击选择一个服务商")
+            QMessageBox.information(self, "提示", "请先选中一个服务商")
             return
         idx = self.provider_list.row(item)
         if not (0 <= idx < len(self._providers)):
@@ -1153,6 +1228,7 @@ class _AgentSettingsDialog(QDialog):
             return
         self._providers.pop(idx)
         self._reload_provider_list()
+        self._update_provider_ui()
 
     # ---------- MCP 列表操作 ----------
     def _reload_mcp_list(self):

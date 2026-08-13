@@ -7,6 +7,7 @@
 """
 
 import json
+import random
 import time
 import urllib.error
 import urllib.request
@@ -130,17 +131,6 @@ def provider_for_model(cfg: dict, model: str) -> dict:
     return {}
 
 
-def _default_effort_models(models: list) -> dict:
-    """力度→模型的默认路由：多模型时首个视为最强（pro）用于 high/max/ultra，
-    末个最轻（flash）用于 low/medium；单模型时全部同款"""
-    if not models:
-        return {}
-    if len(models) == 1:
-        return {e: models[0] for e in EFFORTS}
-    return {"low": models[-1], "medium": models[-1],
-            "high": models[0], "max": models[0], "ultra": models[0]}
-
-
 def is_vision_model(cfg: dict, model: str) -> bool:
     """模型是否具备视觉能力：显式标记为多模态（multimodal_models）优先，
     否则按模型名自动识别为非纯文本"""
@@ -153,30 +143,57 @@ def is_vision_model(cfg: dict, model: str) -> bool:
     return not is_text_only_model(m)
 
 
-def resolve_model(cfg: dict, effort: str = "medium", vision_needed: bool = False) -> str:
-    """按工作力度解析应使用的模型名：优先用户配置的 effort_models 映射，
-    否则按模型列表默认路由，最后回退主模型/默认模型。
+def _model_tier(model: str) -> str:
+    """按模型名后缀判断能力档位：flash/lite/mini/small/turbo≈轻量，pro/max/plus/ultra≈重量，其余通用"""
+    m = (model or "").lower()
+    if any(k in m for k in ("flash", "lite", "mini", "small", "turbo")):
+        return "light"
+    if any(k in m for k in ("pro", "max", "plus", "ultra", "reasoner")):
+        return "heavy"
+    return "general"
 
-    vision_needed=True（视觉任务）时，优先在具备视觉能力的模型中按力度路由，
-    无视觉模型则回退普通路由"""
+
+def requires_vision(text: str, images: list) -> bool:
+    """是否需要视觉模型：本次带图，或为电脑操控/需看屏幕的任务（截图类）"""
+    if images:
+        return True
+    t = (text or "").strip()
+    if not t:
+        return False
+    keys = ("打开", "点击", "点一下", "登录", "点赞", "打卡", "截屏", "截图",
+            "屏幕", "浏览器", "看视频", "刷视频", "鼠标", "输入框", "按钮",
+            "帮我开", "帮我点", "帮我登", "打开网页")
+    return any(k in t for k in keys)
+
+
+def resolve_model(cfg: dict, effort: str = "medium", vision_needed: bool = False) -> str:
+    """按工作力度路由模型（自动选择模式）。
+
+    - 优先用户配置的 effort_models 映射（确定性）。
+    - 否则按模型档位 + 能力选：轻量任务(low/medium)优先 flash 类轻量模型，
+      重量任务(high/max/ultra)优先 pro 类重量模型。
+    - vision_needed(视觉/截图任务)时先在视觉模型集合内路由。
+    - 同档位多模型时随机挑选（避免死磕同一模型）。
+    - 保证与引擎单例共用上下文：仅切换模型连接，不重建对话。
+    """
     m = cfg or {}
     effort = effort if effort in EFFORTS else "medium"
     em = m.get("effort_models") or {}
-    if vision_needed:
-        all_models = m.get("models") or []
-        vmodels = [x for x in all_models if is_vision_model(m, x)]
-        if vmodels:
-            name = str(em.get(effort) or "").strip() or str(em.get("medium") or "").strip()
-            if name and name in vmodels:
-                return name
-            return _default_effort_models(vmodels).get(effort) or vmodels[0]
     name = str(em.get(effort) or "").strip() or str(em.get("medium") or "").strip()
     if name:
         return name
-    models = m.get("models") or []
-    if models:
-        return _default_effort_models(models).get(effort) or models[0]
-    return m.get("model") or DEFAULT_MODEL
+    all_models = m.get("models") or []
+    # 视觉任务：先在视觉模型内路由；无视觉模型则回退全部
+    pool = [x for x in all_models if is_vision_model(m, x)] if vision_needed else list(all_models)
+    if not pool:
+        pool = list(all_models)
+    if not pool:
+        return m.get("model") or DEFAULT_MODEL
+    want = "light" if effort in ("low", "medium") else "heavy"
+    tiers = [x for x in pool if _model_tier(x) == want]
+    if not tiers:   # 无对应档位：用全部候选
+        tiers = list(pool)
+    return random.choice(tiers)
 
 
 def estimate_effort(text: str) -> str:
@@ -232,12 +249,22 @@ def assess_effort(text: str) -> str:
                      "User-Agent": _UA,
                      "Authorization": f"Bearer {DEFAULT_API_KEY}"},
             method="POST")
-        raw = urllib.request.urlopen(req, timeout=30).read().decode("utf-8", "replace")
-        resp = json.loads(raw)
-        txt = ((resp.get("choices") or [{}])[0].get("message") or {}).get("content", "") or ""
-        m = re.search(r"\b(low|medium|high|max|ultra)\b", txt.lower())
-        if m:
-            return m.group(1)
+        # 网络/5xx 抖动自动重试，保证「内置 agnes 评估」更可靠地执行
+        last = None
+        for attempt in range(_MAX_RETRIES):
+            try:
+                raw = urllib.request.urlopen(req, timeout=30).read().decode("utf-8", "replace")
+                resp = json.loads(raw)
+                txt = ((resp.get("choices") or [{}])[0].get("message") or {}).get("content", "") or ""
+                m = re.search(r"\b(low|medium|high|max|ultra)\b", txt.lower())
+                if m:
+                    return m.group(1)
+                break   # 有响应但格式不符：不再重试，走回退
+            except Exception as e:   # noqa: BLE001
+                last = e
+                time.sleep(_RETRY_DELAY * (2 ** attempt))
+        if last:
+            raise last
     except Exception:
         pass
     return estimate_effort(text)   # 评估失败：回退本地估算，保证流程不中断

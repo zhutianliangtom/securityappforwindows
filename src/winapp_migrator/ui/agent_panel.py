@@ -3660,9 +3660,10 @@ class AgentPanel(QDialog):
         self._task_active = True
         # 启动用户输入监控：AI 操控鼠标/键盘期间，用户手动操作立即停止（钩子常驻，仅更新回调）
         user_guard.start(self._on_user_guard_cb)
-        # 模型路由：自动模式先用默认 agnes-2.5-flash 评估任务难度（后台线程），
-        # 评估完成后再按难度选合适模型启动；手动指定模型/关闭自动则直接启动
-        if self._auto_effort and not self._model_override:
+        # 模型路由：自动选择模式（下拉「自动选择」未手动指定模型）先由内置
+        # agnes 评估任务难度（后台线程），评估后按难度+视觉需求自动选合适模型。
+        # 手动指定模型则直接启动（不再评估）。
+        if not self._model_override:
             self._eval_pending = (ai_text, send_images, skill_names)
             # 评估过程不显示任何文字提示，直接以「AI 思考中…」转圈呈现
             self._start_think()
@@ -3689,7 +3690,9 @@ class AgentPanel(QDialog):
             protocol = (sel or {}).get("protocol") or "chat"
             model = self._model_override
         else:
-            model = agent_llm.resolve_model(cfg, effort, vision_needed=bool(send_images))
+            # 视觉任务（带图或截图/电脑操控类）→ 自动切视觉模型
+            vision = agent_llm.requires_vision(ai_text, send_images)
+            model = agent_llm.resolve_model(cfg, effort, vision_needed=vision)
             sel = agent_llm.provider_for_model(cfg, model)
             base_url = (sel or {}).get("base_url") or agent_llm.DEFAULT_BASE_URL
             api_key = (sel or {}).get("api_key") or agent_llm.DEFAULT_API_KEY

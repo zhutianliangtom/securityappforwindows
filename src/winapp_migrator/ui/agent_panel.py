@@ -43,6 +43,7 @@ from PyQt6.QtWidgets import (
 from winapp_migrator.core import agent_llm, agent_engine, agent_skills, agent_sandbox, agent_tools, agent_screen
 from winapp_migrator.core.agent_mcp import McpManager
 from winapp_migrator.core.agent_screen import capture_screen_data_url
+from winapp_migrator.core import agent_feedback
 from winapp_migrator.core.input_guard import guard as user_guard
 from winapp_migrator.ui.widgets import add_brand_footer
 from winapp_migrator.utils.helpers import is_admin
@@ -1956,6 +1957,7 @@ class AgentPanel(QDialog):
         self._build_ui()
         self._init_subtitle()   # 全局置顶悬浮字幕窗（AI 操控电脑时显示操作字幕）
         self._glow = _AIControlGlow()   # 屏幕边框闪烁光圈（AI 操控中提示）
+        agent_feedback.init()   # 全局操作反馈动画覆盖层（点击/滑动/输入位置展示）
         self._sync_model_combo()   # 填充输入框右侧模型下拉（设置里的模型列表）
         self._connect_signals()
         self._restore_workdir()   # 恢复上次选择的工作目录（QSettings 持久化）

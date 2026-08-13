@@ -17,6 +17,8 @@ from PyQt6.QtWidgets import QApplication
 
 from winapp_migrator.core.input_guard import ai_suppress
 
+from winapp_migrator.core import agent_feedback
+
 user32 = ctypes.windll.user32
 
 # 鼠标事件标志
@@ -466,6 +468,7 @@ def click_at_physical(x: int, y: int, button: str = "left", clicks: int = 1,
     """
     with ai_suppress():
         user32.SetCursorPos(int(x), int(y))
+    agent_feedback.notify_click(int(x), int(y))   # 点击位置反馈动画
     down = {"left": _F_LEFTDOWN, "right": _F_RIGHTDOWN, "middle": _F_MIDDLEDOWN}[button]
     up = {"left": _F_LEFTUP, "right": _F_RIGHTUP, "middle": _F_MIDDLEUP}[button]
     with ai_suppress():
@@ -520,6 +523,7 @@ def drag(x1: int, y1: int, x2: int, y2: int, duration: float = 0.4):
 
 def scroll(delta: int):
     """滚轮：正值向上，负值向下（120 为 1 格）"""
+    agent_feedback.notify_scroll(delta)   # 滑动方向反馈动画
     with ai_suppress():
         user32.mouse_event(_MOUSE_WHEEL, 0, 0, int(delta), 0)
 
@@ -541,6 +545,7 @@ def key_press(key_name: str):
 
 def type_text(text: str, interval: float = 0.01):
     """SendInput Unicode 输入文本（支持中文/大写/符号）；特殊名（enter/tab/...）转虚拟键"""
+    agent_feedback.notify_type(text)   # 输入文本反馈气泡
     for ch in text:
         if ch in ("\n", "\r"):
             key_press("enter")

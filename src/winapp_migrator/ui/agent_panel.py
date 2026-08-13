@@ -25,7 +25,7 @@ from pathlib import Path
 
 from PyQt6.QtCore import (Qt, QTimer, QSettings, QPropertyAnimation, pyqtSignal,
                           pyqtProperty, QEasingCurve, QByteArray, QBuffer, QIODevice,
-                          QEvent, QRect, QSize, QPoint, QPointF, QMimeData, QUrl,
+                          QEvent, QRect, QRectF, QSize, QPoint, QPointF, QMimeData, QUrl,
                           QAbstractNativeEventFilter)
 from PyQt6.QtGui import (QIcon, QFont, QPainter, QPen, QColor, QPixmap, QImage,
                          QPainterPath, QKeySequence, QTextOption,
@@ -84,6 +84,14 @@ _QCOMBO = (f"QComboBox {{ background: {PANEL}; color: {TEXT}; border: 1px solid 
            f"QComboBox QAbstractItemView {{ background: {PANEL}; color: {TEXT};"
            f"border: 1px solid {BORDER}; selection-background-color: {HOVER};"
            f"selection-color: {TEXT}; }}")
+# 纯图标按钮（淡灰线条矢量图标，无文字）
+_BTN_ICON = (f"QPushButton {{ background: transparent; border: 1px solid {BORDER};"
+             f"border-radius: 8px; }}"
+             f"QPushButton:hover {{ background: {HOVER}; border-color: {BORDER_SOFT}; }}")
+_BTN_DANGER = (f"QPushButton {{ background: {ERR}; color: #FFFFFF; border: none;"
+               f"border-radius: 10px; padding: 0; }}"
+               f"QPushButton:hover {{ background: #EF4444; }}"
+               f"QPushButton:disabled {{ background: {CARD}; color: {TEXT_DIM}; }}")
 
 
 def _app_icon_path() -> str:
@@ -95,6 +103,57 @@ def _app_icon_path() -> str:
 def _std_icon(sp) -> QIcon:
     """系统矢量图标（无 emoji）"""
     return QApplication.style().standardIcon(sp)
+
+
+def _line_icon(kind: str, size: int = 18, color: str = TEXT_DIM) -> QIcon:
+    """淡灰色线条简约矢量图标（QPainter 手绘，统一线条风格，不依赖系统图标/emoji）"""
+    pm = QPixmap(size, size)
+    pm.fill(Qt.GlobalColor.transparent)
+    p = QPainter(pm)
+    p.setRenderHint(QPainter.RenderHint.Antialiasing)
+    pen = QPen(QColor(color), 1.8)
+    pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+    pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+    p.setPen(pen)
+    s = float(size)
+    if kind == "send":          # 上箭头（发送）
+        p.drawLine(QPointF(s * 0.5, s * 0.20), QPointF(s * 0.5, s * 0.80))
+        p.drawLine(QPointF(s * 0.26, s * 0.46), QPointF(s * 0.5, s * 0.20))
+        p.drawLine(QPointF(s * 0.74, s * 0.46), QPointF(s * 0.5, s * 0.20))
+    elif kind == "stop":        # 实心方块（停止）
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(QColor(color))
+        r = s * 0.28
+        p.drawRoundedRect(QRectF(s * 0.5 - r, s * 0.5 - r, r * 2, r * 2),
+                          s * 0.08, s * 0.08)
+    elif kind == "gear":        # 齿轮（设置）
+        cx = cy = s * 0.5
+        p.drawEllipse(QPointF(cx, cy), s * 0.16, s * 0.16)
+        p.drawEllipse(QPointF(cx, cy), s * 0.30, s * 0.30)
+        for i in range(8):
+            a = math.pi * i / 4
+            p.drawLine(QPointF(cx + s * 0.30 * math.cos(a), cy + s * 0.30 * math.sin(a)),
+                       QPointF(cx + s * 0.42 * math.cos(a), cy + s * 0.42 * math.sin(a)))
+    elif kind == "trash":       # 垃圾桶（清空）
+        p.drawLine(QPointF(s * 0.22, s * 0.28), QPointF(s * 0.78, s * 0.28))
+        p.drawLine(QPointF(s * 0.36, s * 0.28), QPointF(s * 0.36, s * 0.19))
+        p.drawLine(QPointF(s * 0.64, s * 0.28), QPointF(s * 0.64, s * 0.19))
+        p.drawLine(QPointF(s * 0.40, s * 0.19), QPointF(s * 0.60, s * 0.19))
+        p.drawLine(QPointF(s * 0.31, s * 0.34), QPointF(s * 0.36, s * 0.80))
+        p.drawLine(QPointF(s * 0.69, s * 0.34), QPointF(s * 0.64, s * 0.80))
+        p.drawLine(QPointF(s * 0.36, s * 0.80), QPointF(s * 0.64, s * 0.80))
+        p.drawLine(QPointF(s * 0.45, s * 0.40), QPointF(s * 0.46, s * 0.70))
+        p.drawLine(QPointF(s * 0.58, s * 0.40), QPointF(s * 0.57, s * 0.70))
+    elif kind == "new":         # 新建对话（圆角框 + 加号）
+        p.drawRoundedRect(QRectF(s * 0.18, s * 0.18, s * 0.64, s * 0.64),
+                          s * 0.14, s * 0.14)
+        p.drawLine(QPointF(s * 0.5, s * 0.32), QPointF(s * 0.5, s * 0.68))
+        p.drawLine(QPointF(s * 0.32, s * 0.5), QPointF(s * 0.68, s * 0.5))
+    elif kind == "plus":        # 加号（上传附件，精确居中）
+        p.drawLine(QPointF(s * 0.5, s * 0.26), QPointF(s * 0.5, s * 0.74))
+        p.drawLine(QPointF(s * 0.26, s * 0.5), QPointF(s * 0.74, s * 0.5))
+    p.end()
+    return QIcon(pm)
 
 
 def _esc(s: str) -> str:
@@ -1650,11 +1709,9 @@ class AgentPanel(QDialog):
         self._bubble_widgets: list = []  # 所有气泡 QLabel（窗口缩放时同步宽度）
         self._bubble_segs: dict = {}     # 气泡 id → 其 AI 段列表（思考折叠/展开局部重渲染用）
         self._html_dirty = False         # 流式刷新节流标志（60ms 批量 setText）
-        self._maximized_once = False   # 首次显示即最大化（默认最大化展示）
 
         # 发送/停止按钮转圈动画
-        self._send_anim_angle = 0
-        self._stop_anim_angle = 0
+        self._action_anim_angle = 0
 
         self._build_ui()
         self._connect_signals()
@@ -1665,12 +1722,14 @@ class AgentPanel(QDialog):
         self._timer.timeout.connect(self._refresh_meta)
         self._timer.start(400)
 
-        self._send_anim = QTimer(self)
-        self._send_anim.timeout.connect(self._tick_send_anim)
-        self._send_anim.setInterval(80)
-        self._stop_anim = QTimer(self)
-        self._stop_anim.timeout.connect(self._tick_stop_anim)
-        self._stop_anim.setInterval(80)
+        self._action_anim = QTimer(self)
+        self._action_anim.timeout.connect(self._tick_action_anim)
+        self._action_anim.setInterval(80)
+        # resize 防抖：窗口尺寸变化停止后统一重渲染气泡（合并连续 resize，避免卡顿）
+        self._resize_timer = QTimer(self)
+        self._resize_timer.setSingleShot(True)
+        self._resize_timer.setInterval(120)
+        self._resize_timer.timeout.connect(self._rebuild_bubbles_after_resize)
 
         threading.Thread(target=self._init_mcp, daemon=True).start()
 
@@ -1697,19 +1756,23 @@ class AgentPanel(QDialog):
         self.session_combo.view().customContextMenuRequested.connect(self._on_session_context_menu)
         top.addWidget(self.session_combo)
 
-        self.new_btn = QPushButton(_std_icon(QStyle.StandardPixmap.SP_FileDialogNewFolder), "新")
+        self.new_btn = QPushButton(_line_icon("new"), "")
         self.new_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.new_btn.setAutoDefault(False)
+        self.new_btn.setFixedSize(34, 34)
+        self.new_btn.setIconSize(QSize(18, 18))
         self.new_btn.setToolTip("新对话")
-        self.new_btn.setStyleSheet(_BTN_GHOST_ACCENT)
+        self.new_btn.setStyleSheet(_BTN_ICON)
         self.new_btn.clicked.connect(self._new_session)
         top.addWidget(self.new_btn)
 
-        self.settings_btn = QPushButton(_std_icon(QStyle.StandardPixmap.SP_FileDialogDetailedView), "设置")
+        self.settings_btn = QPushButton(_line_icon("gear"), "")
         self.settings_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.settings_btn.setAutoDefault(False)
+        self.settings_btn.setFixedSize(34, 34)
+        self.settings_btn.setIconSize(QSize(18, 18))
         self.settings_btn.setToolTip("AI 设置：执行模式 / 工作目录 / 工作力度 / 规则 / 提示词 / 模型接入")
-        self.settings_btn.setStyleSheet(_BTN_GHOST_ACCENT)
+        self.settings_btn.setStyleSheet(_BTN_ICON)
         self.settings_btn.clicked.connect(self._open_settings)
         top.addWidget(self.settings_btn)
 
@@ -1720,8 +1783,11 @@ class AgentPanel(QDialog):
         self.token_label.setToolTip("已用 tokens")
         top.addWidget(self.token_label)
 
-        clear_btn = QPushButton(_std_icon(QStyle.StandardPixmap.SP_TrashIcon), "清空")
+        clear_btn = QPushButton(_line_icon("trash"), "")
         clear_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        clear_btn.setAutoDefault(False)
+        clear_btn.setFixedSize(34, 34)
+        clear_btn.setIconSize(QSize(18, 18))
         clear_btn.setToolTip("清空上下文并永久删除该对话（二次弹窗确认，不可恢复）")
         clear_btn.setAutoDefault(False)
         clear_btn.setStyleSheet(_BTN_GHOST)
@@ -1786,15 +1852,15 @@ class AgentPanel(QDialog):
         bottom.addWidget(self.input, 1)
 
         # 输入框右侧「+」上传按钮：文件选择器多选（也支持拖拽 / Ctrl+V 粘贴）
-        self.attach_btn = QPushButton("+")
+        self.attach_btn = QPushButton(_line_icon("plus", 20, ACCENT), "")
         self.attach_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.attach_btn.setAutoDefault(False)
         self.attach_btn.setFixedSize(42, 42)
+        self.attach_btn.setIconSize(QSize(20, 20))
         self.attach_btn.setToolTip("上传文件/图片给 AI（也可拖拽文件到输入框或 Ctrl+V 粘贴截图）")
         self.attach_btn.setStyleSheet(
-            f"QPushButton {{ background: {PANEL}; color: {ACCENT};"
-            f"border: 1px solid {BORDER}; border-radius: 21px;"
-            "font-size: 22px; font-weight: 700; }}"
+            f"QPushButton {{ background: {PANEL}; border: 1px solid {BORDER};"
+            f"border-radius: 21px; }}"
             f"QPushButton:hover {{ border: 1px solid {ACCENT}; }}")
         self.attach_btn.clicked.connect(self._pick_attachments)
         bottom.addWidget(self.attach_btn)
@@ -1809,35 +1875,17 @@ class AgentPanel(QDialog):
         self.model_combo.setAcceptDrops(False)   # 文件拖放由面板统一接收
         bottom.addWidget(self.model_combo)
 
-        self.send_btn = QPushButton(_std_icon(QStyle.StandardPixmap.SP_ArrowUp), "发送")
-        self.send_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.send_btn.setAutoDefault(False)
-        self.send_btn.setMinimumHeight(42)
-        self.send_btn.setMinimumWidth(96)
-        self.send_btn.setStyleSheet(_BTN_PRIMARY)
-        self.send_btn.clicked.connect(self._send)
-        bottom.addWidget(self.send_btn)
-
-        self.stop_btn = QPushButton(_std_icon(QStyle.StandardPixmap.SP_MediaStop), "停止")
-        self.stop_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.stop_btn.setAutoDefault(False)
-        self.stop_btn.setMinimumHeight(42)
-        self.stop_btn.setMinimumWidth(88)
-        self.stop_btn.setEnabled(False)
-        self.stop_btn.setStyleSheet(
-            f"QPushButton {{ background: {ERR}; color: white; border: none;"
-            "border-radius: 10px; padding: 0 14px; font-size: 13px; font-weight: 700; }}"
-            f"QPushButton:hover {{ background: #EF4444; }}"
-            f"QPushButton:disabled {{ background: {CARD}; color: {TEXT_DIM}; }}")
-        self.stop_btn.clicked.connect(self._stop)
-        bottom.addWidget(self.stop_btn)
+        # 发送/停止融合按钮：空闲=发送（深蓝），运行中=转圈可点击停止，停止中=红底转圈
+        self.action_btn = QPushButton(_line_icon("send", 18, "#FFFFFF"), "")
+        self.action_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.action_btn.setAutoDefault(False)
+        self.action_btn.setFixedSize(42, 42)
+        self.action_btn.setIconSize(QSize(18, 18))
+        self.action_btn.setStyleSheet(_BTN_PRIMARY)
+        self.action_btn.setToolTip("发送")
+        self.action_btn.clicked.connect(self._on_action_clicked)
+        bottom.addWidget(self.action_btn)
         root.addLayout(bottom)
-
-        tip = QLabel("提示：AskBeforeEdit 模式每步操作弹窗确认，确认后危险命令（关机/删除等）也会执行；"
-                     "YOLO 模式不弹窗，危险命令一律拒绝。输入 /compact 压缩上下文。"
-                     "skills/agents/MCP 配置见 ~/.winapp_migrator/agent/")
-        tip.setStyleSheet(f"color: {TEXT_DIM}; font-size: 11px;")
-        root.addWidget(tip)
         add_brand_footer(self)
 
     def _connect_signals(self):
@@ -2116,7 +2164,6 @@ class AgentPanel(QDialog):
     def _apply_topbar_layout(self):
         """顶部工具栏随窗口宽度自适应：宽窗口显示完整文字，窄窗口紧凑"""
         wide = self._topbar_wide()
-        self.new_btn.setText("新对话" if wide else "新")
         if wide:
             self.session_combo.setMinimumWidth(180)
             self.session_combo.setMaximumWidth(260)
@@ -2128,9 +2175,10 @@ class AgentPanel(QDialog):
     def resizeEvent(self, e):
         super().resizeEvent(e)
         self._apply_topbar_layout()
+        # 立即同步气泡宽度（轻量操作）；字体/HTML 重渲染交给防抖定时器合并，
+        # 避免最大化↔正常窗口来回切换时对每个气泡全量重建文本造成卡顿
         mw = self._bubble_max_width()
         mn = self._bubble_min_width()
-        s = self._font_scale()
         for b in self._bubble_widgets:
             try:
                 b.setMaximumWidth(mw)
@@ -2139,12 +2187,21 @@ class AgentPanel(QDialog):
                     b.setMinimumWidth(mn)
                 else:
                     b.setMinimumWidth(0)
-                src = b.property("rich_src")   # 用户富文本气泡（含图片）随全屏放大
+            except RuntimeError:
+                pass
+        self._resize_timer.start()
+
+    def _rebuild_bubbles_after_resize(self):
+        """resize 停止后统一重渲染（字体缩放 + 用户富文本图片 + AI 气泡 HTML）"""
+        s = self._font_scale()
+        for b in self._bubble_widgets:
+            try:
+                src = b.property("rich_src")   # 用户富文本气泡（含图片）随窗口缩放
                 if src:
                     b.setText(self._scale_user_html(src, s))
             except RuntimeError:
                 pass
-        # AI 气泡随全屏缩放重渲染文本（按分组顺序对应，不重建布局避免 resize 卡顿）
+        # AI 气泡随窗口缩放重渲染文本（按分组顺序对应，不重建布局）
         ai_bubbles = [b for b in self._bubble_widgets
                       if b.property("align") == "ai" and self._bubble_alive(b)]
         for b, g in zip(ai_bubbles, self._split_groups()):
@@ -2155,9 +2212,7 @@ class AgentPanel(QDialog):
 
     def showEvent(self, e):
         super().showEvent(e)
-        if not self._maximized_once:   # 默认最大化展示
-            self._maximized_once = True
-            QTimer.singleShot(0, self.showMaximized)
+        # 默认正常窗口大小（__init__ 中已 resize），不再强制最大化
         # 管理员权限：Windows UIPI 拦截普通 Explorer 的 OLE 拖放，改用 WM_DROPFILES 原生通道
         print(f"[dnd] showEvent is_admin={is_admin()} _admin_dnd={self._admin_dnd}", flush=True)
         if is_admin() and not self._admin_dnd:
@@ -2242,7 +2297,7 @@ class AgentPanel(QDialog):
         self.msg_lay.insertLayout(self.msg_lay.count() - 1, self._spinner_row)
         self._scroll_bottom()   # 移动后确保滚到底部，动画行不被遮挡
 
-    # ---------- 发送/停止按钮转圈动画 ----------
+    # ---------- 发送/停止融合按钮状态与转圈动画 ----------
     @staticmethod
     def _spinner_icon(angle: int, color: str, size: int = 16) -> QIcon:
         pm = QPixmap(size, size)
@@ -2256,28 +2311,44 @@ class AgentPanel(QDialog):
         p.end()
         return QIcon(pm)
 
-    def _start_send_anim(self):
-        self._send_anim_angle = 0
-        self._send_anim.start()
+    def _set_action_idle(self):
+        """空闲：深蓝发送按钮（可点击发送）"""
+        self._action_anim.stop()
+        self.action_btn.setIcon(_line_icon("send", 18, "#FFFFFF"))
+        self.action_btn.setStyleSheet(_BTN_PRIMARY)
+        self.action_btn.setEnabled(True)
+        self.action_btn.setToolTip("发送")
 
-    def _tick_send_anim(self):
-        self._send_anim_angle += 30
-        self.send_btn.setIcon(self._spinner_icon(self._send_anim_angle, "#FFFFFF"))
+    def _set_action_busy(self):
+        """运行中：白色转圈动画（可点击停止）"""
+        self._action_anim_angle = 0
+        self.action_btn.setStyleSheet(_BTN_PRIMARY)
+        self.action_btn.setEnabled(True)
+        self.action_btn.setToolTip("停止当前任务")
+        self._action_anim.start()
 
-    def _start_stop_anim(self):
-        self._stop_anim_angle = 0
-        self._stop_anim.start()
+    def _set_action_stopping(self):
+        """停止中：红底转圈（禁用）"""
+        self._action_anim_angle = 0
+        self.action_btn.setStyleSheet(_BTN_DANGER)
+        self.action_btn.setEnabled(False)
+        self.action_btn.setToolTip("停止中…")
+        self._action_anim.start()
 
-    def _tick_stop_anim(self):
-        self._stop_anim_angle += 30
-        self.stop_btn.setIcon(self._spinner_icon(self._stop_anim_angle, "#FFFFFF"))
+    def _tick_action_anim(self):
+        self._action_anim_angle += 30
+        self.action_btn.setIcon(self._spinner_icon(self._action_anim_angle, "#FFFFFF"))
 
     def _stop_button_anim(self):
-        """任务结束：停止按钮动画并恢复原图标"""
-        self._send_anim.stop()
-        self._stop_anim.stop()
-        self.send_btn.setIcon(_std_icon(QStyle.StandardPixmap.SP_ArrowUp))
-        self.stop_btn.setIcon(_std_icon(QStyle.StandardPixmap.SP_MediaStop))
+        """任务结束：停止动画并恢复空闲发送状态"""
+        self._set_action_idle()
+
+    def _on_action_clicked(self):
+        """融合按钮点击：空闲→发送；运行中→停止"""
+        if self._task_active or self._eval_pending is not None:
+            self._stop()
+        else:
+            self._send()
 
     def _scroll_bottom(self):
         # 流式输出高频调用时去重，避免 singleShot 堆积；
@@ -2916,11 +2987,7 @@ class AgentPanel(QDialog):
             agent_llm.estimate_image_tokens() * len(send_images)
         self.token_label.setText(f"~{est} tk")
 
-        self.send_btn.setText("发送中…")
-        self.send_btn.setEnabled(False)
-        self.stop_btn.setText("停止")
-        self.stop_btn.setEnabled(True)
-        self._start_send_anim()   # 发送按钮转圈动画
+        self._set_action_busy()   # 发送后按钮变转圈（可点击停止）
 
         self._clear_attachments()   # 发送后清空附件条
         self._task_active = True
@@ -2990,12 +3057,8 @@ class AgentPanel(QDialog):
         if self._user_stopped:
             # 用户已在评估期间点击停止：放弃启动并复位按钮
             self._task_active = False
-            self.send_btn.setText("发送")
-            self.send_btn.setEnabled(True)
-            self.stop_btn.setText("停止")
-            self.stop_btn.setEnabled(False)
             self._hide_spinner()
-            self._stop_button_anim()
+            self._set_action_idle()
             return
         self._launch_task(ai_text, send_images, skill_names, effort)
 
@@ -3003,9 +3066,7 @@ class AgentPanel(QDialog):
         if self._engine:
             self._engine.stop()
         self._user_stopped = True
-        self.stop_btn.setText("停止中…")
-        self.stop_btn.setEnabled(False)
-        self._start_stop_anim()   # 停止按钮转圈动画
+        self._set_action_stopping()   # 红底转圈（禁用）
         # 兜底：5 秒后线程仍未退出（卡死）→ 强制隔离
         QTimer.singleShot(5000, self._force_stop_if_stuck)
 
@@ -3022,13 +3083,9 @@ class AgentPanel(QDialog):
         eng._stop.set()
         self._engine = None   # 下次发送时重建全新引擎
         self._add_status("AI 线程无法中断，已强制隔离（后台线程已断开，新任务将自动重建）", ERR)
-        self.send_btn.setText("发送")
-        self.send_btn.setEnabled(True)
-        self.stop_btn.setText("停止")
-        self.stop_btn.setEnabled(False)
         self._task_active = False
         self._hide_spinner()
-        self._stop_button_anim()
+        self._set_action_idle()
         if not self._end_badge_shown:
             self._end_badge_shown = True
             self._show_end_badge()
@@ -3177,12 +3234,7 @@ class AgentPanel(QDialog):
         self._rows = []
         self._hide_spinner()
         self.cmd_list.hide()
-        self._stop_button_anim()
-        # 任务进行中清空时，显式恢复按钮与任务标志，避免残留禁用/转圈
-        self.send_btn.setText("发送")
-        self.send_btn.setEnabled(True)
-        self.stop_btn.setText("停止")
-        self.stop_btn.setEnabled(False)
+        self._stop_button_anim()   # 融合按钮恢复空闲发送状态
         self._task_active = False
         self._user_stopped = False
         self._end_badge_shown = False
@@ -3521,12 +3573,8 @@ class AgentPanel(QDialog):
         # （不依赖 spinner/按钮状态判断，避免切换模式等路径下漏清理）
         if not running and self._task_active:
             self._task_active = False
-            self.send_btn.setText("发送")
-            self.send_btn.setEnabled(True)
-            self.stop_btn.setText("停止")
-            self.stop_btn.setEnabled(False)
             self._hide_spinner()
-            self._stop_button_anim()
+            self._set_action_idle()   # 融合按钮恢复空闲发送状态
             if not self._end_badge_shown:
                 self._end_badge_shown = True
                 self._show_end_badge()
@@ -3592,11 +3640,11 @@ class AgentPanel(QDialog):
             self._segments.append({"type": "text", "raw": ""})
 
     def _stop_send_spin(self):
-        """AI 开始响应/执行后停止发送按钮转圈（任务中保持禁用，不再一直转圈误导）"""
-        if self._send_anim.isActive():
-            self._send_anim.stop()
-            self.send_btn.setIcon(_std_icon(QStyle.StandardPixmap.SP_ArrowUp))
-            self.send_btn.setText("发送")
+        """AI 开始响应/执行后停止转圈（按钮保持可点击停止状态，不再一直转圈误导）"""
+        if self._action_anim.isActive():
+            self._action_anim.stop()
+            self.action_btn.setIcon(_line_icon("stop", 16, "#FFFFFF"))
+            self.action_btn.setToolTip("停止当前任务")
 
     def _on_delta(self, s: str):
         self._finish_thinking()   # 开始输出正文即视为思考完成

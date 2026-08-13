@@ -3665,8 +3665,7 @@ class AgentPanel(QDialog):
         # 手动指定模型则直接启动（不再评估）。
         if not self._model_override:
             self._eval_pending = (ai_text, send_images, skill_names)
-            # 评估过程不显示任何文字提示，直接以「AI 思考中…」转圈呈现
-            self._start_think()
+            # 评估静默进行，不显示任何评估提示语/动画；任务正式启动后由引擎触发转圈
             threading.Thread(target=self._assess_worker, daemon=True).start()
         else:
             self._launch_task(ai_text, send_images, skill_names,

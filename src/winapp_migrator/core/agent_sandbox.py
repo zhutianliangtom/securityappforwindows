@@ -186,6 +186,10 @@ def assess_tool(name: str, args: dict) -> tuple:
     if name == "run_command":
         return assess_command(str(args.get("command", "")))
     if name in ("move_mouse", "click", "drag"):
+        # 语义定位（text/id）无需坐标，不参与坐标校验
+        if name == "click" and (str(args.get("text", "")).strip()
+                                or args.get("id") is not None):
+            return "safe", ""
         import ctypes
         w = ctypes.windll.user32.GetSystemMetrics(0)
         h = ctypes.windll.user32.GetSystemMetrics(1)

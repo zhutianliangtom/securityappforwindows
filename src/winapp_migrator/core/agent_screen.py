@@ -152,6 +152,10 @@ def _foreground_window_hwnd() -> int:
 
     AI 交互的目标应用通常位于前台，截取它比全屏更聚焦、且不受其他窗口遮挡。
     """
+    return _fg_hwnd_impl()
+
+
+def _fg_hwnd_impl() -> int:
     hwnd = user32.GetForegroundWindow()
     if not hwnd:
         return 0
@@ -170,6 +174,38 @@ def _foreground_window_hwnd() -> int:
     if w < 100 or h < 60:          # 过小窗口（如某些托盘气泡）无截取价值
         return 0
     return int(hwnd)
+
+
+def foreground_window_hwnd() -> int:
+    """当前前台应用窗口句柄（公开接口）；0=桌面/本程序前台/不可用。"""
+    return _foreground_window_hwnd()
+
+
+def window_title(hwnd: int) -> str:
+    """窗口标题；无效句柄返回空串。"""
+    hwnd = int(hwnd or 0)
+    if not hwnd:
+        return ""
+    try:
+        n = user32.GetWindowTextLengthW(hwnd)
+        if n <= 0:
+            return ""
+        buf = ctypes.create_unicode_buffer(n + 1)
+        user32.GetWindowTextW(hwnd, buf, n + 1)
+        return buf.value.strip()
+    except Exception:
+        return ""
+
+
+def window_rect(hwnd: int) -> wintypes.RECT:
+    """窗口屏幕物理矩形（top/left/right/bottom）；无效句柄返回空矩形。"""
+    rect = wintypes.RECT()
+    try:
+        if not user32.GetWindowRect(int(hwnd or 0), ctypes.byref(rect)):
+            return wintypes.RECT()
+    except Exception:
+        pass
+    return rect
 
 
 def capture_zoom_data_url(cx: int, cy: int, region: int = 400, zoom: int = 3,

@@ -1,41 +1,44 @@
-"""三层混合精确定位器：UIA → OCR → 视觉兜底
+"""窗口级语义元素定位器（Windows）：UIA 语义树为主 + OCR 兜底
 
-L1 UIA（Windows UI Automation）：枚举原生控件，取名称+边界框中心，100% 精确。
-L2 OCR（Windows 自带 OCR，Windows.Media.Ocr）：识别屏幕文字与像素坐标，
-    像素级精度，覆盖所有含文字的 UI（按钮/菜单/输入框），无外部引擎依赖。
-L3 视觉：由 agent_screen 的网格刻度+准星对齐兜底（图标/纯图形元素）。
+核心思路（让多模态模型"稳定·快速·流畅"操控计算机）：
+- 只扫描"目标窗口"（前台应用窗口或 capture_window 指定的窗口），不扫全屏
+  → 快、干净。
+- UIA 语义树（原生控件，100% 精确坐标）为主；OCR 仅兜底 UIA 识别不到的
+  自绘/画布文字。
+- 输出紧凑的**编号语义清单** [id] (类型) 文字，模型按 id/文字引用，坐标由
+  系统确定性地解析 → 模型无需读像素刻度猜坐标。
+- 语义树带缓存：同屏多次操作复用同一份清单，界面变化才强制刷新
+  → 少一次全量扫描就多一分流畅。
 
-AI 定位目标时按此优先级取坐标，彻底绕开视觉模型"读刻度"的精度上限。
+所有元素坐标统一为**屏幕物理像素**（UIA 与 OCR 均已换算一致），
+click 直接 click_physical 执行，杜绝多套坐标换算错乱。
 """
 
 import asyncio
 import re
 import time
 
-# 无意义词（OCR/UIA 噪声，过滤掉避免干扰匹配）
+# 无意义词（UIA/OCR 噪声，过滤避免干扰匹配）
 _NOISE = {"|", "-", "_", ".", "·", "…", "→", "√", "×", "✓", "✕"}
 
-# 屏幕元素扫描缓存：连续点击时复用同一份 UIA+OCR 结果，避免每次都全屏 OCR（大提速）
-_LOC_CACHE = {"elems": None, "t": 0.0}
-_LOC_TTL = 1.5   # 秒：1.5s 内复用缓存，超过或强制刷新则重扫
+# 当前目标窗口 + 语义树缓存（按窗口缓存，界面不变则复用）
+_TARGET = {"hwnd": 0, "title": ""}
+_CACHE = {"elems": None, "t": 0.0, "hwnd": 0}
+_TTL = 2.0   # 同屏语义树复用窗口（秒）
 
-
-def get_screen_elements(force: bool = False) -> list:
-    """合并 UIA+OCR 的屏幕元素定位，带 TTL 缓存。
-
-    连续点击/多步操作时，1.5s 内复用上次扫描结果，避免重复全屏 OCR（最耗时的环节）。
-    force=True 时强制重扫（如点击后界面变化需要重新定位）。
-    """
-    now = time.time()
-    if not force and _LOC_CACHE["elems"] is not None and now - _LOC_CACHE["t"] < _LOC_TTL:
-        return _LOC_CACHE["elems"]
-    from winapp_migrator.core import agent_screen
-    png = agent_screen.capture_screen_png()
-    w, h = agent_screen.screen_size()
-    elems = locate_elements(png, w, h)
-    _LOC_CACHE["elems"] = elems
-    _LOC_CACHE["t"] = now
-    return elems
+# UIA ControlType → 给模型的语义类型提示
+_UIA_TYPE = {
+    50000: "按钮", 50001: "日历", 50002: "勾选框", 50003: "下拉框",
+    50004: "输入框", 50005: "链接", 50006: "图片", 50007: "列表项",
+    50008: "菜单", 50009: "菜单栏", 50010: "菜单项", 50011: "面板",
+    50012: "单选", 50013: "滚动条", 50014: "滑块", 50015: "分体按钮",
+    50016: "状态栏", 50017: "标签页", 50018: "标签项", 50019: "文本",
+    50020: "工具栏", 50021: "提示", 50022: "树", 50023: "树节点",
+    50024: "控件", 50025: "分组", 50026: "滑块柄", 50028: "数据网格",
+    50029: "数据项", 50030: "文档", 50032: "进度条", 50033: "数值框",
+    50034: "标题", 50040: "表格", 50041: "表格项", 50042: "选项卡",
+    50043: "工具提示", 50044: "拆分按钮",
+}
 
 
 def _meaningful(text: str) -> bool:
@@ -43,23 +46,100 @@ def _meaningful(text: str) -> bool:
     return bool(re.search(r"[\u4e00-\u9fff]", text)) or \
         bool(re.search(r"[A-Za-z0-9]{2,}", text))
 
-# ---------- L1：UIA 控件枚举 ----------
-def uia_elements() -> list:
-    """枚举当前桌面各窗口的带文本控件，返回 [{text,x,y,w,h}]（屏幕物理像素）。
 
-    maxDepth=12 遍历深层控件（复杂页面/多层菜单），并过滤无意义名称。
+# ---------- 目标窗口管理 ----------
+def set_target_window(hwnd: int, title: str = ""):
+    """设定当前操作的目标窗口（capture_window / screenshot 调用）。换窗口即失效缓存。"""
+    hwnd = int(hwnd or 0)
+    if hwnd != _TARGET["hwnd"]:
+        _CACHE["elems"] = None
+    _TARGET["hwnd"] = hwnd
+    _TARGET["title"] = title or ""
+
+
+def target_window_hwnd() -> int:
+    """当前目标窗口句柄；未显式指定则取前台应用窗口（0=无法确定/本程序前台）。"""
+    if _TARGET["hwnd"]:
+        return _TARGET["hwnd"]
+    from winapp_migrator.core import agent_screen
+    return agent_screen.foreground_window_hwnd()
+
+
+def target_window_title() -> str:
+    return _TARGET["title"]
+
+
+# ---------- 语义树获取（带缓存） ----------
+def get_elements(force: bool = False) -> list:
+    """获取当前目标窗口的语义元素列表（屏幕物理像素），带同屏缓存。
+
+    force=True 强制重扫（界面变化后需要重新定位）。
+    """
+    hwnd = target_window_hwnd()
+    if not hwnd:
+        return []
+    now = time.time()
+    if not force and _CACHE["elems"] and _CACHE["hwnd"] == hwnd \
+            and now - _CACHE["t"] < _TTL:
+        return _CACHE["elems"]
+    elems = _locate_window_elements(hwnd)
+    _CACHE.update(elems=elems, t=now, hwnd=hwnd)
+    return elems
+
+
+def invalidate_cache():
+    """手动失效语义树缓存（如界面明显变化后）"""
+    _CACHE["elems"] = None
+
+
+def _locate_window_elements(hwnd: int) -> list:
+    """合并 UIA 语义树 + 窗口 OCR，去重、按位置排序、分配稳定 id。坐标为屏幕物理像素。"""
+    from winapp_migrator.core import agent_screen
+    elems, seen = [], set()
+
+    def _add(e):
+        key = (e["x"] // 4, e["y"] // 4)   # 4px 粒度去重（UIA 与 OCR 同目标会重叠）
+        if key in seen:
+            return
+        seen.add(key)
+        elems.append(e)
+
+    for e in _window_uia_elements(hwnd):
+        _add(e)
+    try:
+        rect = agent_screen.window_rect(hwnd)
+        png = agent_screen.capture_window_png(hwnd)
+        for e in _window_ocr_elements(png, rect):
+            _add(e)
+    except Exception:
+        pass
+    # 按位置排序（自上而下、再从左到右），分配稳定 id
+    elems.sort(key=lambda e: (e["y"] // 8, e["x"]))
+    for i, e in enumerate(elems, 1):
+        e["id"] = i
+    return elems
+
+
+# ---------- L1：窗口 UIA 语义树（精确坐标） ----------
+def _window_uia_elements(hwnd: int) -> list:
+    """枚举指定窗口的 UIA 控件子树，返回 [{id,text,type,x,y,w,h}]（屏幕物理像素）。
+
+    只遍历该窗口子树（maxDepth=10），远快于全桌面遍历，且不含其他窗口干扰。
     """
     out = []
     try:
         import uiautomation as auto
-        root = auto.GetRootControl()
-        for ctrl in auto.WalkControl(root, maxDepth=12):
+        win = auto.ControlFromHandle(hwnd)
+        if win is None:
+            return []
+        for ctrl in auto.WalkControl(win, maxDepth=10):
             try:
                 name = ctrl.Name
                 rect = ctrl.BoundingRectangle
                 if name and rect and rect.width() > 0 and rect.height() > 0 \
                         and _meaningful(name.strip()):
                     out.append({"text": name.strip(),
+                                "type": _UIA_TYPE.get(int(ctrl.ControlType), "元素"),
                                 "x": rect.left + rect.width() // 2,
                                 "y": rect.top + rect.height() // 2,
                                 "w": rect.width(), "h": rect.height(),
@@ -71,22 +151,21 @@ def uia_elements() -> list:
     return out
 
 
-# ---------- L2：Windows 自带 OCR ----------
-def ocr_elements(png_bytes: bytes, img_w: int, img_h: int) -> list:
-    """OCR 识别截图文字，返回 [{text,x,y,w,h}]（图内像素坐标）。
-
-    img_w/img_h 为原始截图尺寸；OCR 结果按比例换算回原始坐标。
-    无可用 OCR 引擎时返回 []。
-    """
+# ---------- L2：窗口 OCR 兜底（自绘/画布文字） ----------
+def _window_ocr_elements(png_bytes: bytes, rect) -> list:
+    """OCR 识别窗口位图文字，换算为屏幕物理像素。
+    rect 为窗口屏幕物理矩形；位图尺寸即 rect 尺寸，OCR 坐标 + rect 原点即屏幕坐标。"""
+    items = []
     try:
-        import ctypes
-        ctypes.windll.ole32.CoInitializeEx(None, 2)   # COINIT_APARTMENTTHREADED，失败忽略
-    except Exception:
-        pass
-    try:
-        return asyncio.run(_ocr_async(png_bytes, img_w, img_h))
+        items = asyncio.run(_ocr_async(png_bytes, rect.width(), rect.height()))
     except Exception:
         return []
+    for e in items:
+        e["type"] = "文字"
+        e["src"] = "ocr"
+        e["x"] += rect.left
+        e["y"] += rect.top
+    return items
 
 
 async def _ocr_async(png_bytes: bytes, img_w: int, img_h: int) -> list:
@@ -123,30 +202,15 @@ async def _ocr_async(png_bytes: bytes, img_w: int, img_h: int) -> list:
             items.append({"text": text,
                           "x": int(r.x * sx + r.width * sx / 2),
                           "y": int(r.y * sy + r.height * sy / 2),
-                          "w": int(r.width * sx), "h": int(r.height * sy),
-                          "src": "ocr"})
+                          "w": int(r.width * sx), "h": int(r.height * sy)})
     return items
 
 
-# ---------- 统一入口：合并 UIA + OCR ----------
-def locate_elements(png_bytes: bytes, img_w: int, img_h: int) -> list:
-    """三层合并定位：UIA 优先，OCR 补充（按中心坐标去重）。"""
-    elements = []
-    seen = set()
-    for e in uia_elements() + ocr_elements(png_bytes, img_w, img_h):
-        key = (e["x"] // 4, e["y"] // 4)   # 4px 粒度去重（UIA 与 OCR 同目标会重叠）
-        if key in seen:
-            continue
-        seen.add(key)
-        elements.append(e)
-    return elements
-
-
+# ---------- 匹配 ----------
 def find_element(target: str, elements: list) -> tuple:
     """模糊匹配目标文本，返回其中心坐标 (x, y)；未命中返回 None。
 
     匹配优先级：完全相等 > 目标含于元素名 > 元素名含于目标 > 任一分词命中。
-    分词匹配支持多词目标（如"保存 文件"），提高复杂页面（多个同类按钮）的命中率。
     """
     if not target:
         return None
@@ -172,12 +236,24 @@ def find_element(target: str, elements: list) -> tuple:
     return (best["x"], best["y"]) if best else None
 
 
-def summarize(elements: list, limit: int = 60) -> str:
-    """把定位到的元素压缩成模型可读的文本清单（复杂页面元素多，limit 放宽到 60）。"""
+def find_by_id(uid: int, elements: list) -> tuple:
+    """按清单编号 id 定位，返回中心坐标 (x, y)；未命中返回 None。"""
+    for e in elements:
+        if e.get("id") == uid:
+            return e.get("x"), e.get("y")
+    return None
+
+
+def summarize(elements: list, limit: int = 80) -> str:
+    """把语义元素做成编号清单 [id] (类型) 文字。模型按 id/文字引用，坐标由系统解析。"""
+    if not elements:
+        return "（未识别到文字元素）"
     rows = []
     for e in elements[:limit]:
-        rows.append(f"「{e['text']}」@({e['x']},{e['y']})")
-    return "、".join(rows) if rows else "（未识别到文字元素）"
+        rows.append(f"[{e.get('id')}] ({e.get('type', '元素')}) {e['text']}")
+    if len(elements) > limit:
+        rows.append(f"… 还有 {len(elements) - limit} 项")
+    return "\n".join(rows)
 
 
 def _norm(s: str) -> str:

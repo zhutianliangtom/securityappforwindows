@@ -2397,7 +2397,8 @@ class AgentPanel(QDialog):
     # ---------- 操控电脑字幕（全局置顶悬浮窗） ----------
     # AI 调用鼠标/键盘工具时，在屏幕中下部显示实时操作说明 + AI 文本（不显示图片缩略图）
     _CONTROL_TOOLS = frozenset({"move_mouse", "click", "click_text", "drag",
-                                "scroll", "press_key", "type_text"})
+                                "scroll", "press_key", "type_text",
+                                "screenshot", "refresh_screen", "capture_window"})
 
     def _init_subtitle(self):
         self._subtitle = QWidget(None)

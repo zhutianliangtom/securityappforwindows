@@ -125,8 +125,19 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "screenshot",
-            "description": "截取当前整个屏幕，返回截图图像。观察屏幕/验证操作结果时使用，"
-                           "AI 视觉模型会直接看到截图内容。",
+            "description": "截取当前目标窗口（前台应用窗口）并返回可点击/可输入元素的编号语义清单 "
+                           "[id] (类型) 文字。操作界面时**必须按清单里的 id 或文字引用**（click(id=..) "
+                           "或 click_text(text=..) / type_text target/id），系统精确定位像素，"
+                           "不要自己读坐标/猜位置。",
+            "parameters": {"type": "object", "properties": {}, "required": []},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "refresh_screen",
+            "description": "界面发生变化后刷新目标窗口的语义元素清单（不需要重新发送截图，更快）。"
+                           "点击/输入会改变界面时，下一步操作前先 refresh_screen 拿到最新 [id] 清单。",
             "parameters": {"type": "object", "properties": {}, "required": []},
         },
     },
@@ -151,8 +162,8 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "capture_window",
-            "description": "截取指定窗口（只截该窗口，避开其他窗口遮挡/干扰），返回截图与窗口内文字元素清单。"
-                           "窗口图带坐标刻度，后续 click 的窗口内读数会自动换算回屏幕坐标。"
+            "description": "截取指定窗口（只截该窗口，避开其他窗口遮挡/干扰），返回窗口截图与窗口内可点击/可输入"
+                           "元素的编号语义清单 [id]。后续用 click(id=..)/click_text/type_text 操作该窗口。"
                            "先调用 list_windows 确认目标窗口，window 传标题（模糊）或编号。",
             "parameters": {"type": "object",
                            "properties": {
@@ -236,20 +247,22 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "click",
-            "description": "点击目标（返回点击后截图反馈）。两种方式：\n"
+            "description": "点击目标。三种方式，**优先语义定位**：\n"
                            "1) 传 text：按文字精确定位点击（系统 UIA+OCR 找到按钮文字确切像素中心再点，"
-                           "100% 精准，按钮/菜单/链接等文字类目标最佳，无需估算坐标）。\n"
-                           "2) 传 x/y 坐标：图标/图形目标用——先 move_mouse 移到目标附近，"
-                           "截图看红色准星是否套住，未对准则修正坐标再 move_mouse 纠正；"
-                           "对准后不带 x/y 调用 click 点当前鼠标位置（一次点准）。目标太小可先 zoom_in 放大。",
+                           "100% 精准，按钮/菜单/输入框/链接等文字类目标最佳）。\n"
+                           "2) 传 id：按 screenshot/refresh_screen 返回清单里的编号 [id] 点击（最稳，无需写长文字）。\n"
+                           "3) 传 x/y 坐标：**仅限无文字的纯图标目标**——先 move_mouse 移到目标附近，"
+                           "截图看红色准星是否套住，未对准按偏移修正再 move_mouse 纠正；对准后调用。"
+                           "目标太小可先 zoom_in 放大。",
             "parameters": {"type": "object",
                            "properties": {"text": {"type": "string",
-                                                   "description": "（可选）要点击的文字：如按钮文字/菜单项。"
-                                                                  "提供则按文字精确定位，忽略 x/y"},
+                                                   "description": "（推荐）要点击的文字：如按钮文字/菜单项。提供则按文字精确定位，忽略 x/y"},
+                                          "id": {"type": "integer",
+                                                 "description": "（推荐）screenshot/refresh_screen 清单里的元素编号 [id]。与 text 二选一"},
                                           "x": {"type": "integer",
-                                                "description": "目标坐标（可选，与 text 二选一）：提供则移动鼠标到该坐标再点击"},
+                                                "description": "（仅纯图标）目标坐标：提供则移动鼠标到该坐标再点击"},
                                           "y": {"type": "integer",
-                                                "description": "目标坐标（可选，与 text 二选一）：提供则移动鼠标到该坐标再点击"},
+                                                "description": "（仅纯图标）目标坐标：提供则移动鼠标到该坐标再点击"},
                                           "button": {"type": "string", "enum": ["left", "right", "middle"]},
                                           "clicks": {"type": "integer"}},
                            "required": []},
@@ -308,9 +321,14 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "type_text",
-            "description": "输入文本（支持中文），可含特殊键名 enter/tab。",
+            "description": "输入文本（支持中文），可含特殊键名 enter/tab。"
+                           "target（文字）或 id（清单编号）二选一指定目标输入框/控件，先自动点击定位再输入，最稳。",
             "parameters": {"type": "object",
-                           "properties": {"text": {"type": "string"}},
+                           "properties": {"text": {"type": "string"},
+                                          "target": {"type": "string",
+                                                     "description": "（推荐）目标输入框/区域文字，如 搜索、文件名、地址栏"},
+                                          "id": {"type": "integer",
+                                                 "description": "（推荐）screenshot/refresh_screen 清单里的输入框编号 [id]"}},
                            "required": ["text"]},
         },
     },
@@ -792,15 +810,40 @@ def _blocked(text: str) -> dict:
 
 
 def _click_feedback(text: str) -> dict:
-    """点击反馈：点击后立即截取当前屏幕，连同操作说明一起返回给模型。
+    """点击/输入反馈：返回操作结果文本（不强制每步整屏截图）。
 
-    返回的截图（含红色准星=当前鼠标位置）作为下一轮视觉输入，让模型能直观
-    核对点击是否落在目标上，实现"点击即反馈、可自查纠正"。
+    语义树优先模式下，模型凭返回文本 + 自身步骤即可推进；需要看界面时
+    再主动调用 screenshot，避免每步都整屏大写图往返，流畅度大提速。
     """
-    try:
-        return {"text": text, "images": [agent_screen.capture_screen_data_url()]}
-    except Exception:
-        return {"text": text, "images": []}
+    return {"text": text, "images": []}
+
+
+def _screenshot_snapshot(hwnd: int = 0) -> dict:
+    """截取目标窗口（或前台应用窗口）并返回其语义元素编号清单。
+
+    只截目标窗口（避免其他窗口干扰），返回窗口图 + 紧凑语义清单；
+    坐标由系统解析，模型按 [id]/文字引用即可，无需读像素刻度。
+    """
+    if not hwnd:
+        hwnd = agent_screen.foreground_window_hwnd()
+    if hwnd:
+        agent_locator.set_target_window(hwnd, agent_screen.window_title(hwnd))
+        try:
+            url = agent_screen.capture_window_data_url(hwnd)
+        except Exception:
+            url = agent_screen.capture_screen_data_url()
+        scope = f"「{agent_screen.window_title(hwnd) or hwnd}」窗口"
+    else:
+        agent_locator.set_target_window(0)
+        url = agent_screen.capture_screen_data_url()
+        scope = "全屏"
+    elems = agent_locator.get_elements(force=True)
+    text = (f"已截取{scope}。可点击/输入元素清单（按 [编号] 或文字引用，勿读坐标）：\n"
+            + agent_locator.summarize(elems)
+            + "\n点击用 click_text(text=...) 或 click(id=...)，"
+              "输入用 type_text(text=..., target=...)。"
+              "界面变化后先 refresh_screen 刷新清单。")
+    return {"text": text, "images": [url]}
 
 
 def _image_scale(path: str, max_w: float, max_h: float) -> tuple:
@@ -854,22 +897,17 @@ def execute_tool(name: str, args: dict, allow_dangerous: bool = False,
 
     try:
         if name == "screenshot":
-            url = agent_screen.capture_screen_data_url()
-            # 同时用 OCR 提取文字元素坐标，随截图返回给模型（像素级点击依据）
-            png = agent_screen.capture_screen_png()
-            w, h = agent_screen.screen_size()
-            elems = agent_locator.locate_elements(png, w, h)
-            # 元素坐标换算为与截图网格刻度一致的模型坐标，避免模型混用两套坐标乱点
-            for e in elems:
-                e["x"], e["y"] = agent_screen.physical_to_model(e["x"], e["y"])
-            return {"text": "已截取屏幕。" + agent_locator.summarize(elems),
-                    "images": [url]}
+            return _screenshot_snapshot()
+        if name == "refresh_screen":
+            elems = agent_locator.get_elements(force=True)
+            return {"text": "已刷新目标窗口语义清单：\n" + agent_locator.summarize(elems),
+                    "images": []}
         if name == "get_screen_size":
             w, h = agent_screen.screen_size()
             return {"text": f"屏幕分辨率 {w}x{h}",
                     "images": [agent_screen.capture_screen_data_url()]}
         if name == "click_text":
-            # 按文字精确定位（电脑操控 Agent 最优逻辑：UIA+OCR 多策略 + 精准点击）
+            # 按文字精确定位（电脑操控 Agent 最优逻辑：语义树多策略 + 精准点击）
             target = str(args.get("text", "")).strip()
             button = str(args.get("button", "left"))
             if not target:
@@ -898,11 +936,18 @@ def execute_tool(name: str, args: dict, allow_dangerous: bool = False,
                                             agent_sandbox.to_int(args.get("y")))
             return {"text": f"鼠标已移动到 ({args.get('x')}, {args.get('y')})", "images": []}
         if name == "click":
-            # 电脑操控 Agent 最优逻辑：优先 text 精准定位，其次坐标，最后当前光标
+            # 电脑操控 Agent 最优逻辑：优先 text/id 语义定位，坐标仅图标兜底
             ctl = agent_control.controller()
             _ctext = str(args.get("text", "")).strip()
+            _uid = args.get("id")
             if _ctext:
                 hit, msg = ctl.click_text(_ctext, str(args.get("button", "left")))
+                if hit is None:
+                    return {"text": f"[click] {msg}", "images": []}
+                return _click_feedback(msg)
+            if _uid is not None:
+                hit, msg = ctl.click_id(agent_sandbox.to_int(_uid),
+                                        str(args.get("button", "left")))
                 if hit is None:
                     return {"text": f"[click] {msg}", "images": []}
                 return _click_feedback(msg)
@@ -940,8 +985,23 @@ def execute_tool(name: str, args: dict, allow_dangerous: bool = False,
             agent_control.controller().press(str(args["key"]))
             return {"text": f"已按键 {args['key']}", "images": []}
         if name == "type_text":
-            agent_control.controller().type_text(str(args["text"]))
-            return {"text": f"已输入文本（{len(str(args['text']))} 字符）", "images": []}
+            text = str(args.get("text", ""))
+            target = str(args.get("target", "")).strip()
+            uid = args.get("id")
+            ctl = agent_control.controller()
+            if target:
+                hit, msg = ctl.click_text(target)
+                if hit is None:
+                    return {"text": f"[type_text] {msg}", "images": []}
+            elif uid is not None:
+                hit, msg = ctl.click_id(agent_sandbox.to_int(uid))
+                if hit is None:
+                    return {"text": f"[type_text] {msg}", "images": []}
+            ctl.type_text(text)
+            return {"text": f"已输入文本（{len(text)} 字符）"
+                            + (f"到「{target}」" if target
+                               else f"到编号 [{uid}]" if uid is not None else ""),
+                    "images": []}
         if name == "run_command":
             return _run_command(str(args.get("command", "")),
                                 agent_sandbox.to_int(args.get("wait", 5)),
@@ -1256,16 +1316,13 @@ def _capture_window(window: str) -> dict:
         cand = "\n".join(f"{i + 1}. {w['title']}" for i, w in enumerate(wins[:30]))
         return {"text": f"[capture_window] 未找到窗口「{window}」。可见窗口：\n{cand}", "images": []}
     try:
-        url = agent_screen.capture_window_data_url(target["hwnd"])
-        summary = ""
-        try:   # 窗口内 OCR 元素（窗口内像素坐标，供视觉定位参考）
-            png = agent_screen.capture_window_png(target["hwnd"])
-            elems = agent_locator.ocr_elements(png, target["w"], target["h"])
-            summary = agent_locator.summarize(elems, 40)
-        except Exception:
-            pass
-        return {"text": f"已截取窗口「{target['title']}」（{target['w']}x{target['h']}）"
-                        + (f"。窗口内文字元素：{summary}" if summary else ""),
+        hwnd = target["hwnd"]
+        agent_locator.set_target_window(hwnd, target["title"])
+        url = agent_screen.capture_window_data_url(hwnd)
+        elems = agent_locator.get_elements(force=True)
+        summary = agent_locator.summarize(elems)
+        return {"text": f"已截取窗口「{target['title']}」（{target['w']}x{target['h']}）。"
+                        f"可点击/输入元素清单（按 [编号] 或文字引用，勿读坐标）：\n{summary}",
                 "images": [url]}
     except Exception as e:
         return {"text": f"[capture_window] 截取失败: {e}", "images": []}

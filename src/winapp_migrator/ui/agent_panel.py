@@ -1757,7 +1757,14 @@ class AgentPanel(QDialog):
         self.setStyleSheet(
             f"QDialog {{ background: qlineargradient(x1:0, y1:0, x2:0, y2:1,"
             f"stop:0 {BG}, stop:1 {BG_BOTTOM}); }}"
-            + _QCOMBO)
+            + _QCOMBO
+            # 滚动条纯黑色（垂直右侧 + 水平底部），与窗口背景一起设置避免覆盖
+            + "QScrollBar:vertical { background: transparent; width: 8px; }"
+              "QScrollBar::handle:vertical { background: #000000;"
+              "border-radius: 4px; min-height: 30px; }"
+              "QScrollBar:horizontal { background: transparent; height: 8px; }"
+              "QScrollBar::handle:horizontal { background: #000000;"
+              "border-radius: 4px; min-width: 30px; }")
         # 全局悬浮提示：深色底 + 白字 + 描边，避免系统默认纯黑底看不清
         # （QToolTip 无独立 setStyleSheet，需挂到应用级样式表，仅追加一次）
         app = QApplication.instance()
@@ -1861,14 +1868,6 @@ class AgentPanel(QDialog):
 
     # ---------- UI ----------
     def _build_ui(self):
-        # 滚动条统一纯黑色（右侧垂直 + 底部水平）
-        self.setStyleSheet(
-            f"QScrollBar:vertical {{ background: transparent; width: 8px; }}"
-            f"QScrollBar::handle:vertical {{ background: #000000;"
-            "border-radius: 4px; min-height: 30px; }"
-            f"QScrollBar:horizontal {{ background: transparent; height: 8px; }}"
-            f"QScrollBar::handle:horizontal {{ background: #000000;"
-            "border-radius: 4px; min-width: 30px; }}")
         root = QVBoxLayout(self)
         root.setContentsMargins(16, 14, 16, 14)
         root.setSpacing(10)

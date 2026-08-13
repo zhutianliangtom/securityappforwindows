@@ -509,145 +509,326 @@ def _split_args(s: str) -> list:
 
 
 class _AgentSettingsDialog(QDialog):
-    """AI 设置：自定义规则 / 系统提示词 / bash 白名单 / 记忆开关 / 模型接入"""
+    """AI 设置：左侧导航 + 右侧分组设置（通用记忆 / 规则 / 提示词 / bash / 模型 / 技能 / MCP）"""
+
+    # 极简配色：纯黑 / 淡黑 / 白 / 深蓝
+    _BG = "#000000"
+    _PANEL = "#141414"
+    _PANEL2 = "#1E1E1E"
+    _TEXT = "#F5F5F5"
+    _DIM = "#8A8A8A"
+    _ACCENT = "#1E40AF"
+    _ACCENT_HOVER = "#2563EB"
+    _BORDER = "#2A2A2A"
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("AI 设置")
-        self.setMinimumSize(680, 780)
-        self.resize(700, 820)
+        self.setMinimumSize(840, 620)
+        self.resize(880, 660)
         self.setStyleSheet(
-            f"QDialog {{ background: {PANEL}; }}"
-            f"QLabel {{ color: {TEXT}; font-size: 13px; }}"
-            f"QLineEdit, QPlainTextEdit {{ background: {BG}; color: {TEXT};"
-            f"border: 1px solid {BORDER}; border-radius: 6px; padding: 6px 8px; }}")
+            f"QDialog {{ background: {self._BG}; }}"
+            f"QLabel {{ color: {self._TEXT}; font-size: 13px; }}"
+            f"QLineEdit, QPlainTextEdit, QComboBox {{ background: {self._PANEL};"
+            f"color: {self._TEXT}; border: 1px solid {self._BORDER};"
+            "border-radius: 6px; padding: 6px 10px; }}"
+            f"QLineEdit:focus, QPlainTextEdit:focus, QComboBox:focus {{"
+            f"border: 1px solid {self._ACCENT}; }}"
+            f"QComboBox QAbstractItemView {{ background: {self._PANEL};"
+            f"color: {self._TEXT}; border: 1px solid {self._BORDER};"
+            f"selection-background-color: {self._PANEL2}; }}"
+            f"QScrollBar:vertical {{ background: transparent; width: 8px; }}"
+            f"QScrollBar::handle:vertical {{ background: {self._BORDER};"
+            "border-radius: 4px; min-height: 30px; }}")
         s = agent_skills.load_settings()
+        self._mcp_servers = agent_skills.load_mcp_servers()
 
-        root = QVBoxLayout(self)
-        root.setContentsMargins(18, 16, 18, 16)
-        root.setSpacing(10)
+        root = QHBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
 
-        def _lbl(text, bold=False):
-            lb = QLabel(text)
-            lb.setStyleSheet(f"color: {TEXT}; font-size: 13px;"
-                             + ("font-weight: 700;" if bold else ""))
-            return lb
+        # ---------- 左侧导航栏（矢量图标 + 文字） ----------
+        self.nav = QListWidget()
+        self.nav.setFixedWidth(176)
+        self.nav.setStyleSheet(
+            f"QListWidget {{ background: {self._PANEL}; border: none;"
+            "padding-top: 10px; outline: none; }}"
+            f"QListWidget::item {{ color: {self._DIM}; padding: 12px 14px;"
+            "font-size: 13px; font-weight: 600; border: none;"
+            f"border-left: 3px solid transparent; }}"
+            f"QListWidget::item:hover {{ background: {self._PANEL2};"
+            f"color: {self._TEXT}; }}"
+            f"QListWidget::item:selected {{ background: {self._PANEL2};"
+            f"color: {self._ACCENT_HOVER};"
+            f"border-left: 3px solid {self._ACCENT_HOVER}; }}")
+        for name, sp in (
+            ("通用与记忆", QStyle.StandardPixmap.SP_DriveHDIcon),
+            ("自定义规则", QStyle.StandardPixmap.SP_FileDialogDetailedView),
+            ("系统提示词", QStyle.StandardPixmap.SP_FileDialogInfoView),
+            ("bash 白名单", QStyle.StandardPixmap.SP_FileDialogContentsView),
+            ("模型接入", QStyle.StandardPixmap.SP_DriveNetIcon),
+            ("技能", QStyle.StandardPixmap.SP_FileDialogNewFolder),
+            ("MCP 服务器", QStyle.StandardPixmap.SP_ComputerIcon),
+        ):
+            self.nav.addItem(QListWidgetItem(_std_icon(sp), name))
+        self.nav.setCurrentRow(0)
+        self.nav.currentRowChanged.connect(self._switch_page)
+        root.addWidget(self.nav)
 
-        # 自定义规则
-        root.addWidget(_lbl("自定义规则（每行一条，追加到系统提示词末尾）"))
-        self.rules_edit = QPlainTextEdit()
-        self.rules_edit.setPlaceholderText("如：\n操作注册表前必须先 ask_user 确认\n不要移动正在运行的应用")
-        self.rules_edit.setPlainText("\n".join(str(r) for r in (s.get("custom_rules") or [])))
-        self.rules_edit.setFixedHeight(72)
-        root.addWidget(self.rules_edit)
+        # ---------- 右侧设置项（堆叠切换） ----------
+        right = QVBoxLayout()
+        right.setContentsMargins(24, 20, 24, 16)
+        right.setSpacing(12)
+        self.stack = QStackedWidget()
+        for page in (self._build_general_page(s),
+                     self._build_rules_page(s),
+                     self._build_prompt_page(s),
+                     self._build_bash_page(s),
+                     self._build_model_page(s),
+                     self._build_skill_page(),
+                     self._build_mcp_page()):
+            self.stack.addWidget(page)
+        right.addWidget(self.stack, 1)
 
-        # 自定义系统提示词
-        root.addWidget(_lbl("自定义系统提示词（追加，不覆盖默认人设）"))
-        self.prompt_edit = QPlainTextEdit()
-        self.prompt_edit.setPlaceholderText("补充的提示词…")
-        self.prompt_edit.setPlainText(str(s.get("custom_system_prompt") or ""))
-        self.prompt_edit.setFixedHeight(84)
-        root.addWidget(self.prompt_edit)
+        btns = QHBoxLayout()
+        btns.addStretch(1)
+        save = QPushButton(_std_icon(QStyle.StandardPixmap.SP_DialogYesButton), "保存")
+        save.setStyleSheet(f"background: {self._ACCENT}; color: #FFFFFF;"
+                           "border: none; border-radius: 8px; padding: 8px 28px;"
+                           "font-size: 13px; font-weight: 700;")
+        save.setAutoDefault(False)
+        save.clicked.connect(self._save)
+        cancel = QPushButton("取消")
+        cancel.setStyleSheet(f"background: {self._PANEL}; color: {self._TEXT};"
+                             f"border: 1px solid {self._BORDER}; border-radius: 8px;"
+                             "padding: 8px 24px; font-size: 13px; font-weight: 600;")
+        cancel.setAutoDefault(False)
+        cancel.clicked.connect(self.reject)
+        btns.addWidget(save)
+        btns.addWidget(cancel)
+        right.addLayout(btns)
+        root.addLayout(right)
 
-        # bash 白名单
-        root.addWidget(_lbl("自定义 bash 命令白名单（每行一条，白名单命令免确认）"))
-        self.safe_edit = QPlainTextEdit()
-        self.safe_edit.setPlaceholderText("如：\nnpm\npip\npython\ngit")
-        self.safe_edit.setPlainText(
-            "\n".join(str(c) for c in (s.get("custom_safe_commands") or [])))
-        self.safe_edit.setFixedHeight(72)
-        root.addWidget(self.safe_edit)
+        self._reload_mcp_list()
 
-        # 记忆开关
+    # ---------- 各分组页面 ----------
+    def _page(self, title: str) -> QWidget:
+        w = QWidget()
+        lay = QVBoxLayout(w)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(10)
+        t = QLabel(title)
+        t.setStyleSheet(f"color: {self._TEXT}; font-size: 16px; font-weight: 700;")
+        lay.addWidget(t)
+        return w
+
+    def _page_body(self, w: QWidget) -> QVBoxLayout:
+        return w.layout()
+
+    def _build_general_page(self, s) -> QWidget:
+        w = self._page("通用与记忆")
+        lay = self._page_body(w)
         self.memory_check = QCheckBox("开启长期记忆（save_memory / load_memory）")
         self.memory_check.setChecked(bool(s.get("memory_enabled", True)))
-        self.memory_check.setStyleSheet(f"color: {TEXT}; font-size: 13px; spacing: 8px;")
-        root.addWidget(self.memory_check)
-
+        self.memory_check.setStyleSheet(f"color: {self._TEXT}; font-size: 13px; spacing: 8px;")
+        lay.addWidget(self.memory_check)
         # 允许 AI 直接工作（无确认直行，减少询问与约束）
         self.direct_check = QCheckBox(
             "允许 AI 直接工作（无确认直行：仅调用必要的技能/命令，"
             "不再逐步询问/确认/约束）")
-        self.direct_check.setStyleSheet(f"color: {WARN}; font-size: 13px; spacing: 8px;")
+        self.direct_check.setStyleSheet(f"color: {self._DIM}; font-size: 13px; spacing: 8px;")
         saved_mode = QSettings("WinAppMigrator", "WinAppMigrator").value("agent_mode", "ask")
         self.direct_check.setChecked(saved_mode == "yolo")
         self.direct_check.toggled.connect(self._on_direct_toggled)
-        root.addWidget(self.direct_check)
+        lay.addWidget(self.direct_check)
+        tip = QLabel("记忆：AI 可将重要信息写入 memory.md 并在后续任务中读取。")
+        tip.setStyleSheet(f"color: {self._DIM}; font-size: 12px;")
+        lay.addWidget(tip)
+        lay.addStretch(1)
+        return w
 
-        # 模型接入（同服务商多模型，按工作力度路由）
-        root.addWidget(_lbl("模型接入（同服务商多模型；模型名含纯文本关键字如 deepseek "
-                            "自动禁用图片/截图能力）", bold=True))
+    def _build_rules_page(self, s) -> QWidget:
+        w = self._page("自定义规则")
+        lay = self._page_body(w)
+        sub = QLabel("每行一条，追加到系统提示词末尾，约束 AI 行为")
+        sub.setStyleSheet(f"color: {self._DIM}; font-size: 12px;")
+        lay.addWidget(sub)
+        self.rules_edit = QPlainTextEdit()
+        self.rules_edit.setPlaceholderText("如：\n操作注册表前必须先 ask_user 确认\n不要移动正在运行的应用")
+        self.rules_edit.setPlainText("\n".join(str(r) for r in (s.get("custom_rules") or [])))
+        lay.addWidget(self.rules_edit, 1)
+        return w
+
+    def _build_prompt_page(self, s) -> QWidget:
+        w = self._page("系统提示词")
+        lay = self._page_body(w)
+        sub = QLabel("追加到默认人设之后，不覆盖内置角色设定")
+        sub.setStyleSheet(f"color: {self._DIM}; font-size: 12px;")
+        lay.addWidget(sub)
+        self.prompt_edit = QPlainTextEdit()
+        self.prompt_edit.setPlaceholderText("补充的提示词…")
+        self.prompt_edit.setPlainText(str(s.get("custom_system_prompt") or ""))
+        lay.addWidget(self.prompt_edit, 1)
+        return w
+
+    def _build_bash_page(self, s) -> QWidget:
+        w = self._page("bash 命令白名单")
+        lay = self._page_body(w)
+        sub = QLabel("每行一条；白名单命令执行时免确认（其余命令仍按当前模式处理）")
+        sub.setStyleSheet(f"color: {self._DIM}; font-size: 12px;")
+        lay.addWidget(sub)
+        self.safe_edit = QPlainTextEdit()
+        self.safe_edit.setPlaceholderText("如：\nnpm\npip\npython\ngit")
+        self.safe_edit.setPlainText(
+            "\n".join(str(c) for c in (s.get("custom_safe_commands") or [])))
+        lay.addWidget(self.safe_edit, 1)
+        return w
+
+    def _build_model_page(self, s) -> QWidget:
+        w = self._page("模型接入")
+        lay = self._page_body(w)
+        sub = QLabel("同服务商多模型，按工作力度路由；模型名含纯文本关键字（如 deepseek）自动禁用图片/截图能力")
+        sub.setStyleSheet(f"color: {self._DIM}; font-size: 12px;")
+        sub.setWordWrap(True)
+        lay.addWidget(sub)
         m = s.get("model") or {}
         if not isinstance(m, dict):
             m = {}
         cfg = agent_llm.load_model_config()   # 规范化：models / effort / auto 等
         form = QFormLayout()
-        form.setSpacing(8)
+        form.setSpacing(10)
+        form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
         self.base_edit = QLineEdit(str(m.get("base_url") or ""))
         self.base_edit.setPlaceholderText("https://api.example.com/v1（示例地址）")
-        self.base_edit.setMinimumWidth(360)
         form.addRow("接口地址", self.base_edit)
         self.key_edit = QLineEdit(str(m.get("api_key") or ""))
         self.key_edit.setEchoMode(QLineEdit.EchoMode.Password)
         self.key_edit.setPlaceholderText("sk-xxxxxxxx（示例，填写真实 Key）")
-        self.key_edit.setMinimumWidth(360)
         form.addRow("API Key", self.key_edit)
         self.models_edit = QLineEdit(", ".join(cfg["models"]))
         self.models_edit.setPlaceholderText("模型名逗号分隔，如 deepseek-v4-pro, deepseek-v4-flash")
-        self.models_edit.setMinimumWidth(360)
         form.addRow("模型列表", self.models_edit)
         self.protocol_combo = QComboBox()
-        self.protocol_combo.setStyleSheet(
-            f"QComboBox {{ background: {BG}; color: {TEXT};"
-            f"border: 1px solid {BORDER}; border-radius: 6px; padding: 4px 8px; }}")
-        self.protocol_combo.setMinimumWidth(360)
         self.protocol_combo.addItem("Chat Completions（/v1/chat/completions）", "chat")
         self.protocol_combo.addItem("Responses API（/v1/responses）", "responses")
         pidx = self.protocol_combo.findData(cfg.get("protocol", "chat"))
         self.protocol_combo.setCurrentIndex(pidx if pidx >= 0 else 0)
         form.addRow("接口协议", self.protocol_combo)
-        root.addLayout(form)
-
+        lay.addLayout(form)
         # 推理参数（工作力度与自动按难度开关统一在面板左上角调整）
         self.send_effort_check = QCheckBox(
             "向 API 发送 reasoning_effort 参数（仅支持该参数的服务商开启，如 OpenAI o 系列 / Qwen）")
-        self.send_effort_check.setStyleSheet(f"color: {TEXT}; font-size: 13px; spacing: 8px;")
+        self.send_effort_check.setStyleSheet(f"color: {self._TEXT}; font-size: 13px; spacing: 8px;")
         self.send_effort_check.setChecked(cfg.get("send_effort", False))
-        root.addWidget(self.send_effort_check)
+        lay.addWidget(self.send_effort_check)
+        lay.addStretch(1)
+        return w
 
-        # 导入市场标准技能（Claude Skills / Trae Skill 格式的 SKILL.md 或 zip）
-        imp = QPushButton("导入市场标准技能（SKILL.md 或 zip 包）…")
-        imp.setStyleSheet(f"background: {PANEL}; color: {TEXT};"
-                          f"border: 1px solid {BORDER};")
+    def _build_skill_page(self) -> QWidget:
+        w = self._page("技能")
+        lay = self._page_body(w)
+        sub = QLabel("导入市场标准技能或删除用户自建技能（内置技能不可删除）")
+        sub.setStyleSheet(f"color: {self._DIM}; font-size: 12px;")
+        lay.addWidget(sub)
+        imp = QPushButton(_std_icon(QStyle.StandardPixmap.SP_FileDialogNewFolder),
+                          "导入市场标准技能（SKILL.md 或 zip 包）…")
+        imp.setStyleSheet(f"background: {self._PANEL}; color: {self._TEXT};"
+                          f"border: 1px solid {self._BORDER}; border-radius: 8px;"
+                          "padding: 8px 16px; font-weight: 600;")
         imp.setAutoDefault(False)
         imp.setToolTip("选择市场标准的 SKILL.md 文件或含 SKILL.md 的 zip 包，"
                        "导入到技能目录并即时生效（/技能名 或对话描述即可调用）")
         imp.clicked.connect(self._import_skill)
-        root.addWidget(imp)
-
-        # 删除用户导入/创建的技能（内置技能不可删除）
-        del_skill = QPushButton("删除技能…")
-        del_skill.setStyleSheet(f"background: {PANEL}; color: {TEXT};"
-                                f"border: 1px solid {BORDER};")
+        lay.addWidget(imp)
+        del_skill = QPushButton(_std_icon(QStyle.StandardPixmap.SP_TrashIcon), "删除技能…")
+        del_skill.setStyleSheet(f"background: {self._PANEL}; color: {self._DIM};"
+                                f"border: 1px solid {self._BORDER}; border-radius: 8px;"
+                                "padding: 8px 16px; font-weight: 600;")
         del_skill.setAutoDefault(False)
         del_skill.setToolTip("删除用户导入/创建的技能（连同 SKILL.md 与附属文件）；内置技能不可删除")
         del_skill.clicked.connect(self._delete_skill)
-        root.addWidget(del_skill)
+        lay.addWidget(del_skill)
+        lay.addStretch(1)
+        return w
 
-        btns = QHBoxLayout()
-        ok = QPushButton(_std_icon(QStyle.StandardPixmap.SP_DialogYesButton), "保存")
-        ok.setStyleSheet(f"background: {OK}; color: #06281B;")
-        ok.setAutoDefault(False)
-        ok.clicked.connect(self._save)
-        cancel = QPushButton("取消")
-        cancel.setStyleSheet(f"background: {PANEL}; color: {TEXT};"
-                             f"border: 1px solid {BORDER};")
-        cancel.setAutoDefault(False)
-        cancel.clicked.connect(self.reject)
-        btns.addWidget(ok)
-        btns.addWidget(cancel)
-        root.addLayout(btns)
-        add_brand_footer(self)
+    def _build_mcp_page(self) -> QWidget:
+        w = self._page("MCP 服务器")
+        lay = self._page_body(w)
+        sub = QLabel("配置外部工具服务器（stdio 本地命令 / sse 远程 URL），保存后自动重连，AI 即可调用其工具")
+        sub.setStyleSheet(f"color: {self._DIM}; font-size: 12px;")
+        sub.setWordWrap(True)
+        lay.addWidget(sub)
+        self.mcp_list = QListWidget()
+        self.mcp_list.setStyleSheet(
+            f"QListWidget {{ background: {self._PANEL}; color: {self._TEXT};"
+            f"border: 1px solid {self._BORDER}; border-radius: 8px; padding: 6px; }}"
+            f"QListWidget::item {{ padding: 8px 10px; border-radius: 6px; }}"
+            f"QListWidget::item:selected {{ background: {self._PANEL2};"
+            f"color: {self._ACCENT_HOVER}; }}")
+        lay.addWidget(self.mcp_list, 1)
+        row = QHBoxLayout()
+        row.setSpacing(8)
+        add_b = QPushButton(_std_icon(QStyle.StandardPixmap.SP_FileDialogNewFolder), "添加")
+        add_b.setStyleSheet(f"background: {self._ACCENT}; color: #FFFFFF;"
+                            "border: none; border-radius: 8px; padding: 7px 16px; font-weight: 700;")
+        add_b.setAutoDefault(False)
+        add_b.clicked.connect(self._on_mcp_add)
+        edit_b = QPushButton("编辑")
+        edit_b.setStyleSheet(f"background: {self._PANEL}; color: {self._TEXT};"
+                             f"border: 1px solid {self._BORDER}; border-radius: 8px;"
+                             "padding: 7px 16px; font-weight: 600;")
+        edit_b.setAutoDefault(False)
+        edit_b.clicked.connect(self._on_mcp_edit)
+        del_b = QPushButton(_std_icon(QStyle.StandardPixmap.SP_TrashIcon), "删除")
+        del_b.setStyleSheet(f"background: {self._PANEL}; color: {self._DIM};"
+                            f"border: 1px solid {self._BORDER}; border-radius: 8px;"
+                            "padding: 7px 16px; font-weight: 600;")
+        del_b.setAutoDefault(False)
+        del_b.clicked.connect(self._on_mcp_delete)
+        row.addWidget(add_b)
+        row.addWidget(edit_b)
+        row.addWidget(del_b)
+        row.addStretch(1)
+        lay.addLayout(row)
+        return w
+
+    def _switch_page(self, idx: int):
+        self.stack.setCurrentIndex(idx)
+
+    # ---------- MCP 列表操作 ----------
+    def _reload_mcp_list(self):
+        self.mcp_list.clear()
+        for srv in self._mcp_servers:
+            typ = "stdio" if srv.get("type", "stdio") == "stdio" else "sse"
+            detail = srv.get("command", "") or srv.get("url", "")
+            self.mcp_list.addItem(f"{srv.get('name', '?')}   [{typ}]   {detail}")
+
+    def _current_mcp(self) -> dict:
+        row = self.mcp_list.currentRow()
+        if 0 <= row < len(self._mcp_servers):
+            return self._mcp_servers[row]
+        return None
+
+    def _on_mcp_add(self):
+        dlg = _McpServerDialog(parent=self)
+        if dlg.exec() == QDialog.DialogCode.Accepted:
+            self._mcp_servers.append(dlg.server_data())
+            self._reload_mcp_list()
+
+    def _on_mcp_edit(self):
+        if self._current_mcp() is None:
+            QMessageBox.information(self, "提示", "请先选择一个服务器")
+            return
+        dlg = _McpServerDialog(server=self._current_mcp(), parent=self)
+        if dlg.exec() == QDialog.DialogCode.Accepted:
+            self._mcp_servers[self.mcp_list.currentRow()] = dlg.server_data()
+            self._reload_mcp_list()
+
+    def _on_mcp_delete(self):
+        row = self.mcp_list.currentRow()
+        if 0 <= row < len(self._mcp_servers):
+            self._mcp_servers.pop(row)
+            self._reload_mcp_list()
 
     def _on_direct_toggled(self, checked: bool):
         """打开「允许 AI 直接工作」需二次确认，防止误开"""
@@ -693,15 +874,21 @@ class _AgentSettingsDialog(QDialog):
             "model": model,
         }
         if agent_skills.save_settings(data):
+            # 保存 MCP 服务器配置；成功后触发后台重连
+            mcp_ok = agent_skills.save_mcp_servers(self._mcp_servers)
+            p = self.parent()
+            if mcp_ok and p is not None and hasattr(p, "_reconnect_mcp"):
+                p._reconnect_mcp()
             # 「允许 AI 直接工作」勾选 → 面板切到无确认直行（yolo）；取消 → 恢复每步确认（ask）
             q = QSettings("WinAppMigrator", "WinAppMigrator")
             want = "yolo" if self.direct_check.isChecked() else "ask"
             q.setValue("agent_mode", want)
-            p = self.parent()
             if p is not None and hasattr(p, "mode_combo"):
                 idx = p.mode_combo.findData(want)
                 if idx >= 0:
                     p.mode_combo.setCurrentIndex(idx)
+            if not mcp_ok:
+                QMessageBox.warning(self, "提示", "MCP 配置保存失败（无写入权限），其余设置已保存")
             self.accept()
         else:
             QMessageBox.warning(self, "错误", "保存设置失败（无写入权限）")
@@ -749,12 +936,16 @@ class _McpServerDialog(QDialog):
     def __init__(self, server: dict = None, parent=None):
         super().__init__(parent)
         self.setWindowTitle("编辑 MCP 服务器" if server else "添加 MCP 服务器")
-        self.setMinimumWidth(460)
+        self.setMinimumWidth(480)
+        A = _AgentSettingsDialog
         self.setStyleSheet(
-            f"QDialog {{ background: {PANEL}; }}"
-            f"QLabel {{ color: {TEXT}; font-size: 13px; }}"
-            f"QLineEdit, QComboBox {{ background: {BG}; color: {TEXT};"
-            f"border: 1px solid {BORDER}; border-radius: 6px; padding: 6px 10px; }}")
+            f"QDialog {{ background: {A._BG}; }}"
+            f"QLabel {{ color: {A._TEXT}; font-size: 13px; }}"
+            f"QLineEdit, QComboBox {{ background: {A._PANEL}; color: {A._TEXT};"
+            f"border: 1px solid {A._BORDER}; border-radius: 6px; padding: 6px 10px; }}"
+            f"QLineEdit:focus, QComboBox:focus {{ border: 1px solid {A._ACCENT}; }}"
+            f"QComboBox QAbstractItemView {{ background: {A._PANEL}; color: {A._TEXT};"
+            f"border: 1px solid {A._BORDER}; selection-background-color: {A._PANEL2}; }}")
         self._server = server or {}
         form = QFormLayout(self)
         form.setContentsMargins(18, 16, 18, 16)
@@ -792,13 +983,16 @@ class _McpServerDialog(QDialog):
         form.addRow("URL", self.url_edit)
 
         btns = QHBoxLayout()
+        A = _AgentSettingsDialog
         ok = QPushButton(_std_icon(QStyle.StandardPixmap.SP_DialogYesButton), "确定")
-        ok.setStyleSheet(f"background: {OK}; color: #06281B;")
+        ok.setStyleSheet(f"background: {A._ACCENT}; color: #FFFFFF; border: none;"
+                         "border-radius: 8px; padding: 8px 24px; font-weight: 700;")
         ok.setAutoDefault(False)
         ok.clicked.connect(self._accept_check)
         cancel = QPushButton("取消")
-        cancel.setStyleSheet(f"background: {PANEL}; color: {TEXT};"
-                             f"border: 1px solid {BORDER};")
+        cancel.setStyleSheet(f"background: {A._PANEL}; color: {A._TEXT};"
+                             f"border: 1px solid {A._BORDER}; border-radius: 8px;"
+                             "padding: 8px 22px; font-weight: 600;")
         cancel.setAutoDefault(False)
         cancel.clicked.connect(self.reject)
         btns.addWidget(ok)
@@ -864,11 +1058,15 @@ class _McpManagerDialog(QDialog):
         self.setMinimumSize(520, 420)
         self.on_saved = on_saved
         self.servers = agent_skills.load_mcp_servers()
+        A = _AgentSettingsDialog
         self.setStyleSheet(
-            f"QDialog {{ background: {PANEL}; }}"
-            f"QLabel {{ color: {TEXT}; font-size: 13px; }}"
-            f"QListWidget {{ background: {BG}; color: {TEXT}; border: 1px solid {BORDER};"
-            "border-radius: 8px; padding: 6px; }}"
+            f"QDialog {{ background: {A._BG}; }}"
+            f"QLabel {{ color: {A._TEXT}; font-size: 13px; }}"
+            f"QListWidget {{ background: {A._PANEL}; color: {A._TEXT};"
+            f"border: 1px solid {A._BORDER}; border-radius: 8px; padding: 6px; }}"
+            f"QListWidget::item {{ padding: 8px 10px; border-radius: 6px; }}"
+            f"QListWidget::item:selected {{ background: {A._PANEL2};"
+            f"color: {A._ACCENT_HOVER}; }}"
             f"QPushButton {{ border: none; border-radius: 8px; padding: 7px 16px;"
             "font-weight: 700; }}")
 
@@ -886,16 +1084,16 @@ class _McpManagerDialog(QDialog):
 
         btns = QHBoxLayout()
         add_b = QPushButton(_std_icon(QStyle.StandardPixmap.SP_FileDialogNewFolder), "添加")
-        add_b.setStyleSheet(f"background: {PANEL}; color: {ACCENT};"
-                            f"border: 1px solid {ACCENT};")
+        add_b.setStyleSheet(f"background: {A._ACCENT}; color: #FFFFFF;"
+                            "border: none;")
         add_b.clicked.connect(self._on_add)
         edit_b = QPushButton("编辑")
-        edit_b.setStyleSheet(f"background: {PANEL}; color: {TEXT};"
-                             f"border: 1px solid {BORDER};")
+        edit_b.setStyleSheet(f"background: {A._PANEL}; color: {A._TEXT};"
+                             f"border: 1px solid {A._BORDER};")
         edit_b.clicked.connect(self._on_edit)
         del_b = QPushButton("删除")
-        del_b.setStyleSheet(f"background: {PANEL}; color: {ERR};"
-                            f"border: 1px solid {ERR};")
+        del_b.setStyleSheet(f"background: {A._PANEL}; color: {A._DIM};"
+                            f"border: 1px solid {A._BORDER};")
         del_b.clicked.connect(self._on_delete)
         for b in (add_b, edit_b, del_b):
             b.setAutoDefault(False)
@@ -906,12 +1104,12 @@ class _McpManagerDialog(QDialog):
         lay.addLayout(btns)
 
         save_b = QPushButton(_std_icon(QStyle.StandardPixmap.SP_DialogYesButton), "保存并重连")
-        save_b.setStyleSheet(f"background: {OK}; color: #06281B;")
+        save_b.setStyleSheet(f"background: {A._ACCENT}; color: #FFFFFF; border: none;")
         save_b.setAutoDefault(False)
         save_b.clicked.connect(self._on_save)
         cancel_b = QPushButton("取消")
-        cancel_b.setStyleSheet(f"background: {PANEL}; color: {TEXT};"
-                               f"border: 1px solid {BORDER};")
+        cancel_b.setStyleSheet(f"background: {A._PANEL}; color: {A._TEXT};"
+                               f"border: 1px solid {A._BORDER};")
         cancel_b.setAutoDefault(False)
         cancel_b.clicked.connect(self.reject)
         foot = QHBoxLayout()
@@ -1013,7 +1211,7 @@ class _AskUserDialog(QDialog):
                 self._choice_btns.append(b)
                 lay.addWidget(b)
             # "其他…"选项：勾选后显示输入框，可输入自定义内容
-            other = QCheckBox("✏️ 其他…") if multi_select else QRadioButton("✏️ 其他…")
+            other = QCheckBox("其他…") if multi_select else QRadioButton("其他…")
             other.setAutoExclusive(not multi_select)
             other.toggled.connect(lambda on: self._free_input.setVisible(on))
             self._choice_btns.append(other)
@@ -1044,9 +1242,9 @@ class _AskUserDialog(QDialog):
         custom = self._free_input.text().strip() if self._free_input.isVisible() else ""
         # 自定义输入内容替换"其他…"选项；未填写的"其他…"直接忽略
         if custom:
-            sel = [custom if t.startswith("✏️ 其他") else t for t in sel]
+            sel = [custom if t.startswith("其他…") else t for t in sel]
         else:
-            sel = [t for t in sel if not t.startswith("✏️ 其他")]
+            sel = [t for t in sel if not t.startswith("其他…")]
         if sel:
             self._answer = " / ".join(sel)
         elif custom:
@@ -2037,9 +2235,11 @@ class AgentPanel(QDialog):
         agent_tools.set_workdir(d)
         if d:
             name = os.path.basename(d.rstrip("\\/")) or d
-            self.workdir_btn.setText(f"📁 {name}"[:24])
+            self.workdir_btn.setText(name[:22])
+            self.workdir_btn.setIcon(_std_icon(QStyle.StandardPixmap.SP_DirOpenIcon))
         else:
             self.workdir_btn.setText("选择工作目录")
+            self.workdir_btn.setIcon(QIcon())
         self.workdir_btn.setToolTip(d or "选择 AI 工作目录")
 
     # ---------- 消息气泡 ----------
@@ -2307,12 +2507,12 @@ class AgentPanel(QDialog):
                     parts.append(
                         f'<div style="color:{TEXT_DIM};font-size:{f_sm}px;margin-top:2px;">'
                         f'<a href="think:toggle" style="color:{ACCENT};text-decoration:none;">'
-                        f'💭 思考过程（已折叠 · 点击展开）</a></div>')
+                        f'思考过程（已折叠 · 点击展开）</a></div>')
                 else:
                     # 展开态：标题在上，思考内容在下，末尾可收起
                     parts.append(
                         f'<div style="color:{TEXT_DIM};font-size:{f_sm}px;margin:2px 0;">'
-                        f'💭 思考过程&nbsp;'
+                        f'思考过程&nbsp;'
                         f'<a href="think:toggle" style="color:{TEXT_DIM};font-size:{f_sm}px;'
                         f'text-decoration:none;">收起 ▲</a></div>'
                         f'<div style="color:{TEXT_DIM};font-size:{f_sm}px;font-style:italic;'

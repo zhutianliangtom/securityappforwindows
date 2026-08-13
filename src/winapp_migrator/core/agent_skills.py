@@ -935,12 +935,14 @@ def _skill_router_block() -> str:
 
 
 def build_system_prompt(agent_name: str = "", extra_skills: list = None,
-                        text_only: bool = False, memory_enabled: bool = True) -> str:
+                        text_only: bool = False, memory_enabled: bool = True,
+                        direct: bool = False) -> str:
     """构造 system prompt：人设 persona + 基础提示 + 严格规则 + 工具执行规范 + 技能说明 + 工具列表
 
     extra_skills: 手动调用的技能名列表（/技能名 提示），其 instruction 注入本任务系统提示词。
     text_only: 纯文本模型（无视觉输入），追加禁用截图/视觉引导。
     memory_enabled: 记忆开关，关闭时追加禁用记忆工具引导。
+    direct: 直接工作模式（无确认直行），追加减少询问/确认的引导。
     自定义规则 / 自定义系统提示词从 settings.json 读取并追加。
     """
     agent = next((a for a in load_agents() if a.get("name") == agent_name), None) \
@@ -1008,6 +1010,10 @@ def build_system_prompt(agent_name: str = "", extra_skills: list = None,
                    "请通过文本工具（read_file、run_command、list_directory 等）完成用户请求。")
     if not memory_enabled:
         prompt += "\n\n当前未开启记忆功能：不要调用 save_memory / load_memory。"
+    if direct:
+        prompt += ("\n\n当前为「直接工作模式」（用户已开启无确认直行）：直接调用完成任务所需的"
+                   "必要技能与命令，无需逐步询问或请求确认；仅当信息确实缺失且会做错方向、"
+                   "或涉及不可逆/危险操作时，才调用 ask_user 提问；不要做多余的确认、验证或演示步骤。")
     settings = load_settings()
     rules = settings.get("custom_rules") or []
     valid = [str(r).strip() for r in rules if str(r).strip()]

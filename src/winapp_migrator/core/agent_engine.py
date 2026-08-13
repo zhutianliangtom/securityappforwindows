@@ -109,7 +109,8 @@ class AgentEngine:
                  mcp_manager=None,
                  on_delta=None, on_status=None, on_result=None, confirm=None,
                  ask_user=None, on_reasoning=None, auto_vd: bool = False,
-                 text_only: bool = False, memory_enabled: bool = True):
+                 text_only: bool = False, memory_enabled: bool = True,
+                 direct: bool = False):
         """
         on_delta: Callable[[str], None]      流式文本增量
         on_status: Callable[[str], None]     步骤状态（如"正在思考/执行工具 click"）
@@ -121,6 +122,8 @@ class AgentEngine:
                  实现"完全静默无感"：AI 操作不打扰用户主桌面
         text_only: bool 纯文本模型（无图像输入），过滤截图/视觉工具
         memory_enabled: bool 记忆开关，关闭时过滤 save_memory/load_memory 工具
+        direct: bool 直接工作模式（无确认直行）：跳过开发规则确认与技能路由硬拦截，
+                减少询问/约束，直接调用必要技能与命令完成任务
         """
         self.llm = llm
         self.mcp = mcp_manager
@@ -133,6 +136,7 @@ class AgentEngine:
         self.auto_vd = auto_vd
         self.text_only = text_only
         self.memory_enabled = memory_enabled
+        self.direct = direct
         self._messages: list = []
         self.tokens = {"prompt": 0, "completion": 0}
         self.last_estimate = 0       # 最近一次请求前的预计算（输入 tokens）
@@ -288,9 +292,12 @@ class AgentEngine:
             m["content"] = kept
 
     def start(self, user_input: str, agent_name: str = "", images: list = None,
-              skills: list = None):
+              skills: list = None, direct: bool = None):
         """后台线程执行一轮任务；images: 用户拖入的图片 data URL 列表；
-        skills: 手动调用的技能名列表（/技能名 提示），其 instruction 注入系统提示词"""
+        skills: 手动调用的技能名列表（/技能名 提示），其 instruction 注入系统提示词；
+        direct: 覆盖直接工作模式（None=沿用构造时设置）"""
+        if direct is not None:
+            self.direct = direct
         self._stop.clear()
         self._thread = threading.Thread(target=self.run,
                                         args=(user_input, agent_name, images, skills),
@@ -328,8 +335,9 @@ class AgentEngine:
 
     def _execute(self, name: str, args: dict, allow_dangerous: bool = False) -> dict:
         """执行内置或 MCP 工具，返回 {"text", "images"}"""
-        # 技能路由硬拦截：被技能覆盖的底层工具，须先 read_file 对应 SKILL.md 规范流程
-        if name not in _SKIP_SKILL_GATE:
+        # 技能路由硬拦截：被技能覆盖的底层工具，须先 read_file 对应 SKILL.md 规范流程。
+        # direct 直行模式跳过（用户已授权直接工作，不再要求先读技能）
+        if name not in _SKIP_SKILL_GATE and not self.direct:
             if not self._skill_gate:
                 self._skill_gate = agent_skills.skills_covering_tools(list(self._builtin_names))
             missing = [s for s in self._skill_gate.get(name, []) if s not in self._skills_read]
@@ -451,7 +459,8 @@ class AgentEngine:
         用户中途新增/修改的自定义规则在下一轮立即生效"""
         return agent_skills.build_system_prompt(agent_name, extra_skills=skills,
                                                 text_only=self.text_only,
-                                                memory_enabled=self.memory_enabled)
+                                                memory_enabled=self.memory_enabled,
+                                                direct=self.direct)
 
     @staticmethod
     def _rules_text() -> str:
@@ -546,7 +555,7 @@ class AgentEngine:
                         self.end_state = "stopped"
                         return
                     name = call["function"]["name"]
-                    if name in _DEV_TOOLS and not self._rules_confirmed:
+                    if name in _DEV_TOOLS and not self._rules_confirmed and not self.direct:
                         # 动手开发前的强制规则读取：首次调用开发类工具不放行，
                         # 真实读取规则文本回给模型确认，下一轮重新发起再正常执行
                         rules_just = True

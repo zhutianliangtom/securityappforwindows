@@ -536,6 +536,16 @@ class _AgentSettingsDialog(QDialog):
         self.memory_check.setStyleSheet(f"color: {TEXT}; font-size: 13px; spacing: 8px;")
         root.addWidget(self.memory_check)
 
+        # 允许 AI 直接工作（无确认直行，减少询问与约束）
+        self.direct_check = QCheckBox(
+            "允许 AI 直接工作（无确认直行：仅调用必要的技能/命令，"
+            "不再逐步询问/确认/约束）")
+        self.direct_check.setStyleSheet(f"color: {WARN}; font-size: 13px; spacing: 8px;")
+        saved_mode = QSettings("WinAppMigrator", "WinAppMigrator").value("agent_mode", "ask")
+        self.direct_check.setChecked(saved_mode == "yolo")
+        self.direct_check.toggled.connect(self._on_direct_toggled)
+        root.addWidget(self.direct_check)
+
         # 模型接入（同服务商多模型，按工作力度路由）
         root.addWidget(_lbl("模型接入（同服务商多模型；模型名含纯文本关键字如 deepseek "
                             "自动禁用图片/截图能力）", bold=True))
@@ -607,6 +617,22 @@ class _AgentSettingsDialog(QDialog):
         root.addLayout(btns)
         add_brand_footer(self)
 
+    def _on_direct_toggled(self, checked: bool):
+        """打开「允许 AI 直接工作」需二次确认，防止误开"""
+        if not checked:
+            return
+        ret = QMessageBox.question(
+            self, "开启直接工作模式",
+            "开启后 AI 将直接执行任务，不再逐步询问/确认/约束，"
+            "仅调用必要的技能与命令完成。\n"
+            "删除系统关键目录等危险操作仍会被沙盒拒绝。确定开启？",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No)
+        if ret != QMessageBox.StandardButton.Yes:
+            self.direct_check.blockSignals(True)
+            self.direct_check.setChecked(False)
+            self.direct_check.blockSignals(False)
+
     def _save(self):
         base_url = self.base_edit.text().strip()
         api_key = self.key_edit.text().strip()
@@ -635,6 +661,15 @@ class _AgentSettingsDialog(QDialog):
             "model": model,
         }
         if agent_skills.save_settings(data):
+            # 「允许 AI 直接工作」勾选 → 面板切到无确认直行（yolo）；取消 → 恢复每步确认（ask）
+            q = QSettings("WinAppMigrator", "WinAppMigrator")
+            want = "yolo" if self.direct_check.isChecked() else "ask"
+            q.setValue("agent_mode", want)
+            p = self.parent()
+            if p is not None and hasattr(p, "mode_combo"):
+                idx = p.mode_combo.findData(want)
+                if idx >= 0:
+                    p.mode_combo.setCurrentIndex(idx)
             self.accept()
         else:
             QMessageBox.warning(self, "错误", "保存设置失败（无写入权限）")
@@ -2763,7 +2798,8 @@ class AgentPanel(QDialog):
                 confirm=self._confirm_tool,
                 ask_user=self._ask_user_tool,
                 text_only=self._text_only,
-                memory_enabled=self._memory_enabled)
+                memory_enabled=self._memory_enabled,
+                direct=self._mode == "yolo")
         return self._engine
 
     def _send(self):

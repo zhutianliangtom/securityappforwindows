@@ -21,6 +21,7 @@ from PyQt6.QtWidgets import (
 
 from winapp_migrator.core.fast_download import DownloadTask
 from winapp_migrator.ui.styles import PALETTE
+from winapp_migrator.ui.widgets import add_brand_footer
 
 _DONE_STATES = ("done", "error", "canceled")
 

@@ -631,15 +631,44 @@ class _AgentSettingsDialog(QDialog):
         self.memory_check.setChecked(bool(s.get("memory_enabled", True)))
         self.memory_check.setStyleSheet(f"color: {self._TEXT}; font-size: 13px; spacing: 8px;")
         lay.addWidget(self.memory_check)
-        # 允许 AI 直接工作（无确认直行，减少询问与约束）
-        self.direct_check = QCheckBox(
-            "允许 AI 直接工作（无确认直行：仅调用必要的技能/命令，"
-            "不再逐步询问/确认/约束）")
-        self.direct_check.setStyleSheet(f"color: {self._DIM}; font-size: 13px; spacing: 8px;")
+        # 执行模式：AskBeforeEdit / Edit / YOLO（原面板顶栏下拉，迁入设置页）
+        mode_row = QHBoxLayout()
+        mode_row.setSpacing(10)
+        mode_lbl = QLabel("执行模式")
+        mode_lbl.setStyleSheet(f"color: {self._TEXT}; font-size: 13px;")
+        mode_lbl.setFixedWidth(70)
+        mode_row.addWidget(mode_lbl)
+        self.mode_combo = QComboBox()
+        self.mode_combo.addItem("AskBeforeEdit（每步操作确认）", "ask")
+        self.mode_combo.addItem("Edit（仅非白名单 bash 命令确认）", "edit")
+        self.mode_combo.addItem("YOLO（无确认直行，危险命令一律拒绝）", "yolo")
         saved_mode = QSettings("WinAppMigrator", "WinAppMigrator").value("agent_mode", "ask")
-        self.direct_check.setChecked(saved_mode == "yolo")
-        self.direct_check.toggled.connect(self._on_direct_toggled)
-        lay.addWidget(self.direct_check)
+        mi = self.mode_combo.findData(saved_mode)
+        self.mode_combo.setCurrentIndex(mi if mi >= 0 else 0)
+        self.mode_combo.currentIndexChanged.connect(self._on_mode_changed)
+        mode_row.addWidget(self.mode_combo, 1)
+        lay.addLayout(mode_row)
+        # 工作目录：AI 的文件查找/创建/修改/删除/读取与命令优先在此目录执行
+        wd_row = QHBoxLayout()
+        wd_row.setSpacing(10)
+        wd_lbl = QLabel("工作目录")
+        wd_lbl.setStyleSheet(f"color: {self._TEXT}; font-size: 13px;")
+        wd_lbl.setFixedWidth(70)
+        wd_row.addWidget(wd_lbl)
+        self.workdir_edit = QLineEdit()
+        self.workdir_edit.setPlaceholderText("留空使用默认目录；AI 的文件与命令默认在此执行")
+        self.workdir_edit.setText(str(QSettings("WinAppMigrator", "WinAppMigrator")
+                                      .value("agent_workdir", "")))
+        wd_row.addWidget(self.workdir_edit, 1)
+        browse = QPushButton(_std_icon(QStyle.StandardPixmap.SP_DirOpenIcon), "浏览…")
+        browse.setStyleSheet(f"background: {self._PANEL}; color: {self._TEXT};"
+                             f"border: 1px solid {self._BORDER}; border-radius: 8px;"
+                             "padding: 6px 14px; font-weight: 600;")
+        browse.setAutoDefault(False)
+        browse.setToolTip("选择 AI 工作目录，重启后自动恢复")
+        browse.clicked.connect(self._browse_workdir)
+        wd_row.addWidget(browse)
+        lay.addLayout(wd_row)
         tip = QLabel("记忆：AI 可将重要信息写入 memory.md 并在后续任务中读取。")
         tip.setStyleSheet(f"color: {self._DIM}; font-size: 12px;")
         lay.addWidget(tip)
@@ -714,7 +743,47 @@ class _AgentSettingsDialog(QDialog):
         self.protocol_combo.setCurrentIndex(pidx if pidx >= 0 else 0)
         form.addRow("接口协议", self.protocol_combo)
         lay.addLayout(form)
-        # 推理参数（工作力度与自动按难度开关统一在面板左上角调整）
+        # 工作力度：拖动切换（low/medium/high/max/ultra）+ 自动按难度开关
+        self._effort = cfg.get("effort", "medium")
+        self._auto_effort = bool(cfg.get("auto_effort", True))
+        eff_row = QHBoxLayout()
+        eff_row.setSpacing(10)
+        eff_lbl = QLabel("工作力度")
+        eff_lbl.setStyleSheet(f"color: {self._TEXT}; font-size: 13px;")
+        eff_lbl.setFixedWidth(70)
+        eff_row.addWidget(eff_lbl)
+        self.effort_slider = QSlider(Qt.Orientation.Horizontal)
+        self.effort_slider.setRange(0, len(agent_llm.EFFORTS) - 1)
+        self.effort_slider.setFixedWidth(180)
+        self.effort_slider.setPageStep(1)
+        self.effort_slider.setToolTip("拖动切换工作力度（决定使用哪个模型）："
+                                      + " / ".join(agent_llm.EFFORTS))
+        self.effort_slider.setStyleSheet(
+            f"QSlider::groove:horizontal {{ height: 4px; background: {self._BORDER};"
+            "border-radius: 2px; }}"
+            f"QSlider::sub-page:horizontal {{ background: {self._ACCENT}; border-radius: 2px; }}"
+            f"QSlider::handle:horizontal {{ width: 14px; height: 14px; margin: -5px 0;"
+            f"background: {self._ACCENT}; border: 2px solid {self._BG}; border-radius: 7px; }}"
+            f"QSlider::handle:horizontal:hover {{ background: {self._ACCENT_HOVER}; }}")
+        self.effort_slider.valueChanged.connect(self._on_effort_changed)
+        eff_row.addWidget(self.effort_slider)
+        self.effort_label = QLabel(self._effort)
+        self.effort_label.setStyleSheet(f"color: {self._ACCENT}; font-size: 13px; font-weight: 700;")
+        self.effort_label.setFixedWidth(52)
+        eff_row.addWidget(self.effort_label)
+        eff_row.addStretch(1)
+        lay.addLayout(eff_row)
+        self.auto_effort_check = QCheckBox("自动按难度（按任务难度自动选择工作力度）")
+        self.auto_effort_check.setStyleSheet(f"color: {self._TEXT}; font-size: 13px; spacing: 8px;")
+        self.auto_effort_check.setToolTip("按任务难度自动选择工作力度（智能调用）；关闭后仅手动拖动")
+        self.auto_effort_check.toggled.connect(self._on_effort_changed)
+        self.auto_effort_check.setChecked(self._auto_effort)
+        lay.addWidget(self.auto_effort_check)
+        self.effort_slider.blockSignals(True)
+        self.effort_slider.setValue(agent_llm.EFFORTS.index(self._effort)
+                                    if self._effort in agent_llm.EFFORTS else 0)
+        self.effort_slider.blockSignals(False)
+        # 推理参数
         self.send_effort_check = QCheckBox(
             "向 API 发送 reasoning_effort 参数（仅支持该参数的服务商开启，如 OpenAI o 系列 / Qwen）")
         self.send_effort_check.setStyleSheet(f"color: {self._TEXT}; font-size: 13px; spacing: 8px;")
@@ -829,21 +898,33 @@ class _AgentSettingsDialog(QDialog):
             self._mcp_servers.pop(row)
             self._reload_mcp_list()
 
-    def _on_direct_toggled(self, checked: bool):
-        """打开「允许 AI 直接工作」需二次确认，防止误开"""
-        if not checked:
+    def _on_mode_changed(self, idx):
+        """切到 YOLO 需二次确认，防止误开"""
+        if self.mode_combo.itemData(idx) != "yolo":
             return
         ret = QMessageBox.question(
             self, "开启直接工作模式",
-            "开启后 AI 将直接执行任务，不再逐步询问/确认/约束，"
+            "YOLO 模式：AI 将直接执行任务，不再逐步询问/确认/约束，"
             "仅调用必要的技能与命令完成。\n"
             "删除系统关键目录等危险操作仍会被沙盒拒绝。确定开启？",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No)
         if ret != QMessageBox.StandardButton.Yes:
-            self.direct_check.blockSignals(True)
-            self.direct_check.setChecked(False)
-            self.direct_check.blockSignals(False)
+            self.mode_combo.blockSignals(True)
+            self.mode_combo.setCurrentIndex(0)   # 取消则回到 AskBeforeEdit
+            self.mode_combo.blockSignals(False)
+
+    def _browse_workdir(self):
+        """弹出目录选择框，写入工作目录输入框（保存时持久化）"""
+        start = self.workdir_edit.text().strip() or str(Path.home())
+        d = QFileDialog.getExistingDirectory(self, "选择 AI 工作目录", start)
+        if d:
+            self.workdir_edit.setText(d)
+
+    def _on_effort_changed(self, *_):
+        """力度滑块/自动开关变更：刷新当前力度标签"""
+        self._effort = agent_llm.EFFORTS[self.effort_slider.value()]
+        self.effort_label.setText(self._effort)
 
     def _save(self):
         base_url = self.base_edit.text().strip()
@@ -852,12 +933,13 @@ class _AgentSettingsDialog(QDialog):
                   if x.strip()]
         if not models:
             models = [agent_llm.DEFAULT_MODEL]
-        # 力度与自动按难度开关由面板左上角滑块持久化，设置页不覆盖；力度→模型用默认路由
         model = {
             "model": models[0],          # 兼容旧字段：主模型 = 首个
             "models": models,
             "send_effort": self.send_effort_check.isChecked(),
             "protocol": self.protocol_combo.currentData() or "chat",
+            "effort": self._effort,
+            "auto_effort": self.auto_effort_check.isChecked(),
         }
         if base_url:
             model["base_url"] = base_url
@@ -878,14 +960,10 @@ class _AgentSettingsDialog(QDialog):
             p = self.parent()
             if mcp_ok and p is not None and hasattr(p, "_reconnect_mcp"):
                 p._reconnect_mcp()
-            # 「允许 AI 直接工作」勾选 → 面板切到无确认直行（yolo）；取消 → 恢复每步确认（ask）
+            # 执行模式 / 工作目录：写入 QSettings，面板在保存后同步读取
             q = QSettings("WinAppMigrator", "WinAppMigrator")
-            want = "yolo" if self.direct_check.isChecked() else "ask"
-            q.setValue("agent_mode", want)
-            if p is not None and hasattr(p, "mode_combo"):
-                idx = p.mode_combo.findData(want)
-                if idx >= 0:
-                    p.mode_combo.setCurrentIndex(idx)
+            q.setValue("agent_mode", self.mode_combo.currentData() or "ask")
+            q.setValue("agent_workdir", self.workdir_edit.text().strip())
             if not mcp_ok:
                 QMessageBox.warning(self, "提示", "MCP 配置保存失败（无写入权限），其余设置已保存")
             self.accept()
@@ -1530,6 +1608,8 @@ class AgentPanel(QDialog):
             self._model_override = _last_model
         self._refresh_text_only()
         self._memory_enabled = bool(_s.get("memory_enabled", True))
+        # 执行模式（ask/edit/yolo）在设置页调整，此处仅从 QSettings 读取
+        self._mode = str(self._settings.value("agent_mode", "ask"))
 
         # 拖入的附件：图片（data URL，发给模型）与非图片文件（路径文本）
         self._pending_images: list = []
@@ -1577,7 +1657,6 @@ class AgentPanel(QDialog):
         self._stop_anim_angle = 0
 
         self._build_ui()
-        self._sync_effort_ui()   # 把 settings 里的力度/自动开关同步到滑块与模型下拉
         self._connect_signals()
         self._restore_workdir()   # 恢复上次选择的工作目录（QSettings 持久化）
         self._init_sessions()   # 加载会话列表，默认恢复最近对话（上下文隔离）
@@ -1626,41 +1705,10 @@ class AgentPanel(QDialog):
         self.new_btn.clicked.connect(self._new_session)
         top.addWidget(self.new_btn)
 
-        # 工作目录：AI 的文件查找/创建/修改/删除/读取与命令优先在此目录执行
-        # （选择后 QSettings 持久化，重启自动恢复）
-        self.workdir_btn = QPushButton(_std_icon(QStyle.StandardPixmap.SP_DirOpenIcon), "选择工作目录")
-        self.workdir_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.workdir_btn.setAutoDefault(False)
-        self.workdir_btn.setToolTip(
-            "选择 AI 工作目录：文件查找/创建/修改/删除/读取与命令默认在此目录执行，重启后自动恢复")
-        self.workdir_btn.setStyleSheet(_BTN_GHOST)
-        self.workdir_btn.clicked.connect(self._choose_workdir)
-        top.addWidget(self.workdir_btn)
-
-        # 执行模式：AskBeforeEdit（每步确认）/ Edit（仅非白名单 bash 弹确认）/ YOLO（无确认）
-        self.mode_combo = QComboBox()
-        self.mode_combo.addItem("每步确认", "ask")
-        self.mode_combo.addItem("Edit 模式", "edit")
-        self.mode_combo.addItem("无确认直行", "yolo")
-        self.mode_combo.setMinimumWidth(110)
-        self.mode_combo.setMaximumWidth(140)
-        saved_mode = str(self._settings.value("agent_mode", "ask"))
-        idx = self.mode_combo.findData(saved_mode)
-        self.mode_combo.setCurrentIndex(idx if idx >= 0 else 0)
-        self._mode = self.mode_combo.currentData()
-        self.mode_combo.currentIndexChanged.connect(self._on_mode_changed)
-        self._apply_mode_style()
-        top.addWidget(self.mode_combo)
-
-        self.mcp_label = QLabel("MCP: 连接中…")
-        self.mcp_label.setStyleSheet(f"color: {TEXT_DIM}; font-size: 12px;")
-        self.mcp_label.setMaximumWidth(120)
-        top.addWidget(self.mcp_label)
-
         self.settings_btn = QPushButton(_std_icon(QStyle.StandardPixmap.SP_FileDialogDetailedView), "设置")
         self.settings_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.settings_btn.setAutoDefault(False)
-        self.settings_btn.setToolTip("AI 设置：规则 / 系统提示词 / bash 白名单 / 记忆 / 模型接入")
+        self.settings_btn.setToolTip("AI 设置：执行模式 / 工作目录 / 工作力度 / 规则 / 提示词 / 模型接入")
         self.settings_btn.setStyleSheet(_BTN_GHOST_ACCENT)
         self.settings_btn.clicked.connect(self._open_settings)
         top.addWidget(self.settings_btn)
@@ -1681,43 +1729,6 @@ class AgentPanel(QDialog):
         top.addWidget(clear_btn)
 
         root.addLayout(top)
-
-        # 工作力度行：拖动切换（low/medium/high/max/ultra）+ 自动按难度开关 + 当前路由模型
-        effort_row = QHBoxLayout()
-        effort_row.setSpacing(8)
-        eff_lbl = QLabel("工作力度")
-        eff_lbl.setStyleSheet(f"color: {TEXT_DIM}; font-size: 12px;")
-        effort_row.addWidget(eff_lbl)
-        self.effort_slider = QSlider(Qt.Orientation.Horizontal)
-        self.effort_slider.setRange(0, len(agent_llm.EFFORTS) - 1)
-        self.effort_slider.setFixedWidth(140)
-        self.effort_slider.setPageStep(1)
-        self.effort_slider.setToolTip("拖动切换工作力度（决定使用哪个模型）："
-                                      + " / ".join(agent_llm.EFFORTS))
-        self.effort_slider.setStyleSheet(
-            f"QSlider::groove:horizontal {{ height: 4px; background: {BORDER};"
-            "border-radius: 2px; }}"
-            f"QSlider::sub-page:horizontal {{ background: qlineargradient(x1:0, y1:0, x2:1, y2:0,"
-            f"stop:0 {ACCENT}, stop:1 {USER_BG}); border-radius: 2px; }}"
-            f"QSlider::handle:horizontal {{ width: 14px; height: 14px; margin: -5px 0;"
-            f"background: {ACCENT}; border: 2px solid {BG}; border-radius: 7px; }}"
-            f"QSlider::handle:horizontal:hover {{ background: {ACCENT_HOVER}; }}")
-        self.effort_slider.valueChanged.connect(self._on_effort_changed)
-        effort_row.addWidget(self.effort_slider)
-        self.effort_label = QLabel("medium")
-        self.effort_label.setStyleSheet(f"color: {ACCENT}; font-size: 12px; font-weight: 700;")
-        self.effort_label.setFixedWidth(52)
-        effort_row.addWidget(self.effort_label)
-        self.auto_effort_check = QCheckBox("自动按难度")
-        self.auto_effort_check.setStyleSheet(f"color: {TEXT}; font-size: 12px; spacing: 6px;")
-        self.auto_effort_check.setToolTip("按任务难度自动选择工作力度（智能调用）；关闭后仅手动拖动")
-        self.auto_effort_check.toggled.connect(self._on_effort_changed)
-        effort_row.addWidget(self.auto_effort_check)
-        self.route_model_label = QLabel("")
-        self.route_model_label.setStyleSheet(f"color: {TEXT_DIM}; font-size: 12px;")
-        effort_row.addWidget(self.route_model_label)
-        effort_row.addStretch(1)
-        root.addLayout(effort_row)
 
         # 聊天区（气泡）与欢迎页（无对话时居中介绍 AI 功能）用堆叠切换
         self.msg_area = QScrollArea()
@@ -1770,7 +1781,6 @@ class AgentPanel(QDialog):
             f"QPlainTextEdit:focus {{ border: 1px solid {ACCENT}; }}")
         self.input.submit.connect(self._send)   # Enter 发送（Shift+Enter 换行）
         self.input.textChanged.connect(self._update_cmd_suggestions)
-        self.input.textChanged.connect(self._refresh_route_label)
         self.input.installEventFilter(self)   # 拦截 Ctrl+V：剪贴板图片转附件
         self.input.fileDropped.connect(self._on_input_files_dropped)   # 文件拖入 → 附件
         bottom.addWidget(self.input, 1)
@@ -1837,7 +1847,6 @@ class AgentPanel(QDialog):
         self.reasoning_signal.connect(self._on_reasoning)
         self.confirm_signal.connect(self._on_confirm)
         self.ask_signal.connect(self._on_ask)
-        self.mcp_signal.connect(self._on_mcp_status)
         self.eval_signal.connect(self._on_assess_done)
         self.compact_signal.connect(self._on_compact_done)
 
@@ -2067,56 +2076,18 @@ class AgentPanel(QDialog):
         self._save_session_list(lst)
         self._refresh_session_combo()
 
-    # ---------- 执行模式 ----------
-    def _apply_mode_style(self):
-        yolo = self._mode == "yolo"
-        border = ERR if yolo else ACCENT
-        self.mode_combo.setStyleSheet(
-            f"QComboBox {{ background: {PANEL}; color: {border}; border: 1px solid {border};"
-            "border-radius: 8px; padding: 5px 10px; font-size: 12px; font-weight: 700; }}"
-            f"QComboBox::drop-down {{ border: none; width: 22px; }}")
-
-    def _on_mode_changed(self, idx):
-        self._mode = self.mode_combo.currentData()
-        self._settings.setValue("agent_mode", self._mode)   # 记住设置，下次启动恢复
-        self._apply_mode_style()
-        if self._mode == "yolo":
-            self._add_status("YOLO 模式：AI 操作不再弹窗确认（危险命令一律拒绝）", WARN)
-        elif self._mode == "edit":
-            self._add_status("Edit 模式：仅非白名单 bash 命令弹确认，其余操作直接执行", OK)
-        else:
-            self._add_status("AskBeforeEdit 模式：每步操作弹窗确认", OK)
-
-    # ---------- 工作目录（QSettings 持久化，重启恢复） ----------
+    # ---------- 工作目录（QSettings 持久化，重启恢复；设置在设置页调整） ----------
     def _restore_workdir(self):
-        """启动时恢复上次选择的工作目录；无有效目录则显示默认提示"""
+        """启动时恢复上次选择的工作目录；无有效目录则使用默认提示"""
         saved = str(self._settings.value("agent_workdir", ""))
         if saved and os.path.isdir(saved):
             self._apply_workdir(saved)
         else:
             self._apply_workdir("")
 
-    def _choose_workdir(self):
-        """弹出目录选择框，设置 AI 工作目录并持久化"""
-        start = agent_tools.get_workdir() or str(Path.home())
-        d = QFileDialog.getExistingDirectory(self, "选择 AI 工作目录", start)
-        if not d:
-            return
-        self._apply_workdir(d)
-        self._settings.setValue("agent_workdir", d)
-        self._add_status(f"工作目录已设置为 {d}，AI 的文件/搜索/命令将优先在此目录执行", OK)
-
     def _apply_workdir(self, d: str):
-        """应用工作目录：写入 agent_tools 全局 + 更新按钮文本"""
+        """应用工作目录：写入 agent_tools 全局"""
         agent_tools.set_workdir(d)
-        if d:
-            name = os.path.basename(d.rstrip("\\/")) or d
-            self.workdir_btn.setText(name[:22])
-            self.workdir_btn.setIcon(_std_icon(QStyle.StandardPixmap.SP_DirOpenIcon))
-        else:
-            self.workdir_btn.setText("选择工作目录")
-            self.workdir_btn.setIcon(QIcon())
-        self.workdir_btn.setToolTip(d or "选择 AI 工作目录")
 
     # ---------- 消息气泡 ----------
     @staticmethod
@@ -2146,28 +2117,12 @@ class AgentPanel(QDialog):
         """顶部工具栏随窗口宽度自适应：宽窗口显示完整文字，窄窗口紧凑"""
         wide = self._topbar_wide()
         self.new_btn.setText("新对话" if wide else "新")
-        self.mcp_label.setMaximumWidth(1200 if wide else 120)
-        # MCP 状态：完整或截断（截断逻辑与 _on_mcp_status 保持一致）
-        full = getattr(self, "_mcp_full", "MCP: 连接中…")
-        self.mcp_label.setText(full if wide else (full[:10] + "…" if len(full) > 10 else full))
         if wide:
             self.session_combo.setMinimumWidth(180)
             self.session_combo.setMaximumWidth(260)
-            self.workdir_btn.setMaximumWidth(300)
-            self.mode_combo.setMinimumWidth(190)
-            self.mode_combo.setMaximumWidth(240)
-            self.mode_combo.setItemText(0, "AskBeforeEdit（每步确认）")
-            self.mode_combo.setItemText(1, "Edit（仅 bash 需确认）")
-            self.mode_combo.setItemText(2, "YOLO（无确认直行）")
         else:
             self.session_combo.setMinimumWidth(110)
             self.session_combo.setMaximumWidth(180)
-            self.workdir_btn.setMaximumWidth(180)
-            self.mode_combo.setMinimumWidth(110)
-            self.mode_combo.setMaximumWidth(140)
-            self.mode_combo.setItemText(0, "每步确认")
-            self.mode_combo.setItemText(1, "Edit")
-            self.mode_combo.setItemText(2, "无确认直行")
         self._refresh_meta()   # token 文本按当前模式重渲染
 
     def resizeEvent(self, e):
@@ -2639,12 +2594,6 @@ class AgentPanel(QDialog):
             msg = f"MCP: 初始化异常 {e}"
         self.mcp_signal.emit(msg)
 
-    def _on_mcp_status(self, text: str):
-        color = OK if "已连接" in text or "未配置" in text else WARN
-        self._mcp_full = text   # 保存完整文本，由 _apply_topbar_layout 按窗口宽度决定完整/截断
-        self.mcp_label.setStyleSheet(f"color: {color}; font-size: 12px;")
-        self._apply_topbar_layout()
-
     def _open_settings(self):
         """打开 AI 设置；保存后应用（刷新纯文本/记忆状态，空闲时重建引擎）"""
         dlg = _AgentSettingsDialog(parent=self)
@@ -2653,14 +2602,15 @@ class AgentPanel(QDialog):
             self._add_status("AI 设置已保存并生效", OK)
 
     def _apply_agent_settings(self):
-        """设置变更后：刷新多模型/力度/纯文本状态；引擎空闲则重建以应用新配置"""
+        """设置变更后：刷新模式/工作目录/多模型/力度/纯文本状态；引擎空闲则重建以应用新配置"""
         s = agent_skills.load_settings()
         self._model_cfg = agent_llm.load_model_config()
         self._effort = self._model_cfg.get("effort", "medium")
         self._auto_effort = bool(self._model_cfg.get("auto_effort", True))
+        self._mode = str(self._settings.value("agent_mode", "ask"))   # 执行模式在设置页调整后同步
+        self._restore_workdir()   # 工作目录在设置页调整后同步
         self._refresh_text_only()
         self._memory_enabled = bool(s.get("memory_enabled", True))
-        self._sync_effort_ui()
         if self._text_only:
             self._add_status("纯文本模型：已禁用图片上传与截图工具", WARN)
         if self._engine is not None:
@@ -2683,31 +2633,6 @@ class AgentPanel(QDialog):
         models = cfg.get("models") or [cfg.get("model") or agent_llm.DEFAULT_MODEL]
         self._text_only = all(agent_llm.is_text_only_model(x) for x in models)
 
-    def _on_effort_changed(self, *_):
-        """力度滑块/自动开关变更：刷新标签与路由显示，持久化力度与开关"""
-        self._effort = agent_llm.EFFORTS[self.effort_slider.value()]
-        self.effort_label.setText(self._effort)
-        self._sync_model_combo()   # 重建输入框右侧模型下拉
-        self._refresh_route_label()
-        s = agent_skills.load_settings()
-        m = dict(s.get("model") or {})
-        m["effort"] = self._effort
-        m["auto_effort"] = self.auto_effort_check.isChecked()
-        s["model"] = m
-        agent_skills.save_settings(s)
-
-    def _sync_effort_ui(self):
-        """把 settings 里的力度/自动开关同步到控件（初始化/设置保存后调用）"""
-        idx = agent_llm.EFFORTS.index(self._effort)
-        self.effort_slider.blockSignals(True)
-        self.effort_slider.setValue(idx)
-        self.effort_slider.blockSignals(False)
-        self.auto_effort_check.blockSignals(True)
-        self.auto_effort_check.setChecked(self._auto_effort)
-        self.auto_effort_check.blockSignals(False)
-        self.effort_label.setText(self._effort)
-        self._sync_model_combo()   # 初始化/设置保存后重建输入框右侧模型下拉
-        self._refresh_route_label()
 
     def _resolve_effort(self, text: str) -> str:
         """本次任务使用的工作力度：自动开关开启时按任务难度估算，否则用手动力度"""
@@ -2715,12 +2640,6 @@ class AgentPanel(QDialog):
             return agent_llm.estimate_effort(text)
         return self._effort
 
-    def _refresh_route_label(self, *_):
-        """路由状态显示：手动指定显示模型名；自动模式统一显示「自动选择」（不带模型后缀）"""
-        if self._model_override:
-            self.route_model_label.setText(f"模型: {self._model_override}")
-        else:
-            self.route_model_label.setText("自动选择")
 
     def _sync_model_combo(self):
         """重建输入框右侧模型下拉：首项「自动选择」+ 全部模型名"""
@@ -2750,7 +2669,6 @@ class AgentPanel(QDialog):
         self._model_override = val if val else None
         self._settings.setValue("agent_last_model", self._model_override or "")   # 记住选择，重启恢复
         self._refresh_text_only()   # 切换模型立即更新纯文本判断（粘贴图片/附件过滤实时生效）
-        self._refresh_route_label()
         # 切换模型不清空上下文：当前对话历史继续沿用，仅后续轮次使用新模型
         if self._model_override:
             self._add_status(f"已切换到模型 {self._model_override}，对话上下文已保留", OK)

@@ -2182,7 +2182,7 @@ class AgentPanel(QDialog):
         d = self._sessions_dir()
         eng = self._ensure_engine()
         eng.load_context(d / f"{sid}.json")
-        segs, ums = [], []
+        segs, ums, data = [], [], {}
         try:
             with open(d / f"{sid}.ui.json", encoding="utf-8") as f:
                 data = json.load(f)

@@ -1933,7 +1933,15 @@ class AgentPanel(QDialog):
         # 聊天区（气泡）与欢迎页（无对话时居中介绍 AI 功能）用堆叠切换
         self.msg_area = QScrollArea()
         self.msg_area.setWidgetResizable(True)
-        self.msg_area.setStyleSheet("QScrollArea { background: transparent; border: none; }")
+        # 滚动条纯黑色：垂直（右侧）+ 水平（底部）
+        self.msg_area.setStyleSheet(
+            "QScrollArea { background: transparent; border: none; }"
+            "QScrollBar:vertical { background: transparent; width: 8px; }"
+            "QScrollBar::handle:vertical { background: #000000;"
+            "border-radius: 4px; min-height: 30px; }"
+            "QScrollBar:horizontal { background: transparent; height: 8px; }"
+            "QScrollBar::handle:horizontal { background: #000000;"
+            "border-radius: 4px; min-width: 30px; }")
         container = QWidget()
         container.setStyleSheet("background: transparent;")
         self.msg_lay = QVBoxLayout(container)

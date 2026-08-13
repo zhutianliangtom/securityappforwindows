@@ -19,10 +19,6 @@ from PyQt6.QtGui import QImage
 from winapp_migrator.core import agent_llm, agent_tools, agent_skills, agent_subagent
 from winapp_migrator.core.agent_screen import virtual_desktop
 
-# 工具结果进入对话上下文的长度上限：长输出（如 run_command 回显）截断后仍进上下文，
-# 完整内容由 AI 按需用 read_file/check_command 查看，避免上下文无限膨胀烧 tokens
-_TOOL_TEXT_MAX = 12000
-
 # 开发类工具：动手开发/修改代码前必须先确认用户开发规则（首次调用被拦截，规则确认后下一轮放行）
 _DEV_TOOLS = frozenset({"write_file", "edit_file", "delete_file",
                         "run_command", "create_skill", "dispatch_sub_agents"})
@@ -611,15 +607,10 @@ class AgentEngine:
                                            [_compress_data_url(u, 480) for u in imgs])
                     if _looks_failed(text):
                         last_failed = True
-                    # 长输出截断后再进入上下文（控制 tokens，防上下文膨胀）；
-                    # 超长命令完整结果可用 read_file/check_command 按需读取
-                    tool_text = text
-                    if len(tool_text) > _TOOL_TEXT_MAX:
-                        tool_text = tool_text[:_TOOL_TEXT_MAX] + \
-                            " …（输出过长已截断，如需完整内容可调用 read_file/check_command 查看）"
+                    # 完整工具输出直接进入上下文（用户要求禁止上下文截断限制）
                     self._messages.append({
                         "role": "tool", "tool_call_id": call["id"],
-                        "content": tool_text,   # 纯字符串更兼容（部分 API 拒绝数组 content）
+                        "content": text,   # 纯字符串更兼容（部分 API 拒绝数组 content）
                     })
                     answered.add(call["id"])
                     if imgs:

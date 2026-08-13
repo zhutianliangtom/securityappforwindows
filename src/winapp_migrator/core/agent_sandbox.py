@@ -7,6 +7,7 @@
 """
 
 import os
+import re as _re
 from pathlib import Path
 
 # 白名单：只读/诊断类命令 + 普通文件操作（默认放行）
@@ -82,24 +83,32 @@ def assess_command(cmd: str) -> tuple:
     low = cmd.lower()
     if not low:
         return "risky", "空命令"
+    # 剥离 URL token：URL 只是访问目标，避免 format/shutdown 等词及 & 查询参数误伤
+    # （如 curl https://x/api/format-report、curl "…?a=1&b=2" 均属正常请求）
+    low_nourl = _re.sub(r'https?://[^\s"\'<>]+', "URL", low)
     # 危险优先
     for kw in DANGEROUS_KW:
-        if kw in low:
+        if kw in low_nourl:
             return "dangerous", f"命令含危险操作: {kw}"
-    # 删除命令 + 目标位于系统关键目录 → 拒绝（如 del C:\Program Files\xxx）
     first_tok = low.split()[0]
     del_base = os.path.basename(first_tok.replace("\\", "/"))
+    # 删除命令 + 目标位于系统关键目录 → 拒绝（如 del C:\Program Files\xxx）
     if del_base in ("del", "erase", "rd", "rmdir", "rm", "deltree"):
         flat = low.replace("\\", "/").replace('"', "")
         for d in _system_dirs():
             if str(d).lower().replace("\\", "/") in flat:
                 return "dangerous", f"禁止删除系统关键目录: {d}"
+    # curl 下载到系统关键目录 → 拒绝（防止覆盖系统文件）
+    if del_base == "curl":
+        flat = low.replace("\\", "/").replace('"', "")
+        for d in _system_dirs():
+            if str(d).lower().replace("\\", "/") in flat:
+                return "dangerous", f"禁止写入系统关键目录: {d}"
     # 含管道/重定向/多命令串联 → risky：即使首命令在白名单
     # （如 `git add .; git commit`、`echo hi > file`），避免绕过单命令白名单
-    if any(s in low for s in ("|", ">", "&", "&&", ";")):
+    if any(s in low_nourl for s in ("|", ">", "&", "&&", ";")):
         return "risky", "命令含管道/重定向/多命令，非单条白名单命令"
-    first = low.split()[0]
-    base = os.path.basename(first.replace("\\", "/"))
+    base = del_base
     if base in SAFE_COMMANDS or base in _custom_safe():
         return "safe", ""
     return "risky", "非白名单命令"

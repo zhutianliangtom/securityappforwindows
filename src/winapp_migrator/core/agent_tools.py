@@ -56,7 +56,6 @@ def _resolve(path: str) -> Path:
 # ------------------------------------------------------------
 _running_cmds: dict = {}          # cmd_id -> 记录
 _cmd_seq = itertools.count(1)     # 自增命令编号
-_COMMAND_OUTPUT_MAX = 60000       # 单次返回的输出上限（字符）
 _CREATE_NO_WINDOW = 0x08000000
 
 
@@ -110,15 +109,13 @@ def _drain_pipe(pipe, lines: list, lock: threading.Lock):
 
 
 def _collect(rec: dict) -> str:
-    """汇总后台命令的已收集输出（stdout + stderr，带截断）"""
+    """汇总后台命令的已收集输出（stdout + stderr，完整返回）"""
     with rec["lock"]:
         out = _decode_robust(b"".join(rec["out"])).strip()
         err = _decode_robust(b"".join(rec["err"])).strip()
     text = out
     if err:
-        text += f"\n[stderr] {err[:8000]}" if text else f"[stderr] {err[:8000]}"
-    if len(text) > _COMMAND_OUTPUT_MAX:
-        text = "（输出过长，已截断）\n" + text[-_COMMAND_OUTPUT_MAX:]
+        text += f"\n[stderr] {err}" if text else f"[stderr] {err}"
     return text
 
 # ---------- 工具定义（LLM 可见） ----------
@@ -924,10 +921,10 @@ def _run_command(command: str, wait: int = 5, force_quit: bool = False) -> dict:
     def _compose() -> str:
         text = out
         if err:
-            text += f"\n[stderr] {err[:8000]}" if text else f"[stderr] {err[:8000]}"
+            text += f"\n[stderr] {err}" if text else f"[stderr] {err}"
         if not text:
             text = f"（命令完成，退出码 {code}）"
-        return text[:_COMMAND_OUTPUT_MAX]
+        return text
 
     if code is not None:
         for t in threads:

@@ -1861,6 +1861,14 @@ class AgentPanel(QDialog):
 
     # ---------- UI ----------
     def _build_ui(self):
+        # 滚动条统一纯黑色（右侧垂直 + 底部水平）
+        self.setStyleSheet(
+            f"QScrollBar:vertical {{ background: transparent; width: 8px; }}"
+            f"QScrollBar::handle:vertical {{ background: #000000;"
+            "border-radius: 4px; min-height: 30px; }"
+            f"QScrollBar:horizontal {{ background: transparent; height: 8px; }}"
+            f"QScrollBar::handle:horizontal {{ background: #000000;"
+            "border-radius: 4px; min-width: 30px; }}")
         root = QVBoxLayout(self)
         root.setContentsMargins(16, 14, 16, 14)
         root.setSpacing(10)

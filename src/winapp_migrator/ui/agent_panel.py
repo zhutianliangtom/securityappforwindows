@@ -918,7 +918,8 @@ class _AgentSettingsDialog(QDialog):
         w = self._page("模型接入")
         lay = self._page_body(w)
         sub = QLabel("多服务商模型：每个服务商一张卡片，点击卡片编辑其地址/Key/模型；"
-                     "模型名含纯文本关键字（如 deepseek）自动禁用图片/截图能力")
+                    "全部服务商模型统一参与路由与切换，模型名含纯文本关键字（如 deepseek）"
+                    "自动禁用图片/截图能力")
         sub.setStyleSheet(f"color: {self._DIM}; font-size: 12px;")
         sub.setWordWrap(True)
         lay.addWidget(sub)
@@ -927,8 +928,6 @@ class _AgentSettingsDialog(QDialog):
             m = {}
         cfg = agent_llm.load_model_config()
         self._providers = list(cfg.get("providers") or [])
-        self._active_provider = cfg.get("active") or \
-            (self._providers[0]["name"] if self._providers else "")
         # 服务商卡片列表
         self.provider_list = QListWidget()
         self.provider_list.setStyleSheet(
@@ -948,12 +947,6 @@ class _AgentSettingsDialog(QDialog):
                             "border-radius: 8px; padding: 7px 16px; font-weight: 700;")
         add_p.setAutoDefault(False)
         add_p.clicked.connect(self._on_provider_add)
-        set_a = QPushButton("设为当前")
-        set_a.setStyleSheet(f"background: {self._PANEL}; color: {self._TEXT};"
-                            f"border: 1px solid {self._BORDER}; border-radius: 8px;"
-                            "padding: 7px 16px; font-weight: 600;")
-        set_a.setAutoDefault(False)
-        set_a.clicked.connect(self._on_provider_activate)
         del_p = QPushButton(_line_icon("trash", 16), "删除")
         del_p.setStyleSheet(f"background: {self._PANEL}; color: {self._DIM};"
                             f"border: 1px solid {self._BORDER}; border-radius: 8px;"
@@ -961,7 +954,6 @@ class _AgentSettingsDialog(QDialog):
         del_p.setAutoDefault(False)
         del_p.clicked.connect(self._on_provider_delete)
         prow.addWidget(add_p)
-        prow.addWidget(set_a)
         prow.addWidget(del_p)
         prow.addStretch(1)
         lay.addLayout(prow)
@@ -1097,11 +1089,6 @@ class _AgentSettingsDialog(QDialog):
         name = QLabel(str(p.get("name", "")))
         name.setStyleSheet(f"color: {self._TEXT}; font-size: 14px; font-weight: 700;")
         top.addWidget(name)
-        if p.get("active"):
-            tag = QLabel("当前")
-            tag.setStyleSheet(f"background: {self._ACCENT}; color: #FFFFFF;"
-                              "border-radius: 4px; padding: 1px 8px; font-size: 11px;")
-            top.addWidget(tag)
         top.addStretch(1)
         url = QLabel(str(p.get("base_url", "")))
         url.setStyleSheet(f"color: {self._DIM}; font-size: 11px;")
@@ -1117,7 +1104,6 @@ class _AgentSettingsDialog(QDialog):
         self.provider_list.clear()
         for p in self._providers:
             p = dict(p)
-            p["active"] = (p.get("name") == self._active_provider)
             item = QListWidgetItem()
             item.setData(Qt.ItemDataRole.UserRole, p)
             item.setSizeHint(QSize(0, 66))
@@ -1138,8 +1124,6 @@ class _AgentSettingsDialog(QDialog):
                 QMessageBox.warning(self, "提示", f"已存在同名服务商「{p['name']}」")
                 return
             self._providers.append(p)
-            if not self._active_provider:
-                self._active_provider = p["name"]
             self._reload_provider_list()
 
     def _on_provider_edit(self, item):
@@ -1150,18 +1134,7 @@ class _AgentSettingsDialog(QDialog):
         if dlg.exec() != QDialog.DialogCode.Accepted:
             return
         newp = dlg.provider_data()
-        # 名称可能被改名：同步 active 指向
-        if self._providers[idx].get("name") == self._active_provider:
-            self._active_provider = newp["name"]
         self._providers[idx] = newp
-        self._reload_provider_list()
-
-    def _on_provider_activate(self):
-        p = self._current_provider()
-        if p is None:
-            QMessageBox.information(self, "提示", "请先点击选择一个服务商")
-            return
-        self._active_provider = p["name"]
         self._reload_provider_list()
 
     def _on_provider_delete(self):
@@ -1180,8 +1153,6 @@ class _AgentSettingsDialog(QDialog):
         if reply != QMessageBox.StandardButton.Yes:
             return
         self._providers.pop(idx)
-        if self._active_provider == p.get("name"):
-            self._active_provider = self._providers[0]["name"] if self._providers else ""
         self._reload_provider_list()
 
     # ---------- MCP 列表操作 ----------
@@ -1265,10 +1236,8 @@ class _AgentSettingsDialog(QDialog):
                           "api_key": agent_llm.DEFAULT_API_KEY,
                           "models": [agent_llm.DEFAULT_MODEL],
                           "protocol": "chat"}]
-        active = getattr(self, "_active_provider", "") or providers[0]["name"]
         model = {
             "providers": providers,
-            "active": active,
             "model": providers[0]["models"][0],   # 兼容旧字段
             "models": providers[0]["models"],
             "send_effort": self.send_effort_check.isChecked(),
@@ -3650,10 +3619,11 @@ class AgentPanel(QDialog):
             protocol = (sel or {}).get("protocol") or "chat"
             model = self._model_override
         else:
-            base_url = cfg.get("base_url") or agent_llm.DEFAULT_BASE_URL
-            api_key = cfg.get("api_key") or agent_llm.DEFAULT_API_KEY
-            protocol = cfg.get("protocol") or "chat"
             model = agent_llm.resolve_model(cfg, effort)
+            sel = agent_llm.provider_for_model(cfg, model)
+            base_url = (sel or {}).get("base_url") or agent_llm.DEFAULT_BASE_URL
+            api_key = (sel or {}).get("api_key") or agent_llm.DEFAULT_API_KEY
+            protocol = (sel or {}).get("protocol") or "chat"
         # agnes 默认模型只在内置默认服务可用：无论手动/自动选中，只要当前连接
         # 不是默认 agnes 服务就同步切过去（避免把该模型名/图片发给不支持的服务器）
         if model == agent_llm.DEFAULT_MODEL and base_url != agent_llm.DEFAULT_BASE_URL:

@@ -80,7 +80,6 @@ def load_model_config() -> dict:
                 single["models"].insert(0, single_model)
             providers = [single]
         # 规范化每个服务商
-        active = str(m.get("active") or "")
         for p in providers:
             p["name"] = str(p.get("name") or "服务商").strip() or "服务商"
             p["base_url"] = str(p.get("base_url") or DEFAULT_BASE_URL)
@@ -91,17 +90,20 @@ def load_model_config() -> dict:
             if DEFAULT_MODEL not in pms:
                 pms.append(DEFAULT_MODEL)
             p["models"] = pms
-        # 确定当前服务商
-        ap = next((p for p in providers if p["name"] == active), None) or providers[0]
-        ap["active"] = True
+        # 聚合所有服务商的模型作为统一路由池（不再区分「当前服务商」）
+        all_models = []
+        for p in providers:
+            for mm in p["models"]:
+                if mm not in all_models:
+                    all_models.append(mm)
+        first = providers[0]
         return {
-            "base_url": ap["base_url"],
-            "api_key": ap["api_key"],
-            "model": ap["models"][0],
-            "models": ap["models"],
-            "protocol": ap["protocol"],
+            "base_url": first["base_url"],
+            "api_key": first["api_key"],
+            "model": all_models[0] if all_models else DEFAULT_MODEL,
+            "models": all_models,
+            "protocol": first["protocol"],
             "providers": providers,
-            "active": ap["name"],
             "effort_models": dict(m.get("effort_models") or {}),
             "effort": m.get("effort") if m.get("effort") in EFFORTS else "medium",
             "auto_effort": bool(m.get("auto_effort", True)),
@@ -110,12 +112,20 @@ def load_model_config() -> dict:
     except Exception:
         default = {"name": "默认服务商", "base_url": DEFAULT_BASE_URL,
                    "api_key": DEFAULT_API_KEY, "models": [DEFAULT_MODEL],
-                   "protocol": "chat", "active": True}
+                   "protocol": "chat"}
         return {"base_url": DEFAULT_BASE_URL, "api_key": DEFAULT_API_KEY,
                 "model": DEFAULT_MODEL, "models": [DEFAULT_MODEL],
-                "protocol": "chat", "providers": [default], "active": "默认服务商",
+                "protocol": "chat", "providers": [default],
                 "effort_models": {}, "effort": "medium",
                 "auto_effort": True, "send_effort": False}
+
+
+def provider_for_model(cfg: dict, model: str) -> dict:
+    """返回包含指定模型的第一个服务商 dict（取其 base_url/api_key/protocol），找不到返回 {}"""
+    for p in (cfg.get("providers") or []):
+        if model in (p.get("models") or []):
+            return p
+    return {}
 
 
 def _default_effort_models(models: list) -> dict:

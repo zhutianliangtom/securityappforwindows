@@ -2533,7 +2533,7 @@ class AgentPanel(QDialog):
         f_main, f_dim, f_sm, f_op = int(14 * s), int(12 * s), int(11 * s), int(13 * s)
         img_w = max(200, int(self._bubble_max_width() * 0.4))   # 截图缩略图随气泡宽度放大（约占内容区半宽）
         parts = []
-        for seg in segs:
+        for i, seg in enumerate(segs):
             t = seg["type"]
             if t == "think":
                 body = seg.get("html", "") or ""
@@ -2559,17 +2559,17 @@ class AgentPanel(QDialog):
                 parts.append(f'<div style="color:{ACCENT};font-size:{f_op}px;'
                              f'font-family:Consolas;margin-top:16px;">{seg["html"]}</div>')
             elif t == "result":
-                # 执行结果输出完成即默认折叠，点击展开/收起（与思考过程交互一致）
+                # 执行结果输出完成即默认折叠，点击展开/收起（带段索引，支持同气泡多条命令结果独立折叠）
                 if seg.get("collapsed"):
                     parts.append(
                         f'<div style="color:{TEXT_DIM};font-size:{f_sm}px;margin-top:2px;">'
-                        f'<a href="result:toggle" style="color:{ACCENT};text-decoration:none;">'
+                        f'<a href="result:toggle:{i}" style="color:{ACCENT};text-decoration:none;">'
                         f'执行结果（已折叠 · 点击展开）</a></div>')
                 else:
                     parts.append(
                         f'<div style="color:{TEXT_DIM};font-size:{f_sm}px;margin:2px 0;">'
                         f'执行结果&nbsp;'
-                        f'<a href="result:toggle" style="color:{TEXT_DIM};font-size:{f_sm}px;'
+                        f'<a href="result:toggle:{i}" style="color:{TEXT_DIM};font-size:{f_sm}px;'
                         f'text-decoration:none;">收起 ▲</a></div>'
                         f'<div style="color:{TEXT_DIM};font-size:{f_op}px;font-family:Consolas;'
                         f'border-left:3px solid {BORDER};padding:2px 10px;'
@@ -2694,15 +2694,19 @@ class AgentPanel(QDialog):
             except RuntimeError:
                 pass
             return
-        if url == "result:toggle":
+        if url.startswith("result:toggle"):
+            # 链接形如 result:toggle:{段索引}，定位到对应命令结果段（同一气泡可多条命令独立折叠）
             bubble = self.sender()
             segs = self._bubble_segs.get(id(bubble)) if bubble is not None else None
             if not segs:
                 return
-            for seg in segs:
-                if seg.get("type") == "result":
-                    seg["collapsed"] = not seg.get("collapsed", False)
-                    break
+            try:
+                idx = int(url.split(":", 2)[2])
+            except (IndexError, ValueError):
+                return
+            if not (0 <= idx < len(segs)) or segs[idx].get("type") != "result":
+                return
+            segs[idx]["collapsed"] = not segs[idx].get("collapsed", False)
             try:
                 bubble.setText(self._build_ai_html(segs))
             except RuntimeError:

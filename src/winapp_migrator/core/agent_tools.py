@@ -540,18 +540,29 @@ TOOLS = [
         "function": {
             "name": "create_docx",
             "description": "生成 Word 文档（.docx）：可选大标题 + 段落文本列表 + 图片（可选）。"
-                           "适合报告、说明文档、合同文本、简历等文字型文档。",
+                           "适合报告、说明文档、合同文本、简历等文字型文档。"
+                           "支持 style 参数自定义配色与排版，不传则用默认商务风。",
             "parameters": {"type": "object",
                            "properties": {
                                "path": {"type": "string", "description": "保存路径（.docx，相对路径基于工作目录）"},
                                "title": {"type": "string", "description": "文档大标题（可选）"},
                                "paragraphs": {"type": "array",
-                                              "description": "段落文本列表，每项一个字符串",
+                                              "description": "段落文本列表，每项一个字符串，支持轻量标记："
+                                                              "'# '一级标题 / '## '二级标题 / '### '三级标题 / '- '项目符号",
                                               "items": {"type": "string"}},
                                "images": {"type": "array",
                                           "description": "图片路径列表（可选，相对路径基于工作目录；"
                                                           "每张作为独立居中段落插入文档末尾）",
-                                          "items": {"type": "string"}}},
+                                          "items": {"type": "string"}},
+                               "style": {"type": "object",
+                                         "description": "样式配置（可选）。不传则用默认商务风；传了可大胆自定义："
+                                                         "theme=配色主题(business深蓝/green墨绿/warm橙棕/purple紫/"
+                                                         "tech科技蓝/dark暗色/pastel浅蓝/red朱红/black-gold黑金)，"
+                                                         "base_color=主色HEX，heading_color=标题色HEX，"
+                                                         "text_color=正文色HEX，font_name=字体名(如'宋体'/'仿宋'/'楷体')，"
+                                                         "align=正文对齐(left/center/right/justify)，"
+                                                         "line_spacing=行距倍数(1.0-2.0)，title_size=大标题字号，"
+                                                         "body_size=正文字号，page=纸张方向(portrait/landscape)"}},
                            "required": ["path", "paragraphs"]},
         },
     },
@@ -560,13 +571,16 @@ TOOLS = [
         "function": {
             "name": "create_pptx",
             "description": "生成 PowerPoint 演示文稿（.pptx）：可选首页标题 + 多页幻灯片，"
-                           "每页包含页标题与要点列表，可带本页插图。适合汇报、产品介绍、培训课件等演示文档。",
+                           "每页包含页标题与要点列表，可带本页插图。适合汇报、产品介绍、培训课件等演示文档。"
+                           "支持 style 参数自定义配色与封面布局，不传则用默认商务风。",
             "parameters": {"type": "object",
                            "properties": {
                                "path": {"type": "string", "description": "保存路径（.pptx）"},
                                "title": {"type": "string", "description": "演示文稿标题（可选，用作首页）"},
                                "slides": {"type": "array",
-                                          "description": "幻灯片列表，每项 {title: 页标题, bullets: [要点, ...], image: 本页插图路径(可选)}",
+                                          "description": "幻灯片列表，每项 {title: 页标题, bullets: [要点, ...], "
+                                                          "image: 本页插图路径(可选), bg_color: 本页背景色HEX(可选), "
+                                                          "title_color: 本页标题色HEX(可选)}",
                                           "items": {"type": "object",
                                                     "properties": {
                                                         "title": {"type": "string", "description": "页标题"},
@@ -574,8 +588,20 @@ TOOLS = [
                                                                     "description": "本页要点列表",
                                                                     "items": {"type": "string"}},
                                                         "image": {"type": "string",
-                                                                  "description": "本页插图路径（可选，相对路径基于工作目录）"}},
-                                                    "required": ["title"]}}},
+                                                                  "description": "本页插图路径（可选，相对路径基于工作目录）"},
+                                                        "bg_color": {"type": "string",
+                                                                     "description": "本页背景色 HEX（可选，覆盖全局背景）"},
+                                                        "title_color": {"type": "string",
+                                                                        "description": "本页标题色 HEX（可选，覆盖全局标题色）"}},
+                                                    "required": ["title"]}},
+                               "style": {"type": "object",
+                                         "description": "样式配置（可选）。不传则用默认商务风；传了可大胆自定义："
+                                                         "theme=配色方案(business深蓝/black-gold黑金/green墨绿/warm暖橙/"
+                                                         "tech科技蓝/vivid明快/dark暗色/pastel浅色/red朱红)，"
+                                                         "cover_style=封面布局(solid纯色底/split左右分屏/centered居中)，"
+                                                         "title_color=标题色HEX，bg_color=内容页背景色HEX，"
+                                                         "font_name=字体名，bullet_style=要点符号(dot/number/arrow/check)，"
+                                                         "title_size=页标题字号，body_size=要点字号"}},
                            "required": ["path", "slides"]},
         },
     },
@@ -584,7 +610,8 @@ TOOLS = [
         "function": {
             "name": "create_xlsx",
             "description": "生成 Excel 工作簿（.xlsx）：多个工作表，每表 {name, rows, image(可选)}，"
-                           "rows 为二维数组（首行可作为表头）。适合数据表、统计报表、清单等。",
+                           "rows 为二维数组（首行可作为表头）。适合数据表、统计报表、清单等。"
+                           "支持 style 参数自定义表头配色/隔行/边框，不传则用默认商务风。",
             "parameters": {"type": "object",
                            "properties": {
                                "path": {"type": "string", "description": "保存路径（.xlsx）"},
@@ -599,7 +626,16 @@ TOOLS = [
                                                                            "items": {}}},
                                                         "image": {"type": "string",
                                                                   "description": "表插图路径（可选，相对路径基于工作目录，插入数据下方）"}},
-                                                    "required": ["name", "rows"]}}},
+                                                    "required": ["name", "rows"]}},
+                               "style": {"type": "object",
+                                         "description": "样式配置（可选）。不传则用默认商务风；传了可大胆自定义："
+                                                         "theme_color=主题色HEX，header_fill=表头填充色HEX，"
+                                                         "header_color=表头字色HEX，font_name=字体名，"
+                                                         "banded=隔行变色(true/false，默认true)，band_fill=隔行填充色HEX，"
+                                                         "freeze_header=冻结首行(true/false，默认true)，"
+                                                         "auto_filter=自动筛选(true/false，默认true)，"
+                                                         "border_color=边框色HEX，header_size=表头字号，"
+                                                         "body_size=数据字号，header_bold=表头加粗(true/false，默认true)"}},
                            "required": ["path", "sheets"]},
         },
     },
@@ -870,13 +906,16 @@ def execute_tool(name: str, args: dict, allow_dangerous: bool = False,
         if name == "create_docx":
             return _create_docx(str(args.get("path", "")), str(args.get("title", "")),
                                 args.get("paragraphs") if isinstance(args.get("paragraphs"), list) else [],
-                                args.get("images") if isinstance(args.get("images"), list) else [])
+                                args.get("images") if isinstance(args.get("images"), list) else [],
+                                args.get("style") if isinstance(args.get("style"), dict) else {})
         if name == "create_pptx":
             return _create_pptx(str(args.get("path", "")), str(args.get("title", "")),
-                                args.get("slides") if isinstance(args.get("slides"), list) else [])
+                                args.get("slides") if isinstance(args.get("slides"), list) else [],
+                                args.get("style") if isinstance(args.get("style"), dict) else {})
         if name == "create_xlsx":
             return _create_xlsx(str(args.get("path", "")),
-                                args.get("sheets") if isinstance(args.get("sheets"), list) else [])
+                                args.get("sheets") if isinstance(args.get("sheets"), list) else [],
+                                args.get("style") if isinstance(args.get("style"), dict) else {})
         if name == "create_skill":
             return _create_skill(str(args.get("name", "")),
                                  str(args.get("description", "")),
@@ -1557,24 +1596,60 @@ def _extract_text(path: str) -> dict:
         return _blocked(f"[extract_text] 解析失败: {e}")
 
 
-# 商务专业风主题色（深蓝 + 深灰）
+# 默认商务专业风主题色（深蓝 + 深灰）
 _DOC_NAVY = "1F3864"          # 主色：深蓝
 _DOC_NAVY_SOFT = "8EAADB"     # 浅蓝（副标题/辅助）
 _DOC_DARK = "404040"          # 正文深灰
 _DOC_FONT = "微软雅黑"
+# 预置配色主题（AI 传 style.theme 即可整体换肤；base=主色 soft=浅辅助色 dark=深色正文/文字）
+_DOC_THEMES = {
+    "business":   {"base": "1F3864", "soft": "8EAADB", "dark": "404040"},
+    "black-gold": {"base": "1A1A1A", "soft": "C9A227", "dark": "3B3B3B"},
+    "green":      {"base": "2E5E4E", "soft": "A8C6B8", "dark": "333F3B"},
+    "warm":       {"base": "B0561A", "soft": "E8C39E", "dark": "5A4636"},
+    "tech":       {"base": "0E5A8A", "soft": "7FB8DE", "dark": "2B3A4A"},
+    "vivid":      {"base": "E4572E", "soft": "F5B99B", "dark": "4A403C"},
+    "purple":     {"base": "5B2D8F", "soft": "BDA8D8", "dark": "3D3352"},
+    "pastel":     {"base": "7A9CC6", "soft": "D8E2F0", "dark": "4A5A6A"},
+    "dark":       {"base": "23272E", "soft": "8E98A6", "dark": "E8EAED"},
+    "red":        {"base": "8C2F39", "soft": "E0B4B9", "dark": "4A3035"},
+}
 
 
-def _docx_set_font(run, size=None, bold=None, color=None):
-    """设置 run 字体（含东亚字体微软雅黑）"""
+def _doc_style(style: dict) -> dict:
+    """解析 style 参数：返回合并后的样式字典（theme 预置色板 + 字段覆盖 + 默认兜底）。
+    键：base/soft/dark(颜色)，font，align，line_spacing，title_size，body_size 等。"""
+    s = dict(style or {})
+    theme = str(s.get("theme") or "business").lower()
+    pal = _DOC_THEMES.get(theme) or _DOC_THEMES["business"]
+    merged = {
+        "base": str(s.get("base_color") or pal["base"]),
+        "soft": pal["soft"],
+        "dark": str(s.get("text_color") or pal["dark"]),
+        "heading": str(s.get("heading_color") or ""),
+        "font": str(s.get("font_name") or _DOC_FONT),
+        "align": str(s.get("align") or "left"),
+        "line_spacing": float(s.get("line_spacing") or 1.5),
+        "title_size": int(s.get("title_size") or 22),
+        "body_size": int(s.get("body_size") or 11),
+    }
+    if merged["heading"]:
+        merged["base"] = merged["heading"]
+    return merged
+
+
+def _docx_set_font(run, size=None, bold=None, color=None, font=None):
+    """设置 run 字体（含东亚字体，默认微软雅黑）"""
     from docx.shared import Pt, RGBColor
-    run.font.name = _DOC_FONT
+    f = font or _DOC_FONT
+    run.font.name = f
     from docx.oxml.ns import qn
     rPr = run._element.get_or_add_rPr()
     rFonts = rPr.find(qn("w:rFonts"))
     if rFonts is None:
         rFonts = rPr.makeelement(qn("w:rFonts"), {})
         rPr.insert(0, rFonts)
-    rFonts.set(qn("w:eastAsia"), _DOC_FONT)
+    rFonts.set(qn("w:eastAsia"), f)
     if size:
         run.font.size = Pt(size)
     if bold is not None:
@@ -1583,10 +1658,13 @@ def _docx_set_font(run, size=None, bold=None, color=None):
         run.font.color.rgb = RGBColor.from_string(color)
 
 
-def _create_docx(path: str, title: str, paragraphs: list, images: list = None) -> dict:
-    """生成 Word 文档（python-docx）：商务专业风（微软雅黑 + 深蓝主题）。
-    段落支持轻量标记：'# '/'## ' 为标题层级，'- '/'* ' 为项目符号，其余为正文。
-    images：图片路径列表，每张作为独立居中段落插入文档末尾（宽 6 英寸，按比例缩放）。"""
+def _create_docx(path: str, title: str, paragraphs: list, images: list = None,
+                 style: dict = None) -> dict:
+    """生成 Word 文档（python-docx）：默认商务专业风，支持 style 自定义配色/字体/排版。
+    段落支持轻量标记：'# '/'## '/'### ' 为标题层级，'- '/'* ' 为项目符号，其余为正文。
+    images：图片路径列表，每张作为独立居中段落插入文档末尾（宽 6 英寸，按比例缩放）。
+    style：可选 dict，字段见 schema（theme/base_color/heading_color/text_color/font_name/
+           align/line_spacing/title_size/body_size/page）。"""
     try:
         from docx import Document
         from docx.shared import Pt, RGBColor, Inches
@@ -1596,12 +1674,24 @@ def _create_docx(path: str, title: str, paragraphs: list, images: list = None) -
     p = _resolve(path)
     try:
         p.parent.mkdir(parents=True, exist_ok=True)
+        st = _doc_style(style)
+        f, base, soft, dark = st["font"], st["base"], st["soft"], st["dark"]
+        body_size, title_size = st["body_size"], st["title_size"]
+        ls = st["line_spacing"]
+        align_map = {"left": WD_ALIGN_PARAGRAPH.LEFT, "center": WD_ALIGN_PARAGRAPH.CENTER,
+                     "right": WD_ALIGN_PARAGRAPH.RIGHT, "justify": WD_ALIGN_PARAGRAPH.JUSTIFY}
+        body_align = align_map.get(st["align"], WD_ALIGN_PARAGRAPH.LEFT)
         doc = Document()
+        if str(style.get("page") if isinstance(style, dict) else "").lower() == "landscape":
+            from docx.enum.section import WD_ORIENT
+            sec = doc.sections[0]
+            sec.orientation = WD_ORIENT.LANDSCAPE
+            sec.page_width, sec.page_height = sec.page_height, sec.page_width
         if (title or "").strip():
             h = doc.add_paragraph()
             h.alignment = WD_ALIGN_PARAGRAPH.CENTER
             r = h.add_run(str(title))
-            _docx_set_font(r, size=22, bold=True, color=_DOC_NAVY)
+            _docx_set_font(r, size=title_size, bold=True, color=base, font=f)
             h.paragraph_format.space_after = Pt(14)
         for para in (paragraphs or []):
             para = str(para).strip()
@@ -1612,22 +1702,22 @@ def _create_docx(path: str, title: str, paragraphs: list, images: list = None) -
             if para.startswith("### "):
                 h = doc.add_paragraph()
                 r = h.add_run(para[4:])
-                _docx_set_font(r, size=12, bold=True, color=_DOC_DARK)
+                _docx_set_font(r, size=max(11, body_size - 1), bold=True, color=dark, font=f)
                 h.paragraph_format.space_before, h.paragraph_format.space_after = Pt(8), Pt(4)
             elif para.startswith("## "):
                 h = doc.add_paragraph()
                 r = h.add_run(para[3:])
-                _docx_set_font(r, size=13, bold=True, color=_DOC_NAVY_SOFT)
+                _docx_set_font(r, size=body_size + 2, bold=True, color=soft, font=f)
                 h.paragraph_format.space_before, h.paragraph_format.space_after = Pt(10), Pt(4)
             elif para.startswith("# "):
                 h = doc.add_paragraph()
                 r = h.add_run(para[2:])
-                _docx_set_font(r, size=16, bold=True, color=_DOC_NAVY)
+                _docx_set_font(r, size=body_size + 5, bold=True, color=base, font=f)
                 h.paragraph_format.space_before, h.paragraph_format.space_after = Pt(12), Pt(6)
             elif para.startswith(("- ", "* ")):
                 li = doc.add_paragraph()
                 r = li.add_run(para[2:])
-                _docx_set_font(r, size=11, color=_DOC_DARK)
+                _docx_set_font(r, size=body_size, color=dark, font=f)
                 li.paragraph_format.left_indent = Pt(18)
                 li.paragraph_format.line_spacing_rule = WD_LINE_SPACING.ONE_POINT_FIVE
                 # 手工项目符号圆点（避免依赖样式模板缺失）
@@ -1635,10 +1725,13 @@ def _create_docx(path: str, title: str, paragraphs: list, images: list = None) -
             else:
                 body = doc.add_paragraph()
                 r = body.add_run(para)
-                _docx_set_font(r, size=11, color=_DOC_DARK)
+                _docx_set_font(r, size=body_size, color=dark, font=f)
                 pf = body.paragraph_format
                 pf.space_after = Pt(6)
-                pf.line_spacing_rule = WD_LINE_SPACING.ONE_POINT_FIVE
+                pf.line_spacing_rule = WD_LINE_SPACING.MULTIPLE
+                pf.line_spacing = ls
+                if body_align != WD_ALIGN_PARAGRAPH.LEFT:
+                    body.alignment = body_align
         # 图片：每张作为独立居中段落插入文档末尾
         missing = []
         for img in (images or []):
@@ -1658,11 +1751,12 @@ def _create_docx(path: str, title: str, paragraphs: list, images: list = None) -
     return {"text": msg, "images": []}
 
 
-def _pptx_font(run, size, bold=False, color="404040"):
-    """设置 pptx run 字体（拉丁 + 东亚均为微软雅黑）"""
+def _pptx_font(run, size, bold=False, color="404040", font=None):
+    """设置 pptx run 字体（拉丁 + 东亚，默认微软雅黑）"""
     from pptx.util import Pt
     from pptx.dml.color import RGBColor
-    run.font.name = _DOC_FONT
+    f = font or _DOC_FONT
+    run.font.name = f
     run.font.size = Pt(size)
     run.font.bold = bold
     run.font.color.rgb = RGBColor.from_string(color)
@@ -1672,12 +1766,14 @@ def _pptx_font(run, size, bold=False, color="404040"):
     if ea is None:
         ea = rPr.makeelement(qn("a:ea"), {})
         rPr.append(ea)
-    ea.set("typeface", _DOC_FONT)
+    ea.set("typeface", f)
 
 
-def _create_pptx(path: str, title: str, slides: list) -> dict:
-    """生成 PowerPoint（python-pptx）：16:9 商务专业风。
-    标题页深蓝底白字；内容页白底深蓝标题条 + 深灰要点。"""
+def _create_pptx(path: str, title: str, slides: list, style: dict = None) -> dict:
+    """生成 PowerPoint（python-pptx）：16:9，默认商务专业风，支持 style 自定义配色/封面/要点符号。
+    style 可选字段：theme(配色方案)/cover_style(solid/split/centered)/title_color/bg_color/
+    font_name/bullet_style(dot/number/arrow/check)/title_size/body_size；
+    每页 slides 项可带 bg_color/title_color 覆盖全局。"""
     try:
         from pptx import Presentation
         from pptx.util import Inches, Pt
@@ -1689,39 +1785,86 @@ def _create_pptx(path: str, title: str, slides: list) -> dict:
     p = _resolve(path)
     try:
         p.parent.mkdir(parents=True, exist_ok=True)
+        st = _doc_style(style)
+        f, base, soft, dark = st["font"], st["base"], st["soft"], st["dark"]
+        _s = style or {}
+        title_size = int(_s.get("title_size") or 26)
+        body_size = int(_s.get("body_size") or 18)
+        # PPT 主题色板：偏"整体主题"语义，用 dark 作正文、soft 作浅辅助、base 作主色
+        bg_color = str((style or {}).get("bg_color") or "FFFFFF")
+        title_color = str((style or {}).get("title_color") or base)
+        cover_style = str((style or {}).get("cover_style") or "solid").lower()
+        bullet_map = {"dot": "•  ", "number": "{}.  ", "arrow": "→  ", "check": "✓  "}
+        bullet_fmt = bullet_map.get(str((style or {}).get("bullet_style") or "dot").lower(), "•  ")
         prs = Presentation()
         prs.slide_width = Inches(13.333)   # 16:9
         prs.slide_height = Inches(7.5)
         blank = prs.slide_layouts[6]
-        # 标题页：深蓝全屏 + 居中白字
+        # 标题页
         if (title or "").strip():
             s = prs.slides.add_slide(blank)
-            bg = s.shapes.add_shape(MSO_SHAPE.RECTANGLE, 0, 0, prs.slide_width, prs.slide_height)
-            bg.fill.solid()
-            bg.fill.fore_color.rgb = RGBColor.from_string(_DOC_NAVY)
-            bg.line.fill.background()
-            tb = s.shapes.add_textbox(Inches(1), Inches(2.6), Inches(11.333), Inches(1.6))
-            tf = tb.text_frame
-            tf.word_wrap = True
-            r = tf.paragraphs[0].add_run()
-            r.text = str(title)
-            _pptx_font(r, 40, bold=True, color="FFFFFF")
-            tf.paragraphs[0].alignment = PP_ALIGN.CENTER
+            cover = str(title)
+            if cover_style == "split":
+                # 左右分屏：左深色块 + 右白底，标题居左
+                left = s.shapes.add_shape(MSO_SHAPE.RECTANGLE, 0, 0, Inches(5.2), prs.slide_height)
+                left.fill.solid()
+                left.fill.fore_color.rgb = RGBColor.from_string(base)
+                left.line.fill.background()
+                tb = s.shapes.add_textbox(Inches(6.0), Inches(2.8), Inches(6.8), Inches(2.0))
+                tf = tb.text_frame
+                tf.word_wrap = True
+                r = tf.paragraphs[0].add_run()
+                r.text = cover
+                _pptx_font(r, 36, bold=True, color=base, font=f)
+                tf.paragraphs[0].alignment = PP_ALIGN.LEFT
+            elif cover_style == "centered":
+                # 居中简约：白底深色标题 + 下方软色短横线
+                tb = s.shapes.add_textbox(Inches(1), Inches(2.4), Inches(11.333), Inches(1.8))
+                tf = tb.text_frame
+                tf.word_wrap = True
+                r = tf.paragraphs[0].add_run()
+                r.text = cover
+                _pptx_font(r, 40, bold=True, color=base, font=f)
+                tf.paragraphs[0].alignment = PP_ALIGN.CENTER
+                ln = s.shapes.add_shape(MSO_SHAPE.RECTANGLE, Inches(6.0), Inches(4.3), Inches(1.3), Pt(4))
+                ln.fill.solid()
+                ln.fill.fore_color.rgb = RGBColor.from_string(soft)
+                ln.line.fill.background()
+            else:
+                # solid：全屏主色底 + 白字（默认）
+                bg = s.shapes.add_shape(MSO_SHAPE.RECTANGLE, 0, 0, prs.slide_width, prs.slide_height)
+                bg.fill.solid()
+                bg.fill.fore_color.rgb = RGBColor.from_string(base)
+                bg.line.fill.background()
+                tb = s.shapes.add_textbox(Inches(1), Inches(2.6), Inches(11.333), Inches(1.6))
+                tf = tb.text_frame
+                tf.word_wrap = True
+                r = tf.paragraphs[0].add_run()
+                r.text = cover
+                _pptx_font(r, 40, bold=True, color="FFFFFF", font=f)
+                tf.paragraphs[0].alignment = PP_ALIGN.CENTER
         # 内容页
         missing = []
         for i, item in enumerate(slides or [], 1):
             if not isinstance(item, dict):
                 continue
             slide = prs.slides.add_slide(blank)
-            # 标题 + 底部深蓝分隔线
+            pg_bg = str(item.get("bg_color") or bg_color)
+            pg_title = str(item.get("title_color") or title_color)
+            if pg_bg.lower() != "ffffff":
+                bg = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, 0, 0, prs.slide_width, prs.slide_height)
+                bg.fill.solid()
+                bg.fill.fore_color.rgb = RGBColor.from_string(pg_bg)
+                bg.line.fill.background()
+            # 标题 + 底部主色分隔线
             tb = slide.shapes.add_textbox(Inches(0.6), Inches(0.35), Inches(12.1), Inches(0.8))
             r = tb.text_frame.paragraphs[0].add_run()
             r.text = str(item.get("title") or "")
-            _pptx_font(r, 26, bold=True, color=_DOC_NAVY)
+            _pptx_font(r, title_size, bold=True, color=pg_title, font=f)
             line = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, Inches(0.6), Inches(1.18),
                                           Inches(12.1), Pt(2.5))
             line.fill.solid()
-            line.fill.fore_color.rgb = RGBColor.from_string(_DOC_NAVY)
+            line.fill.fore_color.rgb = RGBColor.from_string(pg_title)
             line.line.fill.background()
             # 要点正文
             body = slide.shapes.add_textbox(Inches(0.6), Inches(1.45), Inches(12.1), Inches(5.4))
@@ -1732,8 +1875,9 @@ def _create_pptx(path: str, title: str, slides: list) -> dict:
                 para = tf.paragraphs[0] if j == 0 else tf.add_paragraph()
                 para.space_after = Pt(10)
                 r = para.add_run()
-                r.text = ("•  " if str(b).strip() else "") + str(b).strip()
-                _pptx_font(r, 18, bold=(j == 0), color=_DOC_DARK)
+                prefix = bullet_fmt.format(j + 1) if "{}" in bullet_fmt else bullet_fmt
+                r.text = (prefix if str(b).strip() else "") + str(b).strip()
+                _pptx_font(r, body_size, bold=(j == 0), color=dark, font=f)
             # 本页插图：要点下方居中（宽 8 英寸，按比例缩放）
             img = (item.get("image") or "").strip()
             if img:
@@ -1746,7 +1890,7 @@ def _create_pptx(path: str, title: str, slides: list) -> dict:
             foot = slide.shapes.add_textbox(Inches(11.9), Inches(7.0), Inches(1.0), Inches(0.4))
             fr = foot.text_frame.paragraphs[0].add_run()
             fr.text = str(i)
-            _pptx_font(fr, 10, color=_DOC_NAVY_SOFT)
+            _pptx_font(fr, 10, color=soft, font=f)
             foot.text_frame.paragraphs[0].alignment = PP_ALIGN.RIGHT
         prs.save(str(p))
     except Exception as e:
@@ -1775,9 +1919,10 @@ def _xlsx_col_width(texts) -> float:
     return max(8, min(w + 2, 40))
 
 
-def _create_xlsx(path: str, sheets: list) -> dict:
-    """生成 Excel 工作簿（openpyxl）：商务专业风。
-    首行深蓝表头白字 + 细边框 + 隔行浅蓝 + 自动列宽 + 冻结首行 + 自动筛选。"""
+def _create_xlsx(path: str, sheets: list, style: dict = None) -> dict:
+    """生成 Excel 工作簿（openpyxl）：默认商务专业风，支持 style 自定义表头/隔行/边框。
+    style 可选字段：theme_color/header_fill/header_color/font_name/banded/band_fill/
+    freeze_header/auto_filter/border_color/header_size/body_size/header_bold。"""
     try:
         from openpyxl import Workbook
         from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
@@ -1786,43 +1931,60 @@ def _create_xlsx(path: str, sheets: list) -> dict:
     p = _resolve(path)
     try:
         p.parent.mkdir(parents=True, exist_ok=True)
+        s = style or {}
+        theme = str(s.get("theme") or "business").lower()
+        pal = _DOC_THEMES.get(theme) or _DOC_THEMES["business"]
+        base = str(s.get("theme_color") or s.get("base_color") or pal["base"])
+        header_fill = str(s.get("header_fill") or base)
+        header_color = str(s.get("header_color") or "FFFFFF")
+        font_name = str(s.get("font_name") or _DOC_FONT)
+        banded = bool(s.get("banded", True))
+        band_fill = str(s.get("band_fill") or "F2F6FC")
+        freeze_header = bool(s.get("freeze_header", True))
+        auto_filter = bool(s.get("auto_filter", True))
+        border_color = str(s.get("border_color") or "D9D9D9")
+        header_size = int(s.get("header_size") or 11)
+        body_size = int(s.get("body_size") or 10)
+        header_bold = bool(s.get("header_bold", True))
         wb = Workbook()
         wb.remove(wb.active)
-        thin = Side(style="thin", color="D9D9D9")
+        thin = Side(style="thin", color=border_color)
         border = Border(left=thin, right=thin, top=thin, bottom=thin)
         missing = []
         for sheet in (sheets or []):
             if not isinstance(sheet, dict):
                 continue
             ws = wb.create_sheet(title=str(sheet.get("name") or "Sheet")[:31])
-            ws.sheet_properties.tabColor = _DOC_NAVY
+            ws.sheet_properties.tabColor = header_fill
             rows = [r for r in (sheet.get("rows") or []) if isinstance(r, (list, tuple))]
             for row in rows:
                 ws.append([_xlsx_cell(v) for v in row])
             if not rows:
                 continue
-            # 表头：深蓝底白字加粗居中
+            # 表头：主题色底 + 白字加粗居中
             for c in ws[1]:
-                c.font = Font(name=_DOC_FONT, size=11, bold=True, color="FFFFFF")
-                c.fill = PatternFill("solid", fgColor=_DOC_NAVY)
+                c.font = Font(name=font_name, size=header_size, bold=header_bold, color=header_color)
+                c.fill = PatternFill("solid", fgColor=header_fill)
                 c.alignment = Alignment(horizontal="center", vertical="center")
                 c.border = border
             ws.row_dimensions[1].height = 22
-            # 数据行：微软雅黑 + 边框 + 隔行浅蓝 + 数字右对齐
+            # 数据行：字体 + 边框 + 隔行变色 + 数字右对齐
             for r_idx, row in enumerate(ws.iter_rows(min_row=2), 2):
                 for c in row:
-                    c.font = Font(name=_DOC_FONT, size=10, color=_DOC_DARK)
+                    c.font = Font(name=font_name, size=body_size, color="404040")
                     c.border = border
                     c.alignment = Alignment(horizontal=("right" if isinstance(c.value, (int, float))
                                                         else "left"), vertical="center")
-                    if r_idx % 2 == 0:
-                        c.fill = PatternFill("solid", fgColor="F2F6FC")
+                    if banded and r_idx % 2 == 0:
+                        c.fill = PatternFill("solid", fgColor=band_fill)
             # 自动列宽 + 冻结首行 + 自动筛选
             for col in ws.columns:
                 ws.column_dimensions[col[0].column_letter].width = \
                     _xlsx_col_width([c.value for c in col])
-            ws.freeze_panes = "A2"
-            ws.auto_filter.ref = ws.dimensions
+            if freeze_header:
+                ws.freeze_panes = "A2"
+            if auto_filter:
+                ws.auto_filter.ref = ws.dimensions
             # 表插图：数据下方（锚定首列）
             img = (sheet.get("image") or "").strip()
             if img:

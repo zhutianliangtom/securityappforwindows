@@ -82,20 +82,37 @@ _BUILTIN_MD_SKILLS = {
 先问清：文档主题与内容要点、保存路径、格式（docx/pptx/xlsx）。
 内容信息不足时用 ask_user 补齐，禁止编造数据。
 
-## 2. 生成（已内置商务专业风美化，无需传样式参数）
-- Word（create_docx）：path=保存路径，title=文档标题，paragraphs=[段落文本列表]
-  段落支持轻量标记增强结构：'# ' 一级标题、'## ' 二级标题、'- ' 项目符号，其余为正文。
-  标题建议用标记分层（如 '# 一、概述' / '## 1.1 现状'），正文直接写内容。
-- PPT（create_pptx）：path，title=总标题，slides=[{title: 页标题, bullets: [要点列表]}]
-  自动生成 16:9 标题页（深蓝底白字）；每页为"深蓝标题+分隔线+要点"，每页要点建议 3-6 条。
-- Excel（create_xlsx）：path，sheets=[{name: 工作表名, rows: [[单元格值]...]}]
-  首行自动作深蓝表头并冻结；纯数字字符串自动转数值，无需引号包裹数字。
+## 2. 大胆设计，拒绝千篇一律（核心原则）
+所有文档都默认商务深蓝风会让你看起来像模板机器。请根据内容主题主动选择配色、字体与布局，
+通过每个工具的 style 参数定制，让每份文档都独一无二：
+- 主题换色（style.theme）：科技/产品→tech(蓝)、环保/自然→green(墨绿)、
+  党政/年节→red(朱红)、教育/学术→business(深蓝)或pastel(浅蓝)、
+  高端/商务晚宴→black-gold(黑金)、创意/发布会→vivid(橙红)、
+  暗色炫酷→dark、温馨/文艺→warm(橙棕)。
+  也可直接传具体色值（base_color/heading_color/text_color/theme_color/header_fill 等）自由发挥。
+- 字体（font_name）：正式文书用"宋体/仿宋"，文艺用"楷体"，默认微软雅黑。
+- 布局：Word 可调行距/对齐/纸张方向；PPT 可选封面布局(纯色/左右分屏/居中简约)与要点符号
+  (圆点/编号/箭头/对勾)；Excel 可自定义表头配色、隔行色、边框、字号、是否冻结/筛选。
+- 每份文档至少换一个配色或布局参数，让作品符合内容气质，而不是套同一个模板。
 
-## 3. 验证（必做）
+## 3. 生成
+- Word（create_docx）：path=保存路径，title=文档标题，paragraphs=[段落文本列表]，style=样式(可选)
+  段落支持轻量标记增强结构：'# ' 一级标题、'## ' 二级标题、'### ' 三级标题、'- ' 项目符号，其余为正文。
+  标题建议用标记分层（如 '# 一、概述' / '## 1.1 现状'），正文直接写内容。
+- PPT（create_pptx）：path，title=总标题，slides=[{title: 页标题, bullets: [要点列表],
+  image: 插图(可选), bg_color: 本页背景色(可选), title_color: 本页标题色(可选)}]，style=样式(可选)
+  自动生成 16:9 标题页；每页为"标题+分隔线+要点"，每页要点建议 3-6 条。
+- Excel（create_xlsx）：path，sheets=[{name: 工作表名, rows: [[单元格值]...],
+  image: 插图(可选)}]，style=样式(可选)
+  首行自动作表头（默认深蓝底白字并冻结）；纯数字字符串自动转数值，无需引号包裹数字。
+- 图片素材：可根据实际情况调用 image-gen 技能生成所需图片素材（文生图/图生图），
+  生成后自动下载到桌面；生成的图片可以直接插入到 Word/PPT/Excel 文档中。
+
+## 4. 验证（必做）
 生成后用 extract_text(path) 读取文件，确认标题、正文、中文、表格数据均正确。
 
-## 4. 汇报
-输出：文件路径、包含的章节/工作表、内容摘要。""",
+## 5. 汇报
+输出：文件路径、包含的章节/工作表、采用的配色主题与布局风格、内容摘要。""",
     },
     "web-search": {
         "description": "联网搜索：web_search 搜索实时信息（新闻/文档/教程/代码），web_fetch 抓取网页或调用 API 接口",
@@ -990,8 +1007,9 @@ def build_system_prompt(agent_name: str = "", extra_skills: list = None,
                "web_fetch(联网请求 URL：GET/POST/PUT/DELETE 抓网页、调 API、读接口)、"
                "clipboard(读写剪贴板)、"
                "extract_text(提取文档文本：txt/csv/docx/pptx/xlsx，pdf 需装 pypdf)、"
-               "create_docx(生成 Word 文档：标题+段落)、create_pptx(生成 PPT：标题+每页要点)、"
-               "create_xlsx(生成 Excel：多工作表二维数据)、"
+               "create_docx(生成 Word 文档：标题+段落+可传 style 自定义配色字体排版)、"
+               "create_pptx(生成 PPT：标题+每页要点+可传 style 自定义配色封面布局)、"
+               "create_xlsx(生成 Excel：多工作表二维数据+可传 style 自定义表头隔行边框)、"
                "move_mouse/click/drag/scroll(鼠标)、press_key/type_text(键盘)、"
                "run_command(执行命令，可设 wait/force_quit，长任务用 check_command 轮询进度)、"
                "read_file/write_file/edit_file/delete_file/list_directory(文件读写改删列，相对路径基于工作目录)、"

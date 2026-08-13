@@ -916,28 +916,28 @@ def execute_tool(name: str, args: dict, allow_dangerous: bool = False,
                                clicks=agent_sandbox.to_int(args.get("clicks", 1)))
             return _click_feedback(msg + f"（换算屏幕坐标 {px},{py}）")
         if name == "zoom_in":
-            # 模型给的全屏读数 → 物理坐标 → 放大局部截图（切换视觉基准为 zoom 态）
-            x, y = agent_sandbox.to_int(args.get("x")), agent_sandbox.to_int(args.get("y"))
-            px, py = agent_screen.map_to_screen(x, y)
-            url = agent_screen.capture_zoom_data_url(px, py)
+            ctl = agent_control.controller()
+            (px, py), url = ctl.zoom(agent_sandbox.to_int(args.get("x")),
+                                     agent_sandbox.to_int(args.get("y")))
             return {"text": f"已放大屏幕坐标 ({px},{py}) 附近 400×400 区域（3 倍）。"
                             "请基于放大图内的细网格刻度精确读取目标坐标，再调用 click。",
                     "images": [url]}
         if name == "drag":
-            agent_screen.drag(agent_sandbox.to_int(args.get("x1")),
-                              agent_sandbox.to_int(args.get("y1")),
-                              agent_sandbox.to_int(args.get("x2")),
-                              agent_sandbox.to_int(args.get("y2")))
+            ctl = agent_control.controller()
+            ctl.drag(agent_sandbox.to_int(args.get("x1")),
+                     agent_sandbox.to_int(args.get("y1")),
+                     agent_sandbox.to_int(args.get("x2")),
+                     agent_sandbox.to_int(args.get("y2")))
             return {"text": f"已从 ({args.get('x1')},{args.get('y1')}) 拖到 ({args.get('x2')},{args.get('y2')})",
                     "images": []}
         if name == "scroll":
-            agent_screen.scroll(agent_sandbox.to_int(args.get("delta")))
+            agent_control.controller().scroll(agent_sandbox.to_int(args.get("delta")))
             return {"text": f"已滚动 {args.get('delta')}", "images": []}
         if name == "press_key":
-            agent_screen.key_press(str(args["key"]))
+            agent_control.controller().press(str(args["key"]))
             return {"text": f"已按键 {args['key']}", "images": []}
         if name == "type_text":
-            agent_screen.type_text(str(args["text"]))
+            agent_control.controller().type_text(str(args["text"]))
             return {"text": f"已输入文本（{len(str(args['text']))} 字符）", "images": []}
         if name == "run_command":
             return _run_command(str(args.get("command", "")),

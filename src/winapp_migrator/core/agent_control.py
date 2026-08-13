@@ -94,7 +94,7 @@ class ComputerController:
             msg += f"（落点校验：在「{hit_name}」控件内）"
         return (sx, sy), msg
 
-    # ---------- 输入 / 滑动 ----------
+    # ---------- 输入 / 滑动 / 拖拽 / 缩放 ----------
     def type_text(self, text: str):
         agent_screen.type_text(text)
 
@@ -103,6 +103,15 @@ class ComputerController:
 
     def scroll(self, delta: int):
         agent_screen.scroll(delta)
+
+    def drag(self, x1, y1, x2, y2):
+        agent_screen.drag(int(x1), int(y1), int(x2), int(y2))
+
+    def zoom(self, x, y):
+        """放大指定坐标附近区域，返回 (物理坐标, 放大图 data URL)。"""
+        px, py = agent_screen.map_to_screen(int(x), int(y))
+        url = agent_screen.capture_zoom_data_url(px, py)
+        return (px, py), url
 
 
 # 模块级单例：供 agent_tools 等复用同一控制器

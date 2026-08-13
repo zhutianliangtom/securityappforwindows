@@ -935,7 +935,6 @@ class _AgentSettingsDialog(QDialog):
             f"border: 1px solid {self._BORDER}; border-radius: 8px; padding: 6px; }}"
             f"QListWidget::item {{ border-radius: 8px; margin: 2px; }}"
             f"QListWidget::item:selected {{ background: {self._PANEL2}; }}")
-        self.provider_list.itemDoubleClicked.connect(self._on_provider_edit)
         self.provider_list.itemClicked.connect(self._on_provider_edit)
         lay.addWidget(self.provider_list, 1)
         self._reload_provider_list()
@@ -3246,6 +3245,7 @@ class AgentPanel(QDialog):
         """设置变更后：刷新模式/工作目录/多模型/力度/纯文本状态；引擎空闲则重建以应用新配置"""
         s = agent_skills.load_settings()
         self._model_cfg = agent_llm.load_model_config()
+        self._sync_model_combo()   # 模型/服务商变更后即时重建输入框右侧下拉
         self._effort = self._model_cfg.get("effort", "medium")
         self._auto_effort = bool(self._model_cfg.get("auto_effort", True))
         self._mode = str(self._settings.value("agent_mode", "ask"))   # 执行模式在设置页调整后同步

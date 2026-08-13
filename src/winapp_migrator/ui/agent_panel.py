@@ -126,14 +126,17 @@ def _line_icon(kind: str, size: int = 18, color: str = TEXT_DIM) -> QIcon:
         r = s * 0.28
         p.drawRoundedRect(QRectF(s * 0.5 - r, s * 0.5 - r, r * 2, r * 2),
                           s * 0.08, s * 0.08)
-    elif kind == "gear":        # 齿轮（设置）
+    elif kind == "gear":        # 齿轮（设置）：粗齿 + 粗外圆 + 中心孔，辨识度高
         cx = cy = s * 0.5
-        p.drawEllipse(QPointF(cx, cy), s * 0.16, s * 0.16)
-        p.drawEllipse(QPointF(cx, cy), s * 0.30, s * 0.30)
+        p.setPen(QPen(QColor(color), s * 0.085, cap=Qt.PenCapStyle.RoundCap,
+                      join=Qt.PenJoinStyle.RoundJoin))
         for i in range(8):
             a = math.pi * i / 4
-            p.drawLine(QPointF(cx + s * 0.30 * math.cos(a), cy + s * 0.30 * math.sin(a)),
+            p.drawLine(QPointF(cx + s * 0.25 * math.cos(a), cy + s * 0.25 * math.sin(a)),
                        QPointF(cx + s * 0.42 * math.cos(a), cy + s * 0.42 * math.sin(a)))
+        p.drawEllipse(QPointF(cx, cy), s * 0.26, s * 0.26)
+        p.setPen(QPen(QColor(color), s * 0.05))
+        p.drawEllipse(QPointF(cx, cy), s * 0.10, s * 0.10)
     elif kind == "trash":       # 垃圾桶（清空）
         p.drawLine(QPointF(s * 0.22, s * 0.28), QPointF(s * 0.78, s * 0.28))
         p.drawLine(QPointF(s * 0.36, s * 0.28), QPointF(s * 0.36, s * 0.19))
@@ -152,6 +155,59 @@ def _line_icon(kind: str, size: int = 18, color: str = TEXT_DIM) -> QIcon:
     elif kind == "plus":        # 加号（上传附件，精确居中）
         p.drawLine(QPointF(s * 0.5, s * 0.26), QPointF(s * 0.5, s * 0.74))
         p.drawLine(QPointF(s * 0.26, s * 0.5), QPointF(s * 0.74, s * 0.5))
+    elif kind == "ok":          # 对勾（保存/确定）
+        p.setPen(QPen(QColor(color), 2.2, cap=Qt.PenCapStyle.RoundCap,
+                      join=Qt.PenJoinStyle.RoundJoin))
+        p.drawLine(QPointF(s * 0.24, s * 0.52), QPointF(s * 0.44, s * 0.72))
+        p.drawLine(QPointF(s * 0.44, s * 0.72), QPointF(s * 0.78, s * 0.30))
+    elif kind == "no":          # 叉（拒绝）
+        p.drawLine(QPointF(s * 0.28, s * 0.28), QPointF(s * 0.72, s * 0.72))
+        p.drawLine(QPointF(s * 0.72, s * 0.28), QPointF(s * 0.28, s * 0.72))
+    elif kind == "drive":       # 硬盘（通用与记忆）
+        p.drawRoundedRect(QRectF(s * 0.16, s * 0.28, s * 0.68, s * 0.44),
+                          s * 0.06, s * 0.06)
+        p.setBrush(QColor(color))
+        p.drawEllipse(QPointF(s * 0.32, s * 0.50), s * 0.05, s * 0.05)
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        p.drawLine(QPointF(s * 0.44, s * 0.50), QPointF(s * 0.78, s * 0.50))
+    elif kind == "list":        # 列表（自定义规则）
+        p.drawLine(QPointF(s * 0.22, s * 0.30), QPointF(s * 0.78, s * 0.30))
+        p.drawLine(QPointF(s * 0.22, s * 0.50), QPointF(s * 0.78, s * 0.50))
+        p.drawLine(QPointF(s * 0.22, s * 0.70), QPointF(s * 0.78, s * 0.70))
+    elif kind == "doc":         # 文档（系统提示词）
+        p.drawRoundedRect(QRectF(s * 0.22, s * 0.16, s * 0.56, s * 0.68),
+                          s * 0.06, s * 0.06)
+        p.drawLine(QPointF(s * 0.34, s * 0.36), QPointF(s * 0.66, s * 0.36))
+        p.drawLine(QPointF(s * 0.34, s * 0.50), QPointF(s * 0.66, s * 0.50))
+        p.drawLine(QPointF(s * 0.34, s * 0.64), QPointF(s * 0.56, s * 0.64))
+    elif kind == "bash":        # 终端（bash 白名单）
+        p.drawRoundedRect(QRectF(s * 0.16, s * 0.24, s * 0.68, s * 0.52),
+                          s * 0.07, s * 0.07)
+        p.drawLine(QPointF(s * 0.28, s * 0.40), QPointF(s * 0.40, s * 0.50))
+        p.drawLine(QPointF(s * 0.28, s * 0.60), QPointF(s * 0.40, s * 0.50))
+        p.drawLine(QPointF(s * 0.48, s * 0.56), QPointF(s * 0.72, s * 0.56))
+    elif kind == "net":         # 网络（模型接入）
+        p.drawEllipse(QPointF(s * 0.5, s * 0.28), s * 0.10, s * 0.10)
+        p.drawArc(QRectF(s * 0.22, s * 0.28, s * 0.56, s * 0.52), 0, 180 * 16)
+        p.drawArc(QRectF(s * 0.32, s * 0.28, s * 0.36, s * 0.34), 0, 180 * 16)
+    elif kind == "folder":      # 文件夹（技能/浏览）
+        p.drawRoundedRect(QRectF(s * 0.16, s * 0.32, s * 0.68, s * 0.46),
+                          s * 0.05, s * 0.05)
+        p.drawLine(QPointF(s * 0.16, s * 0.42), QPointF(s * 0.42, s * 0.42))
+        p.drawLine(QPointF(s * 0.46, s * 0.42), QPointF(s * 0.52, s * 0.32))
+        p.drawLine(QPointF(s * 0.84, s * 0.36), QPointF(s * 0.84, s * 0.32))
+        p.drawLine(QPointF(s * 0.84, s * 0.32), QPointF(s * 0.76, s * 0.32))
+    elif kind == "server":      # 服务器（MCP）
+        p.drawRoundedRect(QRectF(s * 0.18, s * 0.20, s * 0.64, s * 0.24),
+                          s * 0.05, s * 0.05)
+        p.drawRoundedRect(QRectF(s * 0.18, s * 0.56, s * 0.64, s * 0.24),
+                          s * 0.05, s * 0.05)
+        p.setBrush(QColor(color))
+        p.drawEllipse(QPointF(s * 0.30, s * 0.32), s * 0.04, s * 0.04)
+        p.drawEllipse(QPointF(s * 0.30, s * 0.68), s * 0.04, s * 0.04)
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        p.drawLine(QPointF(s * 0.44, s * 0.32), QPointF(s * 0.72, s * 0.32))
+        p.drawLine(QPointF(s * 0.44, s * 0.68), QPointF(s * 0.72, s * 0.68))
     p.end()
     return QIcon(pm)
 
@@ -619,16 +675,16 @@ class _AgentSettingsDialog(QDialog):
             f"QListWidget::item:selected {{ background: {self._PANEL2};"
             f"color: {self._ACCENT_HOVER};"
             f"border-left: 3px solid {self._ACCENT_HOVER}; }}")
-        for name, sp in (
-            ("通用与记忆", QStyle.StandardPixmap.SP_DriveHDIcon),
-            ("自定义规则", QStyle.StandardPixmap.SP_FileDialogDetailedView),
-            ("系统提示词", QStyle.StandardPixmap.SP_FileDialogInfoView),
-            ("bash 白名单", QStyle.StandardPixmap.SP_FileDialogContentsView),
-            ("模型接入", QStyle.StandardPixmap.SP_DriveNetIcon),
-            ("技能", QStyle.StandardPixmap.SP_FileDialogNewFolder),
-            ("MCP 服务器", QStyle.StandardPixmap.SP_ComputerIcon),
+        for name, kind in (
+            ("通用与记忆", "drive"),
+            ("自定义规则", "list"),
+            ("系统提示词", "doc"),
+            ("bash 白名单", "bash"),
+            ("模型接入", "net"),
+            ("技能", "folder"),
+            ("MCP 服务器", "server"),
         ):
-            self.nav.addItem(QListWidgetItem(_std_icon(sp), name))
+            self.nav.addItem(QListWidgetItem(_line_icon(kind, 16), name))
         self.nav.setCurrentRow(0)
         self.nav.currentRowChanged.connect(self._switch_page)
         root.addWidget(self.nav)
@@ -719,7 +775,7 @@ class _AgentSettingsDialog(QDialog):
         self.workdir_edit.setText(str(QSettings("WinAppMigrator", "WinAppMigrator")
                                       .value("agent_workdir", "")))
         wd_row.addWidget(self.workdir_edit, 1)
-        browse = QPushButton(_std_icon(QStyle.StandardPixmap.SP_DirOpenIcon), "浏览…")
+        browse = QPushButton(_line_icon("folder", 16), "浏览…")
         browse.setStyleSheet(f"background: {self._PANEL}; color: {self._TEXT};"
                              f"border: 1px solid {self._BORDER}; border-radius: 8px;"
                              "padding: 6px 14px; font-weight: 600;")
@@ -906,7 +962,7 @@ class _AgentSettingsDialog(QDialog):
                              "padding: 7px 16px; font-weight: 600;")
         edit_b.setAutoDefault(False)
         edit_b.clicked.connect(self._on_mcp_edit)
-        del_b = QPushButton(_std_icon(QStyle.StandardPixmap.SP_TrashIcon), "删除")
+        del_b = QPushButton(_line_icon("trash", 16), "删除")
         del_b.setStyleSheet(f"background: {self._PANEL}; color: {self._DIM};"
                             f"border: 1px solid {self._BORDER}; border-radius: 8px;"
                             "padding: 7px 16px; font-weight: 600;")
@@ -1647,6 +1703,15 @@ class AgentPanel(QDialog):
             f"QDialog {{ background: qlineargradient(x1:0, y1:0, x2:0, y2:1,"
             f"stop:0 {BG}, stop:1 {BG_BOTTOM}); }}"
             + _QCOMBO)
+        # 全局悬浮提示：深色底 + 白字 + 描边，避免系统默认纯黑底看不清
+        # （QToolTip 无独立 setStyleSheet，需挂到应用级样式表，仅追加一次）
+        app = QApplication.instance()
+        if app is not None and "QToolTip {" not in (app.styleSheet() or ""):
+            app.setStyleSheet(
+                (app.styleSheet() or "") +
+                f"QToolTip {{ background: {PANEL}; color: {TEXT};"
+                f"border: 1px solid {ACCENT}; border-radius: 6px;"
+                "padding: 6px 10px; font-size: 12px; }}")
 
         self._settings = QSettings("WinAppMigrator", "WinAppMigrator")
         self._engine: agent_engine.AgentEngine = None
@@ -1714,6 +1779,7 @@ class AgentPanel(QDialog):
         self._action_anim_angle = 0
 
         self._build_ui()
+        self._sync_model_combo()   # 填充输入框右侧模型下拉（设置里的模型列表）
         self._connect_signals()
         self._restore_workdir()   # 恢复上次选择的工作目录（QSettings 持久化）
         self._init_sessions()   # 加载会话列表，默认恢复最近对话（上下文隔离）

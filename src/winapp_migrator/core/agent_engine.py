@@ -130,8 +130,8 @@ class AgentEngine:
         self._thread: threading.Thread = None
         self._builtin_names = {t["function"]["name"] for t in agent_tools.TOOLS}
         self._rules_confirmed = False   # 当前任务是否已确认开发规则
-        self._skills_read = set()       # 已读取规范流程的技能名（read_file 命中 skills/ 目录即记录）
-        self._skill_blocked = {}        # 工具名 -> 已拦截次数（防循环，最多拦截 2 次）
+        self._skills_read = set()       # 已注入/已读取规范流程的技能名
+        self._skill_consulted = set()   # 已做技能规范化拦截的工具名（每工具最多注入一次）
 
     # ---------- 控制 ----------
     def stop(self):
@@ -362,8 +362,8 @@ class AgentEngine:
         if direct is not None:
             self.direct = direct
         self._stop.clear()
-        self._skills_read.clear()      # 每轮任务重置技能读取状态
-        self._skill_blocked.clear()
+        self._skills_read.clear()      # 每轮任务重置技能读取/注入状态
+        self._skill_consulted.clear()
         self._thread = threading.Thread(target=self.run,
                                         args=(user_input, agent_name, images, skills),
                                         daemon=True)
@@ -621,18 +621,22 @@ class AgentEngine:
                         self.end_state = "stopped"
                         return
                     name = call["function"]["name"]
-                    # 技能路由硬拦截：被技能覆盖的工具，未读取规范流程前不直接放行。
-                    # 拦截要求先 read_file 对应 SKILL.md，按规范流程执行（防 AI 跳过 skill 直接裸调工具）。
-                    if not self.direct:
+                    # 技能路由硬拦截：被技能覆盖的工具，首次调用直接把该技能的规范流程
+                    # 注入本轮上下文并拦截，强制按技能执行（防 AI 跳过 skill 直接裸调工具）。
+                    # 每工具最多注入一次（_skill_consulted 记录）；已注入/已读的技能不再重复注入。
+                    if not self.direct and name not in self._skill_consulted:
                         covered = agent_skills.skills_covering_tools([name]).get(name, [])
                         unseen = [s for s in covered if s not in self._skills_read]
-                        if unseen and self._skill_blocked.get(name, 0) < 2:
-                            self._skill_blocked[name] = self._skill_blocked.get(name, 0) + 1
+                        if unseen:
+                            self._skill_consulted.add(name)
                             sname = unseen[0]
-                            text = (f"[技能规范化] 工具「{name}」的操作由内置技能「{sname}」规范化。"
-                                    f"请先 read_file \"{agent_skills.skill_md_path(sname)}\" "
-                                    f"获取标准流程并按流程执行（含配图角度/位置等质量要求），"
-                                    f"读完后重新发起该工具调用。")
+                            skill = next((s for s in agent_skills.load_skills()
+                                          if s.get("name") == sname), None)
+                            body = (skill or {}).get("instruction") or ""
+                            text = (f"[技能规范化] 工具「{name}」的操作由技能「{sname}」规范化，"
+                                    f"已加载规范流程，请严格按以下流程执行"
+                                    f"（含配图角度/位置等质量要求）：\n\n{body}\n\n"
+                                    f"按此流程重新发起该工具调用。")
                             self._messages.append({"role": "tool", "tool_call_id": call["id"],
                                                    "content": text})
                             answered.add(call["id"])

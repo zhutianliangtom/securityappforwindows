@@ -1,11 +1,12 @@
 ---
 name: screen_operate
-description: 屏幕操控：screenshot 截取目标窗口并给出元素编号清单、click/click_text 按文字或编号点击、type_text 输入、move_mouse/zoom_in（仅纯图标）、press_key 键盘
+description: 屏幕操控（电脑操控专用子Agent技能）：screenshot 截取目标窗口并给出元素编号清单、click/click_text 按编号或文字点击、type_text 输入、move_mouse/zoom_in（仅纯图标）、press_key 键盘
 ---
 
-# screen_operate：屏幕操控
+# screen_operate：屏幕操控（电脑操控专用子 Agent）
 
-当需要操作界面、点击按钮、输入文本时使用本技能。
+当电脑操控专用子 Agent 需要操作界面、点击按钮、输入文本时使用本技能。
+主 Agent 不直接使用本技能，统一通过 control_ui 派发目标。
 
 1. 需要了解界面时先 `screenshot`，返回**可点击/输入元素的编号清单 [id] (类型) 文字**。
 2. 每步操作前用一句话说明意图。

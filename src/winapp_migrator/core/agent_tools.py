@@ -124,6 +124,25 @@ TOOLS = [
     {
         "type": "function",
         "function": {
+            "name": "control_ui",
+            "description": "用鼠标/键盘操控电脑完成一个 GUI 操作目标，交给「电脑操控专用子 Agent」执行。\n"
+                           "**优先用 run_command / 文件操作等 API/脚本方式**，只有目标无法用命令完成"
+                           "（如点击软体内的按钮/菜单、在图形界面里输入、拖拽）时才调用本工具。"
+                           "goal 描述要完成的操作目标（说清点哪个、输什么、期望结果）；"
+                           "target_window 可选，指定要操作的窗口标题（模糊匹配）。"
+                           "子 Agent 会先截图拿到元素清单，按编号/文字精确点击输入，完成后返回结果总结。",
+            "parameters": {"type": "object",
+                           "properties": {
+                               "goal": {"type": "string",
+                                        "description": "要完成的 GUI 操作目标，写清操作对象与期望结果"},
+                               "target_window": {"type": "string",
+                                                 "description": "（可选）目标窗口标题（模糊匹配）；留空操作当前前台应用"}},
+                           "required": ["goal"]},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "screenshot",
             "description": "截取当前目标窗口（前台应用窗口）并返回可点击/可输入元素的编号语义清单 "
                            "[id] (类型) 文字。操作界面时**必须按清单里的 id 或文字引用**（click(id=..) "
@@ -803,6 +822,15 @@ TOOLS = [
 
 # 子 Agent 工具名（由 agent_engine 拦截调度，携带 LLM 客户端执行；不在此直接实现）
 SUB_AGENT_TOOLS = ("dispatch_sub_agents", "explore_project", "search_large")
+
+# 电脑操控工具集：只归「电脑操控专用子 Agent」所有，主 Agent 不直接调用。
+# 主 Agent 通过 control_ui 派发目标，由子 Agent 用这些工具完成 GUI 操作。
+UI_CONTROL_TOOLS = frozenset({
+    "screenshot", "refresh_screen", "get_screen_size",
+    "list_windows", "capture_window",
+    "click", "click_text", "move_mouse", "zoom_in",
+    "drag", "scroll", "press_key", "type_text",
+})
 
 # 沙盒拒绝返回（无截图）
 def _blocked(text: str) -> dict:

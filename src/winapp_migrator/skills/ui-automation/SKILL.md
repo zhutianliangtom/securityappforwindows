@@ -1,11 +1,12 @@
 ---
 name: ui-automation
-description: 界面自动化：screenshot 截取目标窗口并给出可点击元素编号清单、click_text/click(id) 按文字或编号点击、type_text 按输入框输入、move_mouse/zoom_in 只用于纯图标、press_key 键盘、list_windows/capture_window 聚焦指定窗口、refresh_screen 刷新清单、clipboard 剪贴板
+description: 界面自动化（电脑操控专用子Agent技能）：screenshot 截取目标窗口并给出可点击元素编号清单、click/click_text 按编号或文字点击、type_text 按输入框输入、move_mouse/zoom_in 只用于纯图标、press_key 键盘、refresh_screen 刷新清单
 ---
 
-# ui-automation：屏幕观察与鼠标键盘操控
+# ui-automation：屏幕观察与鼠标键盘操控（电脑操控专用子 Agent）
 
-当需要操作界面、点击按钮、输入文字、观察屏幕时使用本技能。
+当电脑操控专用子 Agent 需要在 GUI 里点击按钮、输入文字、观察屏幕时使用本技能。
+主 Agent 不直接使用本技能，统一通过 control_ui 派发目标。
 
 ## 1. 观察（一次截图，拿到语义清单）
 - 先 `screenshot` 截取当前目标窗口（前台应用），返回**可点击/输入元素的编号清单 [id] (类型) 文字**。

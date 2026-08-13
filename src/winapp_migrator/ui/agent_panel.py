@@ -2399,7 +2399,8 @@ class AgentPanel(QDialog):
     # AI 调用鼠标/键盘工具时，在屏幕中下部显示实时操作说明 + AI 文本（不显示图片缩略图）
     _CONTROL_TOOLS = frozenset({"move_mouse", "click", "click_text", "drag",
                                 "scroll", "press_key", "type_text",
-                                "screenshot", "refresh_screen", "capture_window"})
+                                "screenshot", "refresh_screen", "capture_window",
+                                "control_ui", "电脑操控"})
 
     def _init_subtitle(self):
         self._subtitle = QWidget(None)
@@ -4386,6 +4387,9 @@ class AgentPanel(QDialog):
             self._segments.append({"type": "op", "html": f"▎{_esc(name)}"})
             self._refresh_ai_html()
             self._scroll_bottom()
+            # 电脑操控子 Agent 的键鼠/截图工具：显示全局置顶字幕
+            if name in self._CONTROL_TOOLS:
+                self._show_subtitle(name)
         elif s.startswith("正在执行:"):
             name = s.split(":", 1)[1].strip()
             self._ensure_ai_bubble()

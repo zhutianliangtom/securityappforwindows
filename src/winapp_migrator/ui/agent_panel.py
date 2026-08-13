@@ -1101,7 +1101,9 @@ class _AgentSettingsDialog(QDialog):
         url.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         top.addWidget(url)
         v.addLayout(top)
-        models = QLabel("模型：" + ", ".join(str(x) for x in (p.get("models") or [])))
+        mm = set(p.get("multimodal_models") or [])
+        models = QLabel("模型：" + ", ".join(
+            f"{x}（视觉）" if x in mm else str(x) for x in (p.get("models") or [])))
         models.setStyleSheet(f"color: {self._DIM}; font-size: 12px;")
         v.addWidget(models)
         # 保存子标签引用，用于选中时切换纯蓝底+白字
@@ -1530,6 +1532,11 @@ class _ProviderDialog(QDialog):
         self.models_edit.setPlaceholderText("模型名逗号分隔，如 deepseek-v4-pro, deepseek-v4-flash")
         form.addRow("模型列表", self.models_edit)
 
+        self.multimodal_edit = QLineEdit(", ".join(self._provider.get("multimodal_models", [])))
+        self.multimodal_edit.setPlaceholderText(
+            "多模态（视觉）模型逗号分隔，留空按模型名自动识别；自动选择模式下视觉任务优先路由到这些模型")
+        form.addRow("多模态模型", self.multimodal_edit)
+
         self.protocol_combo = QComboBox()
         self.protocol_combo.addItem("Chat Completions（/v1/chat/completions）", "chat")
         self.protocol_combo.addItem("Responses API（/v1/responses）", "responses")
@@ -1555,11 +1562,14 @@ class _ProviderDialog(QDialog):
     def provider_data(self) -> dict:
         models = [x.strip() for x in self.models_edit.text().replace("，", ",").split(",")
                   if x.strip()]
+        multimodal = [x.strip() for x in self.multimodal_edit.text().replace("，", ",").split(",")
+                      if x.strip()]
         return {
             "name": self.name_edit.text().strip() or "服务商",
             "base_url": self.base_edit.text().strip(),
             "api_key": self.key_edit.text().strip(),
             "models": models,
+            "multimodal_models": multimodal,
             "protocol": self.protocol_combo.currentData() or "chat",
         }
 
@@ -3679,7 +3689,7 @@ class AgentPanel(QDialog):
             protocol = (sel or {}).get("protocol") or "chat"
             model = self._model_override
         else:
-            model = agent_llm.resolve_model(cfg, effort)
+            model = agent_llm.resolve_model(cfg, effort, vision_needed=bool(send_images))
             sel = agent_llm.provider_for_model(cfg, model)
             base_url = (sel or {}).get("base_url") or agent_llm.DEFAULT_BASE_URL
             api_key = (sel or {}).get("api_key") or agent_llm.DEFAULT_API_KEY

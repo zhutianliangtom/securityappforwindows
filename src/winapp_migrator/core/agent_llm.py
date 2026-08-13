@@ -90,6 +90,8 @@ def load_model_config() -> dict:
             p["protocol"] = (p.get("protocol") if p.get("protocol") in ("chat", "responses")
                              else "chat")
             p["models"] = [str(x).strip() for x in (p.get("models") or []) if str(x).strip()]
+            p["multimodal_models"] = [str(x).strip() for x in (p.get("multimodal_models") or [])
+                                      if str(x).strip()]
         # 聚合所有服务商的模型作为统一路由池（不再区分「当前服务商」）
         all_models = []
         for p in providers:
@@ -139,12 +141,35 @@ def _default_effort_models(models: list) -> dict:
             "high": models[0], "max": models[0], "ultra": models[0]}
 
 
-def resolve_model(cfg: dict, effort: str = "medium") -> str:
+def is_vision_model(cfg: dict, model: str) -> bool:
+    """模型是否具备视觉能力：显式标记为多模态（multimodal_models）优先，
+    否则按模型名自动识别为非纯文本"""
+    m = (model or "").strip()
+    if not m:
+        return False
+    for p in (cfg.get("providers") or []):
+        if m in (p.get("multimodal_models") or []):
+            return True
+    return not is_text_only_model(m)
+
+
+def resolve_model(cfg: dict, effort: str = "medium", vision_needed: bool = False) -> str:
     """按工作力度解析应使用的模型名：优先用户配置的 effort_models 映射，
-    否则按模型列表默认路由，最后回退主模型/默认模型"""
+    否则按模型列表默认路由，最后回退主模型/默认模型。
+
+    vision_needed=True（视觉任务）时，优先在具备视觉能力的模型中按力度路由，
+    无视觉模型则回退普通路由"""
     m = cfg or {}
     effort = effort if effort in EFFORTS else "medium"
     em = m.get("effort_models") or {}
+    if vision_needed:
+        all_models = m.get("models") or []
+        vmodels = [x for x in all_models if is_vision_model(m, x)]
+        if vmodels:
+            name = str(em.get(effort) or "").strip() or str(em.get("medium") or "").strip()
+            if name and name in vmodels:
+                return name
+            return _default_effort_models(vmodels).get(effort) or vmodels[0]
     name = str(em.get(effort) or "").strip() or str(em.get("medium") or "").strip()
     if name:
         return name

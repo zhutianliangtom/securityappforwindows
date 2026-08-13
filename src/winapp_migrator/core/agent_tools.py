@@ -736,6 +736,20 @@ def _blocked(text: str) -> dict:
     return {"text": text, "images": []}
 
 
+def _image_scale(path: str, max_w: float, max_h: float) -> tuple:
+    """读取图片像素尺寸，返回 (scale, w, h)：scale 为按 max_w×max_h 等比缩放的比例(≤1)。
+    用于文档/幻灯片插图自适应，防止大图/竖图溢出页面。读取失败返回 None。"""
+    try:
+        from PIL import Image
+        with Image.open(path) as im:
+            w, h = im.size
+        if not w or not h:
+            return None
+        return (min(max_w / w, max_h / h, 1.0), w, h)
+    except Exception:
+        return None
+
+
 def _ask_user(args: dict, ask_user_cb) -> dict:
     """向用户提问（需求不明确时强制提问，禁止猜测执行）"""
     question = str(args.get("question", "")).strip()
@@ -1747,7 +1761,7 @@ def _create_docx(path: str, title: str, paragraphs: list, images: list = None,
                 pf.line_spacing = ls
                 if body_align != WD_ALIGN_PARAGRAPH.LEFT:
                     body.alignment = body_align
-        # 图片：每张作为独立居中段落插入文档末尾
+        # 图片：每张作为独立居中段落插入文档末尾（自动等比缩放防溢出页面）
         missing = []
         for img in (images or []):
             img_p = _resolve(str(img))
@@ -1756,7 +1770,14 @@ def _create_docx(path: str, title: str, paragraphs: list, images: list = None,
                 continue
             para = doc.add_paragraph()
             para.alignment = WD_ALIGN_PARAGRAPH.CENTER
-            para.add_run().add_picture(str(img_p), width=Inches(6))
+            pic = para.add_run()
+            fit = _image_scale(str(img_p), 6.0 * 96, 8.5 * 96)
+            if fit:
+                sc, w, h = fit
+                pic.add_picture(str(img_p),
+                                width=Inches(w * sc / 96), height=Inches(h * sc / 96))
+            else:
+                pic.add_picture(str(img_p), width=Inches(6))
         doc.save(str(p))
     except Exception as e:
         return _blocked(f"[create_docx] 生成失败: {e}")
@@ -1893,14 +1914,23 @@ def _create_pptx(path: str, title: str, slides: list, style: dict = None) -> dic
                 prefix = bullet_fmt.format(j + 1) if "{}" in bullet_fmt else bullet_fmt
                 r.text = (prefix if str(b).strip() else "") + str(b).strip()
                 _pptx_font(r, body_size, bold=(j == 0), color=dark, font=f)
-            # 本页插图：要点下方居中（宽 8 英寸，按比例缩放）
+            # 本页插图：要点下方居中（自动等比缩放放入底部区域，防溢出幻灯片）
             img = (item.get("image") or "").strip()
             if img:
                 img_p = _resolve(img)
                 if not img_p.is_file():
                     missing.append(str(img))
                 else:
-                    slide.shapes.add_picture(str(img_p), Inches(2.67), Inches(5.55), width=Inches(8))
+                    fit = _image_scale(str(img_p), 12.13 * 96, 1.95 * 96)
+                    if fit:
+                        sc, w, h = fit
+                        w_in, h_in = w * sc / 96, h * sc / 96
+                        slide.shapes.add_picture(
+                            str(img_p), Inches((13.333 - w_in) / 2), Inches(5.55),
+                            width=Inches(w_in), height=Inches(h_in))
+                    else:
+                        slide.shapes.add_picture(str(img_p), Inches(2.67), Inches(5.55),
+                                                 width=Inches(8))
             # 页脚页码
             foot = slide.shapes.add_textbox(Inches(11.9), Inches(7.0), Inches(1.0), Inches(0.4))
             fr = foot.text_frame.paragraphs[0].add_run()
@@ -2008,7 +2038,13 @@ def _create_xlsx(path: str, sheets: list, style: dict = None) -> dict:
                     missing.append(str(img))
                 else:
                     from openpyxl.drawing.image import Image as _XlImg
-                    ws.add_image(_XlImg(str(img_p)), f"A{len(rows) + 2}")
+                    xl = _XlImg(str(img_p))
+                    fit = _image_scale(str(img_p), 800, 500)
+                    if fit:
+                        sc, w, h = fit
+                        xl.width = int(w * sc)
+                        xl.height = int(h * sc)
+                    ws.add_image(xl, f"A{len(rows) + 2}")
         wb.save(str(p))
     except Exception as e:
         return _blocked(f"[create_xlsx] 生成失败: {e}")

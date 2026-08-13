@@ -9,6 +9,7 @@
 
 import json
 import os
+import re
 import threading
 import time
 from pathlib import Path
@@ -129,6 +130,8 @@ class AgentEngine:
         self._thread: threading.Thread = None
         self._builtin_names = {t["function"]["name"] for t in agent_tools.TOOLS}
         self._rules_confirmed = False   # 当前任务是否已确认开发规则
+        self._skills_read = set()       # 已读取规范流程的技能名（read_file 命中 skills/ 目录即记录）
+        self._skill_blocked = {}        # 工具名 -> 已拦截次数（防循环，最多拦截 2 次）
 
     # ---------- 控制 ----------
     def stop(self):
@@ -359,6 +362,8 @@ class AgentEngine:
         if direct is not None:
             self.direct = direct
         self._stop.clear()
+        self._skills_read.clear()      # 每轮任务重置技能读取状态
+        self._skill_blocked.clear()
         self._thread = threading.Thread(target=self.run,
                                         args=(user_input, agent_name, images, skills),
                                         daemon=True)
@@ -410,6 +415,12 @@ class AgentEngine:
             if self.ask_user:
                 return {"text": self.ask_user(args), "images": []}
             return {"text": "[ask_user] 未接入提问面板", "images": []}
+        if name == "read_file":
+            # 命中技能 SKILL.md 即视为已读取该技能规范流程，放行其覆盖的工具
+            mp = re.search(r"skills[\\/]([^\\/]+?)[\\/]SKILL\.md$",
+                           str(args.get("path") or args.get("file") or ""))
+            if mp:
+                self._skills_read.add(mp.group(1))
         if name in agent_tools.SUB_AGENT_TOOLS:
             # 子 Agent 工具：并发派发子任务（可读写项目文件）；不做轮数与时间上限，
             # 长任务持续到完成或被用户停止（stop），与主 Agent 无轮数上限一致
@@ -610,6 +621,24 @@ class AgentEngine:
                         self.end_state = "stopped"
                         return
                     name = call["function"]["name"]
+                    # 技能路由硬拦截：被技能覆盖的工具，未读取规范流程前不直接放行。
+                    # 拦截要求先 read_file 对应 SKILL.md，按规范流程执行（防 AI 跳过 skill 直接裸调工具）。
+                    if not self.direct:
+                        covered = agent_skills.skills_covering_tools([name]).get(name, [])
+                        unseen = [s for s in covered if s not in self._skills_read]
+                        if unseen and self._skill_blocked.get(name, 0) < 2:
+                            self._skill_blocked[name] = self._skill_blocked.get(name, 0) + 1
+                            sname = unseen[0]
+                            text = (f"[技能规范化] 工具「{name}」的操作由内置技能「{sname}」规范化。"
+                                    f"请先 read_file \"{agent_skills.skill_md_path(sname)}\" "
+                                    f"获取标准流程并按流程执行（含配图角度/位置等质量要求），"
+                                    f"读完后重新发起该工具调用。")
+                            self._messages.append({"role": "tool", "tool_call_id": call["id"],
+                                                   "content": text})
+                            answered.add(call["id"])
+                            if self.on_result:
+                                self.on_result(name, text, [])
+                            continue
                     if name in _DEV_TOOLS and not self._rules_confirmed and not self.direct:
                         # 动手开发前的强制规则读取：首次调用开发类工具不放行，
                         # 真实读取规则文本回给模型确认，下一轮重新发起再正常执行

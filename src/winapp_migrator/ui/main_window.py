@@ -294,6 +294,16 @@ class MainWindow(QMainWindow):
         self._toast_enabled = self._settings.value("security_toast", True, type=bool)
 
         self._setup_ui()
+        # 修复原生 QMessageBox 按钮：palette ButtonText=白色 + Windows 原生 hover 白底 → 白字被覆盖。
+        # 显式 QSS 接管按钮绘制，固定 蓝底白字/hover 深蓝。所有弹窗 parent 均为 self，会继承该样式。
+        self.setStyleSheet(
+            f"QMessageBox {{ background-color: {PALETTE['card']}; }}"
+            f"QMessageBox QLabel {{ color: {PALETTE['text']}; font-size: 13px; }}"
+            f"QMessageBox QPushButton {{ background-color: {PALETTE['primary']};"
+            "color: #FFFFFF; border: none; border-radius: 6px;"
+            "padding: 6px 20px; min-width: 64px; font-weight: 600; }"
+            f"QMessageBox QPushButton:hover {{ background-color: {PALETTE['primary_hover']}; }}"
+            f"QMessageBox QPushButton:pressed {{ background-color: {PALETTE['primary']}; }}")
         # 迁移进度平滑动画
         self.progress_anim = QPropertyAnimation(self.progress, b"value", self)
         self.progress_anim.setDuration(350)

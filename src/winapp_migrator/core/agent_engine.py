@@ -513,9 +513,10 @@ class AgentEngine:
                 self._prune_images(2)  # 历史截图只保留最近 2 张，其余剥离成纯文本，控制视觉输入 tokens
                 if self.text_only:
                     self._strip_images(self._messages)   # 纯文本模型：发送前清掉全部 image_url（历史残留/自动截图都清）
-                # 自动压缩：上下文过长时合并旧消息（保留任务目标），防止长任务中 AI 遗忘开头
-                if len(self._messages) > 45:
-                    n = self.compress_history(keep_recent=8)
+                # 自动压缩：上下文过长时合并旧消息（保留任务目标），防止长任务中 AI 遗忘开头。
+                # 阈值/保留量取较大值：让 AI 记住最近 40 条完整消息（约十余轮对话），仅真正超长时才压缩
+                if len(self._messages) > 120:
+                    n = self.compress_history(keep_recent=40)
                     if n and self.on_status:
                         self.on_status(f"上下文较长，已自动压缩 {n} 条旧消息")
                 # tokens 预计算

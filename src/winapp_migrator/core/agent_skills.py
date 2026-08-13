@@ -113,8 +113,10 @@ _BUILTIN_MD_SKILLS = {
 - 背景：Word 用 style.bg_color 设整页背景色；PPT 每页用 bg_color 设背景色；Excel 用 style.bg_color 设表背景色。
 - 艺术字（样式化大字）：Word 用 wordart=[{text,size,color,font,align}]，PPT 每页幻灯片用
   wordart={text,size,color}，Excel 每个工作表用 wordart={text,size,color} 生成大号加粗彩色强调文字。
-- 图片素材：可根据实际情况调用 image-gen 技能生成所需图片素材（文生图/图生图），
-  生成后自动下载到桌面；生成的图片可以直接插入到 Word/PPT/Excel 文档中。
+- 图片素材（强制）：文档内容适合配图（汇报/产品介绍/感言/总结/宣传等）时，**必须优先调用
+  image-gen 技能生成匹配主题的素材图**（文生图/图生图，生成后自动下载到桌面），
+  并把生成的图片作为 image 参数插入到 Word/PPT/Excel 文档中（可用 {path, align, width}
+  指定位置与大小，系统自动等比缩放不会溢出）。不要跳过配图直接生成无图文档。
 
 ## 4. 验证（必做）
 生成后用 extract_text(path) 读取文件，确认标题、正文、中文、表格数据、图片、艺术字均正确。

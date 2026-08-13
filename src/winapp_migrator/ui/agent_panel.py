@@ -1414,6 +1414,10 @@ class AgentPanel(QDialog):
         self._effort = self._model_cfg.get("effort", "medium")
         self._auto_effort = bool(self._model_cfg.get("auto_effort", True))
         self._model_override = None      # 输入框右侧手动指定的模型（None=按力度路由）
+        # 记住上次手动选择的模型，重启自动恢复
+        _last_model = str(self._settings.value("agent_last_model", "")).strip()
+        if _last_model:
+            self._model_override = _last_model
         self._refresh_text_only()
         self._memory_enabled = bool(_s.get("memory_enabled", True))
 
@@ -2646,6 +2650,7 @@ class AgentPanel(QDialog):
             idx = self.model_combo.findData(self._model_override)
             if idx < 0:      # 手动指定模型已不在列表：清除覆盖回到自动路由
                 self._model_override = None
+                self._settings.setValue("agent_last_model", "")
                 idx = 0
             self.model_combo.setCurrentIndex(idx)
         else:

@@ -18,7 +18,8 @@ from PyQt6.QtWidgets import QApplication, QWidget
 _DUR_CLICK = 0.55    # 点击波纹持续秒数
 _DUR_SCROLL = 0.5
 _DUR_TYPE = 1.2
-_MAX_ANIMS = 12      # 同屏最大动画数，防止刷屏拖慢
+_DUR_MOVE = 0.7      # 移动轨迹线持续秒数
+_MAX_ANIMS = 16      # 同屏最大动画数，防止刷屏拖慢
 
 _ACCENT = QColor("#1E40AF")        # 深蓝主色
 _ACCENT_BRIGHT = QColor("#2563EB") # 深蓝悬亮
@@ -92,6 +93,9 @@ class _FeedbackOverlay(QWidget):
         for a in anims:
             prog = min((now - a["t0"]) / max(a["dur"], 1e-3), 1.0)   # 0→1
             kind = a["kind"]
+            if kind == "move":
+                self._paint_move(p, a["points"], prog, self._vx, self._vy)
+                continue
             lx = a["x"] - self._vx
             ly = a["y"] - self._vy
             if kind == "click":
@@ -138,6 +142,28 @@ class _FeedbackOverlay(QWidget):
             path.lineTo(x, cy - s)
         path.closeSubpath()
         p.drawPath(path)
+
+    def _paint_move(self, p, points, prog, vx, vy):
+        """移动轨迹可视化：淡色折线连接路径点，随进度渐隐，末端有行进亮点"""
+        if not points:
+            return
+        fade = 1.0 - prog
+        # 末段渐隐：越靠近起点越淡，模拟"轨迹逐渐消散"
+        n = len(points)
+        for i in range(1, n):
+            x0, y0 = points[i - 1][0] - vx, points[i - 1][1] - vy
+            x1, y1 = points[i][0] - vx, points[i][1] - vy
+            seg = i / max(n - 1, 1)
+            alpha = int(200 * fade * seg)
+            p.setPen(QPen(QColor(_ACCENT_BRIGHT.red(), _ACCENT_BRIGHT.green(),
+                                 _ACCENT_BRIGHT.blue(), min(alpha, 255)), 2))
+            p.drawLine(int(x0), int(y0), int(x1), int(y1))
+        # 末端行进亮点
+        ex, ey = points[-1][0] - vx, points[-1][1] - vy
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(QColor(_ACCENT_BRIGHT.red(), _ACCENT_BRIGHT.green(),
+                          _ACCENT_BRIGHT.blue(), int(230 * fade)))
+        p.drawEllipse(int(ex - 3), int(ey - 3), 6, 6)
 
     def _paint_type(self, p, x, y, prog, text):
         """输入反馈：在光标附近显示所输入的文本小气泡"""
@@ -199,6 +225,14 @@ def notify_click(x: int, y: int):
         return
     _overlay.add({"kind": "click", "x": x, "y": y, "t0": time.time(),
                   "dur": _DUR_CLICK})
+
+
+def notify_move_path(points):
+    """移动轨迹可视化：传入路径点列表 [(x,y),...]，绘制淡色轨迹线"""
+    if _overlay is None or not points:
+        return
+    _overlay.add({"kind": "move", "points": list(points),
+                  "t0": time.time(), "dur": _DUR_MOVE})
 
 
 def notify_scroll(delta: int):

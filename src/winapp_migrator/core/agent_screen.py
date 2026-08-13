@@ -496,15 +496,20 @@ def _move_human(x2: int, y2: int, duration: float = 0):
     steps = max(int(dur / 0.010), 12)
     arc = min(dist * 0.06, 26)            # 温和弧度（限幅）
     px, py = -dy / dist, dx / dist        # 路径垂直单位向量
+    pts = [(x1, y1)]
     with ai_suppress():
         for i in range(1, steps + 1):
             t = i / steps
             ease = 1 - (1 - t) ** 2       # 快起慢落：接近迅速、落点缓，真人手感
             bend = math.sin(math.pi * t) * arc
-            user32.SetCursorPos(int(x1 + dx * ease + px * bend),
-                                int(y1 + dy * ease + py * bend))
+            cx = int(x1 + dx * ease + px * bend)
+            cy = int(y1 + dy * ease + py * bend)
+            user32.SetCursorPos(cx, cy)
+            pts.append((cx, cy))
             time.sleep(dur / steps)
         user32.SetCursorPos(int(x2), int(y2))   # 精确落点保证
+        pts.append((int(x2), int(y2)))
+    agent_feedback.notify_move_path(pts)   # 移动轨迹可视化
 
 
 def move_mouse(x: int, y: int):

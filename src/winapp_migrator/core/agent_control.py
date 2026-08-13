@@ -39,7 +39,30 @@ class ComputerController:
     def move(self, x, y):
         agent_screen.move_mouse(int(x), int(y))
 
-    # ---------- 点击：文本精准 / 坐标两级 ----------
+    # ---------- 点击：文本精准 / 坐标两级 + 自动校验纠偏 ----------
+    def _snap(self, x: int, y: int, elems, radius: int = 5):
+        """若坐标落在某文字元素矩形内(含容差)，吸附到该元素中心，否则返回原坐标。
+        用于自动纠偏：模型给的图标/图形坐标若恰好落在文字控件上，吸附到控件中心更精准。"""
+        for e in elems:
+            w, h = e.get("w", 0), e.get("h", 0)
+            if w <= 0 or h <= 0:
+                continue
+            ex, ey = e["x"], e["y"]
+            if abs(x - ex) <= w // 2 + radius and abs(y - ey) <= h // 2 + radius:
+                return ex, ey
+        return x, y
+
+    def _element_at(self, x: int, y: int, elems, radius: int = 5) -> str:
+        """返回包含坐标 (x,y) 的文字元素名称；无则返回空串（用于点击后校验落点）"""
+        for e in elems:
+            w, h = e.get("w", 0), e.get("h", 0)
+            if w <= 0 or h <= 0:
+                continue
+            ex, ey = e["x"], e["y"]
+            if abs(x - ex) <= w // 2 + radius and abs(y - ey) <= h // 2 + radius:
+                return e.get("text", "")
+        return ""
+
     def click_text(self, text: str, button: str = "left"):
         """按文字精准点击；返回 (坐标, 结果文本)。未命中返回 (None, 提示)。"""
         hit = self.find(text)
@@ -50,7 +73,7 @@ class ComputerController:
         return (x, y), f"已按文字「{text}」精确定位并点击 ({x},{y})"
 
     def click(self, x=None, y=None, text=None, button: str = "left", clicks: int = 1):
-        """统一点击入口：优先 text 精准定位，其次坐标，最后当前光标。返回 (坐标, 结果文本)。"""
+        """统一点击入口：优先 text 精准定位，其次坐标并自动纠偏+校验，最后当前光标。"""
         if text:
             hit = self.find(text)
             if not hit:
@@ -59,8 +82,17 @@ class ComputerController:
         if x is None or y is None:
             agent_screen.click(None, None, button, clicks)
             return None, f"已点击当前鼠标位置 {button} 键 x{clicks}"
-        agent_screen.click(int(x), int(y), button, clicks)
-        return (int(x), int(y)), f"已点击 ({int(x)}, {int(y)}) {button} 键 x{clicks}"
+        # 坐标点击：自动纠偏（吸附到最近文字元素中心）+ 点击后校验落点
+        elems = agent_locator.get_screen_elements()
+        sx, sy = self._snap(int(x), int(y), elems)
+        agent_screen.click(sx, sy, button, clicks)
+        msg = f"已点击 ({sx}, {sy}) {button} 键 x{clicks}"
+        if (sx, sy) != (int(x), int(y)):
+            msg += "（已吸附到最近文字元素中心自动纠偏）"
+        hit_name = self._element_at(sx, sy, elems)
+        if hit_name:
+            msg += f"（落点校验：在「{hit_name}」控件内）"
+        return (sx, sy), msg
 
     # ---------- 输入 / 滑动 ----------
     def type_text(self, text: str):

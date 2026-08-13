@@ -50,8 +50,8 @@ BG = "#000000"            # 纯黑（窗口底色）
 BG_BOTTOM = "#0A0A0A"     # 窗口底色渐变收尾（淡黑）
 PANEL = "#141414"         # 淡黑（面板/输入框底色）
 CARD = "#1E1E1E"          # 淡黑亮一档（卡片/气泡底色）
-BORDER = "#2A2A2A"        # 边框（深灰）
-BORDER_SOFT = "#242424"   # 更柔和的边框
+BORDER = "#000000"        # 边框（纯黑，融入背景）
+BORDER_SOFT = "#000000"   # 边框（纯黑）
 TEXT = "#F5F5F5"          # 白（主文本）
 TEXT_DIM = "#8A8A8A"      # 灰（次要文本）
 ACCENT = "#1E40AF"        # 深蓝（强调）
@@ -633,7 +633,7 @@ class _AgentSettingsDialog(QDialog):
     _DIM = "#8A8A8A"
     _ACCENT = "#1E40AF"
     _ACCENT_HOVER = "#2563EB"
-    _BORDER = "#2A2A2A"
+    _BORDER = "#000000"
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -2146,7 +2146,6 @@ class AgentPanel(QDialog):
         self._end_badge_shown = False
         self._refresh_session_combo()
         self._update_welcome()
-        self._add_status(f"已切换到对话「{self._session_name}」", TEXT_DIM)
         self._scroll_bottom()
 
     def _new_session(self):
@@ -2512,7 +2511,7 @@ class AgentPanel(QDialog):
                 parts.append(
                     f'<div style="padding-left:30px;">'
                     f'<img src="{url}" width="{img_w}" style="border-radius:10px;'
-                    'border:1px solid #223354;display:block;margin:12px 0 12px 0;"></div>')
+                    'border:1px solid #000000;display:block;margin:12px 0 12px 0;"></div>')
             elif t == "text":
                 parts.append(f'<div style="color:{TEXT};font-size:{f_main}px;">'
                              f'{_render_text(seg["raw"])}</div>')
@@ -2736,7 +2735,6 @@ class AgentPanel(QDialog):
         dlg = _AgentSettingsDialog(parent=self)
         if dlg.exec():
             self._apply_agent_settings()
-            self._add_status("AI 设置已保存并生效", OK)
 
     def _apply_agent_settings(self):
         """设置变更后：刷新模式/工作目录/多模型/力度/纯文本状态；引擎空闲则重建以应用新配置"""
@@ -2807,10 +2805,6 @@ class AgentPanel(QDialog):
         self._settings.setValue("agent_last_model", self._model_override or "")   # 记住选择，重启恢复
         self._refresh_text_only()   # 切换模型立即更新纯文本判断（粘贴图片/附件过滤实时生效）
         # 切换模型不清空上下文：当前对话历史继续沿用，仅后续轮次使用新模型
-        if self._model_override:
-            self._add_status(f"已切换到模型 {self._model_override}，对话上下文已保留", OK)
-        else:
-            self._add_status("已切换为自动选择模型，对话上下文已保留", OK)
 
     def _reconnect_mcp(self):
         threading.Thread(target=self._init_mcp, daemon=True).start()
@@ -3014,13 +3008,13 @@ class AgentPanel(QDialog):
             parts = ([f'<div style="font-size:14px;">{_esc(text).replace(chr(10), "<br/>")}</div>']
                      if text else [])
             parts += [f'<img src="{u}" width="200" style="border-radius:10px;'
-                      'border:1px solid #223354;display:block;margin:10px 0;">' for u in images]
+                      'border:1px solid #000000;display:block;margin:10px 0;">' for u in images]
             for p in files:
                 fname = os.path.basename(p)
                 fsize = self._file_size_text(p)
                 parts.append(
                     f'<div style="display:inline-block;vertical-align:middle;'
-                    f'background:#152036;border:1px solid #223354;border-radius:10px;'
+                    f'background:#152036;border:1px solid #000000;border-radius:10px;'
                     'padding:7px 10px;margin:10px 8px 10px 0;">'
                     f'<img src="{self._file_thumb_data_url(p)}" width="34" height="34" '
                     'style="vertical-align:middle;border-radius:6px;">'
@@ -3552,7 +3546,7 @@ class AgentPanel(QDialog):
         box.setToolTip(tooltip)
         box.setFixedSize(78, 86)
         box.setStyleSheet(
-            f"#attCard {{ background: #152036; border: 1px solid #223354; border-radius: 10px; }}"
+            f"#attCard {{ background: #152036; border: 1px solid #000000; border-radius: 10px; }}"
             f"#attCard:hover {{ background: #182644; border: 1px solid {ACCENT}; }}")
         v = QVBoxLayout(box)
         v.setContentsMargins(6, 8, 6, 6)

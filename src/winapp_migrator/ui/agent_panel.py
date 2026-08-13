@@ -2027,27 +2027,25 @@ class AgentPanel(QDialog):
 
     # ---------- 欢迎页（无对话时居中介绍 AI 功能） ----------
     def _build_welcome(self) -> QWidget:
+        # 无卡片/无边框：QWidget 声明 border 会被 Qt 传播到子 QLabel 造成黑框，
+        # 直接居中排版文字，保持纯黑四色极简风格
         page = QWidget()
         page.setStyleSheet("background: transparent;")
         lay = QVBoxLayout(page)
         lay.setContentsMargins(40, 40, 40, 40)
         lay.addStretch(1)
-        card = QWidget()
-        card.setMaximumWidth(520)
-        card.setStyleSheet(
-            f"background: {CARD}; border: 1px solid {BORDER}; border-radius: 14px;")
-        cl = QVBoxLayout(card)
-        cl.setContentsMargins(28, 24, 28, 24)
-        cl.setSpacing(10)
+        box = QVBoxLayout()
+        box.setContentsMargins(0, 0, 0, 0)
+        box.setSpacing(10)
         t = QLabel("zhuzhu Copilot")
-        t.setStyleSheet(f"color: {TEXT}; font-size: 20px; font-weight: 800;")
+        t.setStyleSheet(f"color: {TEXT}; font-size: 22px; font-weight: 800;")
         t.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        cl.addWidget(t)
+        box.addWidget(t)
         sub = QLabel("观察你的屏幕，理解你的指令，帮你完成电脑操作")
         sub.setStyleSheet(f"color: {TEXT_DIM}; font-size: 13px;")
         sub.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        cl.addWidget(sub)
-        cl.addSpacing(6)
+        box.addWidget(sub)
+        box.addSpacing(10)
         for f in ("▪ 屏幕操控：截图分析后点击、输入、按键",
                   "▪ 文件操作：读取、写入、编辑本地文件",
                   "▪ 快速查找：秒查应用与文件（find_app / search_files）",
@@ -2056,13 +2054,14 @@ class AgentPanel(QDialog):
                   "▪ 多对话：自动命名、切换隔离、重启恢复"):
             lbl = QLabel(f)
             lbl.setStyleSheet(f"color: {TEXT}; font-size: 13px; padding: 3px 0;")
-            cl.addWidget(lbl)
-        cl.addSpacing(4)
+            lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            box.addWidget(lbl)
+        box.addSpacing(4)
         tip = QLabel("直接输入任务开始，例如：打开记事本并输入一段文字")
         tip.setStyleSheet(f"color: {ACCENT}; font-size: 12px;")
         tip.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        cl.addWidget(tip)
-        lay.addWidget(card, 0, Qt.AlignmentFlag.AlignCenter)
+        box.addWidget(tip)
+        lay.addLayout(box)
         lay.addStretch(1)
         return page
 

@@ -543,6 +543,9 @@ class AgentEngine:
         self._rules_confirmed = False   # 每个新任务重新强制规则确认
         # 按用户提示词自动匹配技能并注入：简单提示词（如"生成一个毕业感言PPT"）也先走 skill 流程
         self._auto_skills = agent_skills.auto_skill_names(user_input)
+        if self._auto_skills and self.on_status:
+            self.on_status(f"正在调用技能: {', '.join(self._auto_skills)}")
+            self.on_status(f"技能已调用: {', '.join(self._auto_skills)}")
         if not self._messages or self._messages[0].get("role") != "system":
             self._messages.insert(0, {"role": "system",
                                       "content": self._system_prompt(agent_name, skills)})
@@ -680,8 +683,16 @@ class AgentEngine:
                             self.on_result(name, text, [])
                         last_failed = True
                         continue
+                    # 技能阅读：read_file 命中 skills/<名>/SKILL.md 时，用"正在调用技能"替代"read_file"
+                    skill_read = None
+                    if name == "read_file":
+                        _sm = re.search(r"skills[\\/]([^\\/]+?)[\\/]SKILL\.md$",
+                                        str(args.get("path") or args.get("file") or ""))
+                        if _sm:
+                            skill_read = _sm.group(1)
                     if self.on_status:
-                        self.on_status(f"待执行工具: {name}")
+                        self.on_status(f"正在调用技能: {skill_read}" if skill_read
+                                       else f"待执行工具: {name}")
                     # 每步确认：用户显式确认（AskBeforeEdit）后放行危险操作；YOLO 下危险命令在 confirm 中拒绝。
                     # ask_user 提问工具本身无需"允许执行"确认（弹窗即用户交互）。
                     approved = True if name == "ask_user" \
@@ -691,7 +702,8 @@ class AgentEngine:
                         imgs = []
                     else:
                         if self.on_status:
-                            self.on_status(f"正在执行: {name}")
+                            self.on_status(f"技能已调用: {skill_read}" if skill_read
+                                           else f"正在执行: {name}")
                         res = self._execute(name, args, allow_dangerous=approved)
                         text, imgs = res["text"], res["images"]
                         if self.on_result:

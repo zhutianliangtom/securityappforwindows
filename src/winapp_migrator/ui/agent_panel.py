@@ -4036,6 +4036,26 @@ class AgentPanel(QDialog):
             # 操控电脑工具：显示全局置顶字幕（操作说明 + 后续 AI 文本），并启用用户输入接管
             if name in self._CONTROL_TOOLS:
                 self._show_subtitle(name)
+        elif s.startswith("正在调用技能:"):
+            name = s.split(":", 1)[1].strip()
+            self._ensure_ai_bubble()
+            if self._segments and self._segments[-1]["type"] == "op" \
+                    and "技能" in self._segments[-1]["html"]:
+                self._segments[-1]["html"] = f"▎正在调用技能 {_esc(name)}"
+            else:
+                self._segments.append({"type": "op", "html": f"▎正在调用技能 {_esc(name)}"})
+            self._refresh_ai_html()
+            self._scroll_bottom()
+        elif s.startswith("技能已调用:"):
+            name = s.split(":", 1)[1].strip()
+            self._ensure_ai_bubble()
+            if self._segments and self._segments[-1]["type"] == "op" \
+                    and "技能" in self._segments[-1]["html"]:
+                self._segments[-1]["html"] = f"✓ 技能已调用 {_esc(name)}"
+            else:
+                self._segments.append({"type": "op", "html": f"✓ 技能已调用 {_esc(name)}"})
+            self._refresh_ai_html()
+            self._scroll_bottom()
         elif s == "完成":
             self._hide_spinner()   # 任务结束，停掉转圈
             self._hide_subtitle()

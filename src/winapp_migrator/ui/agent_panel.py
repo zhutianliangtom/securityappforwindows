@@ -2505,8 +2505,10 @@ class AgentPanel(QDialog):
     def _ensure_ai_bubble(self):
         if self._ai_bubble is None or not self._bubble_alive(self._ai_bubble):
             self._ai_bubble = self._add_bubble("", "ai")
-            self._bubble_segs[id(self._ai_bubble)] = self._segments
             self._ai_bubble.linkActivated.connect(self._on_bubble_link)
+        # 每次同步段列表引用：新回复可能复用旧气泡，注册表必须指向当前 _segments，
+        # 否则点击折叠/展开链接会在过期列表里找不到段而失效
+        self._bubble_segs[id(self._ai_bubble)] = self._segments
         return self._ai_bubble
 
     @staticmethod

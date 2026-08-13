@@ -101,9 +101,14 @@ _BUILTIN_MD_SKILLS = {
   段落支持轻量标记增强结构：'# ' 一级标题、'## ' 二级标题、'### ' 三级标题、'- ' 项目符号，其余为正文。
   标题建议用标记分层（如 '# 一、概述' / '## 1.1 现状'），正文直接写内容。
 - PPT（create_pptx）：path，title=总标题，slides=[{title: 页标题, bullets: [要点列表],
+  cards: [彩色卡片], table: {表格}, chart: {图表}, diagram: {思维导图/流程图/对比/循环},
   image: 插图(可选), wordart:{text,size,color}本页艺术字(可选), bg_color: 本页背景色(可选),
-  title_color: 本页标题色(可选)}]，style=样式(可选)
-  自动生成 16:9 标题页；每页为"标题+分隔线+要点"，每页要点建议 3-6 条。
+  title_color: 本页标题色(可选), layout: left_image/right_image/two_col/center_highlight(可选)}]，
+  style=样式(可选，含 theme/accent/transition 切换动画)
+  **页数要够、内容要详**：主题类 PPT 至少 8 页（建议 8-15 页）；每页要点写成完整句子/段落，
+  不要只写短语。**排版要多元**：不要每页都白底黑字，用 cards 分区、table 呈现数据、
+  chart 画图、diagram 画思维导图/流程图/对比/循环，用 bg_color 换页底色，用 style.transition
+  加页面切换动画（fade/push/wipe/zoom）。
 - Excel（create_xlsx）：path，sheets=[{name: 工作表名, rows: [[单元格值]...],
   image: 插图(可选), wordart:{text,size,color}表标题艺术字(可选)}]，style=样式(可选)
   首行自动作表头（默认深蓝底白字并冻结）；纯数字字符串自动转数值，无需引号包裹数字。
@@ -114,15 +119,16 @@ _BUILTIN_MD_SKILLS = {
 - 艺术字（样式化大字）：Word 用 wordart=[{text,size,color,font,align}]，PPT 每页幻灯片用
   wordart={text,size,color}，Excel 每个工作表用 wordart={text,size,color} 生成大号加粗彩色强调文字。
 - 图片素材（强制）：文档内容适合配图（汇报/产品介绍/感言/总结/宣传等）时，**必须优先调用
-  image-gen 技能生成匹配主题的素材图**（文生图/图生图，生成后自动下载到桌面），
-  并把生成的图片作为 image 参数插入到 Word/PPT/Excel 文档中（可用 {path, align, width}
+  generate_image 工具**（真实 AI 文生图，prompt 描述画面、可指定 ratio 比例，生成后返回本地路径），
+  并把返回的本地路径作为 image 参数插入到 Word/PPT/Excel 文档中（可用 {path, align, width}
   指定位置与大小，系统自动等比缩放不会溢出）。不要跳过配图直接生成无图文档。
 
 ## 4. 验证（必做）
 生成后用 extract_text(path) 读取文件，确认标题、正文、中文、表格数据、图片、艺术字均正确。
 
 ## 5. 汇报
-输出：文件路径、包含的章节/工作表、采用的配色主题与布局风格、图片/艺术字/背景的处理、内容摘要。""",
+输出：文件路径、包含的章节/工作表、页数、采用的配色主题与排版风格（卡片/表格/图表/思维导图/流程图）、
+切换动画、图片/艺术字/背景的处理、内容摘要。""",
     },
     "web-search": {
         "description": "联网搜索：web_search 搜索实时信息（新闻/文档/教程/代码），web_fetch 抓取网页或调用 API 接口",

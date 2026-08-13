@@ -635,26 +635,94 @@ TOOLS = [
     {
         "type": "function",
         "function": {
+            "name": "generate_image",
+            "description": "AI 文生图：生成与主题匹配的图片素材，下载到本地并返回本地路径。"
+                           "生成 Word/PPT/Excel 文档需要配图（汇报/产品介绍/感言/总结/宣传等）时，"
+                           "**必须**先用本工具生成素材图，再把返回的本地路径作为 image 参数"
+                           "传入 create_docx/create_pptx/create_xlsx。",
+            "parameters": {"type": "object",
+                           "properties": {
+                               "prompt": {"type": "string",
+                                          "description": "要生成的画面描述（英文/中文均可，写清主体、场景、风格、配色、构图）"},
+                               "ratio": {"type": "string",
+                                         "enum": ["1:1", "3:4", "4:3", "16:9", "9:16"],
+                                         "description": "画面比例，默认 1:1"},
+                               "dest_dir": {"type": "string",
+                                            "description": "保存目录（可选，相对路径基于工作目录，默认工作目录/images）"}},
+                           "required": ["prompt"]},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "create_pptx",
-            "description": "生成 PowerPoint 演示文稿（.pptx）：可选首页标题 + 多页幻灯片，"
-                           "每页包含页标题与要点列表，可带本页插图与艺术字。适合汇报、产品介绍、培训课件等演示文档。"
-                           "支持 style 参数自定义配色/封面布局/背景，不传则用默认商务风。",
+            "description": "生成 PowerPoint 演示文稿（.pptx）：首页标题 + 多页内容页。"
+                           "**页数要够、内容要详**：主题类 PPT 建议 8-15 页，每页要点要展开成完整句子/段落，"
+                           "不要只写短语。"
+                           "每页支持要点列表、彩色卡片、表格、图表、思维导图/流程图/对比图、插图、艺术字。"
+                           "**配色要多元、页面要有图形排版**：不要每页都白底黑字，用 bg_color 换页底色、"
+                           "用卡片(array)分区、用 table/chart/diagram 呈现结构化内容，"
+                           "需要配图时先用 generate_image 生成素材图再传 image。"
+                           "支持 style 参数自定义主题配色/封面布局/切换动画，不传则用默认商务风。",
             "parameters": {"type": "object",
                            "properties": {
                                "path": {"type": "string", "description": "保存路径（.pptx）"},
                                "title": {"type": "string", "description": "演示文稿标题（可选，用作首页）"},
                                "slides": {"type": "array",
-                                          "description": "幻灯片列表，每项 {title: 页标题, bullets: [要点, ...], "
-                                                          "image: 本页插图(可选，路径字符串或 {path, align, width}), "
-                                                          "wordart: 本页艺术字(可选，{text,size,color}), "
-                                                          "bg_color: 本页背景色HEX(可选), "
-                                                          "title_color: 本页标题色HEX(可选)}",
+                                          "description": "幻灯片列表，每项 {title, bullets(要点列表), "
+                                                          "cards(彩色卡片数组), table(表格), chart(图表), "
+                                                          "diagram(思维导图/流程图/对比图), image(插图), "
+                                                          "wordart(艺术字), bg_color, title_color, "
+                                                          "layout(left_image/right_image/two_col/center_highlight)}",
                                           "items": {"type": "object",
                                                     "properties": {
                                                         "title": {"type": "string", "description": "页标题"},
                                                         "bullets": {"type": "array",
-                                                                    "description": "本页要点列表",
+                                                                    "description": "本页要点列表（每项为完整句子/段落，"
+                                                                                    "可含'## '子标题、'- '子要点）",
                                                                     "items": {"type": "string"}},
+                                                        "cards": {"type": "array",
+                                                                  "description": "本页彩色卡片数组（关键词/数据并排展示），"
+                                                                                  "每项 {title, desc, color}",
+                                                                  "items": {"type": "object",
+                                                                            "properties": {
+                                                                                "title": {"type": "string", "description": "卡片标题"},
+                                                                                "desc": {"type": "string", "description": "卡片说明文字"},
+                                                                                "color": {"type": "string", "description": "卡片底色HEX（可选，默认主题浅色）"}},
+                                                                            "required": ["title"]}},
+                                                        "table": {"type": "object",
+                                                                  "description": "本页表格（结构化数据）：{header: [列名], "
+                                                                                  "rows: [[值,...],...], title: 表标题(可选)}",
+                                                                  "properties": {
+                                                                      "header": {"type": "array", "items": {"type": "string"},
+                                                                                 "description": "表头列名"},
+                                                                      "rows": {"type": "array",
+                                                                               "description": "数据行二维数组",
+                                                                               "items": {"type": "array", "items": {}}},
+                                                                      "title": {"type": "string", "description": "表标题（可选）"}},
+                                                                  "required": ["header", "rows"]},
+                                                        "chart": {"type": "object",
+                                                                  "description": "本页图表：{type: bar/column/line/pie/doughnut, "
+                                                                                  "labels: [分类], values: [数值], "
+                                                                                  "title: 图标题(可选)}，用原生图形绘制",
+                                                                  "properties": {
+                                                                      "type": {"type": "string", "description": "bar/column/line/pie/doughnut"},
+                                                                      "labels": {"type": "array", "items": {"type": "string"}},
+                                                                      "values": {"type": "array", "items": {"type": "number"}},
+                                                                      "title": {"type": "string", "description": "图标题（可选）"}},
+                                                                  "required": ["type", "labels", "values"]},
+                                                        "diagram": {"type": "object",
+                                                                    "description": "本页图形排版：{type: mindmap/flow/compare/cycle, "
+                                                                                    "center: 中心主题(可选), items: [节点/步骤/对比项], "
+                                                                                    "title: 附加标题(可选)}",
+                                                                    "properties": {
+                                                                        "type": {"type": "string", "description": "mindmap/flow/compare/cycle"},
+                                                                        "center": {"type": "string", "description": "中心主题（mindmap 用）"},
+                                                                        "items": {"type": "array",
+                                                                                  "description": "节点/步骤；compare 为对比项数组，每项 {title, left, right}",
+                                                                                  "items": {}},
+                                                                        "title": {"type": "string", "description": "附加标题（可选）"}},
+                                                                    "required": ["type", "items"]},
                                                         "image": {"type": "object",
                                                                   "description": "本页插图（可选）：路径字符串或 {path, "
                                                                                   "align: left/center/right, width: 宽(英寸)}",
@@ -674,15 +742,20 @@ TOOLS = [
                                                         "bg_color": {"type": "string",
                                                                      "description": "本页背景色 HEX（可选，覆盖全局背景）"},
                                                         "title_color": {"type": "string",
-                                                                        "description": "本页标题色 HEX（可选，覆盖全局标题色）"}},
+                                                                        "description": "本页标题色 HEX（可选，覆盖全局标题色）"},
+                                                        "layout": {"type": "string",
+                                                                   "description": "本页布局：left_image/right_image（图文左右分栏）"
+                                                                                   "、two_col（左右两栏）、center_highlight（居中大字强调）"}},
                                                     "required": ["title"]}},
                                "style": {"type": "object",
                                          "description": "样式配置（可选）。不传则用默认商务风；传了可大胆自定义："
                                                          "theme=配色方案(business深蓝/black-gold黑金/green墨绿/warm暖橙/"
-                                                         "tech科技蓝/vivid明快/dark暗色/pastel浅色/red朱红)，"
+                                                         "tech科技蓝/vivid明快/dark暗色/pastel浅色/red朱红/purple紫)，"
                                                          "cover_style=封面布局(solid纯色底/split左右分屏/centered居中)，"
                                                          "title_color=标题色HEX，bg_color=内容页背景色HEX，"
-                                                         "font_name=字体名，bullet_style=要点符号(dot/number/arrow/check)，"
+                                                         "accent=强调色HEX，font_name=字体名，"
+                                                         "bullet_style=要点符号(dot/number/arrow/check)，"
+                                                         "transition=页面切换动画(fade推入/push推出/wipe擦除/zoom缩放/random随机)，"
                                                          "title_size=页标题字号，body_size=要点字号"}},
                            "required": ["path", "slides"]},
         },
@@ -1081,6 +1154,10 @@ def execute_tool(name: str, args: dict, allow_dangerous: bool = False,
             return _clipboard(str(args.get("action", "read")), str(args.get("text", "")))
         if name == "extract_text":
             return _extract_text(str(args.get("path", "")))
+        if name == "generate_image":
+            return _generate_image(str(args.get("prompt", "")),
+                                   str(args.get("ratio", "1:1")),
+                                   str(args.get("dest_dir", "")))
         if name == "create_docx":
             return _create_docx(str(args.get("path", "")), str(args.get("title", "")),
                                 args.get("paragraphs") if isinstance(args.get("paragraphs"), list) else [],
@@ -1843,6 +1920,83 @@ def _docx_set_bg(doc, hex_color: str):
     doc.element.insert(0, bg)
 
 
+# 内置文生图：调用 agnes images/generations（真实 API，非 mock）
+_GEN_IMAGE_URL = "https://api.agnes-ai.cn/v1/images/generations"
+_GEN_IMAGE_MODEL = "agnes-image-2.1-flash"
+_GEN_RATIOS = ("1:1", "3:4", "4:3", "16:9", "9:16")
+
+
+def _generate_image(prompt: str, ratio: str = "1:1", dest_dir: str = "") -> dict:
+    """AI 文生图：调用内置 agnes 图片生成 API，下载到本地并返回本地路径。
+
+    返回文本含本地路径，供 create_docx/create_pptx/create_xlsx 的 image 参数直接引用。
+    """
+    import base64
+    import urllib.error
+    import urllib.request
+    prompt = (prompt or "").strip()
+    if not prompt:
+        return _blocked("[generate_image] 缺少 prompt（要生成的画面描述）")
+    ratio = (ratio or "1:1").strip().lower()
+    if ratio not in _GEN_RATIOS:
+        ratio = "1:1"
+    from winapp_migrator.core import agent_llm
+    payload = {"model": _GEN_IMAGE_MODEL, "prompt": prompt,
+               "size": "1K", "ratio": ratio,
+               "extra_body": {"response_format": "url"}}
+    req = urllib.request.Request(
+        _GEN_IMAGE_URL, data=json.dumps(payload).encode("utf-8"),
+        headers={"Content-Type": "application/json",
+                 "User-Agent": "WinAppMigrator/1.0 AgentClient",
+                 "Authorization": f"Bearer {agent_llm.DEFAULT_API_KEY}"},
+        method="POST")
+    try:
+        with urllib.request.urlopen(req, timeout=180) as r:
+            data = json.loads(r.read().decode("utf-8", "replace"))
+    except urllib.error.HTTPError as e:
+        return _blocked(f"[generate_image] 生成失败 HTTP {e.code}: "
+                        f"{e.read().decode('utf-8', 'replace')[:300]}")
+    except Exception as e:
+        return _blocked(f"[generate_image] 生成失败: {e}")
+    items = [d for d in (data.get("data") or []) if isinstance(d, dict)]
+    if not items:
+        return _blocked(f"[generate_image] API 未返回图片: {str(data)[:200]}")
+    # 保存目录：显式指定 → 工作目录相对解析；否则 工作目录/images（无则桌面/images）
+    if (dest_dir or "").strip():
+        base = _resolve(dest_dir)
+    elif WORKDIR:
+        base = Path(WORKDIR) / "images"
+    else:
+        base = Path.home() / "Desktop" / "images"
+    try:
+        base.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        base = Path.home() / "Desktop" / "images"
+        base.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    saved = []
+    for i, d in enumerate(items[:4], 1):
+        url = d.get("url") or ""
+        b64 = d.get("b64_json") or ""
+        try:
+            if b64:
+                raw = base64.b64decode(b64)
+            else:
+                with urllib.request.urlopen(url, timeout=60) as rr:
+                    raw = rr.read()
+            path = base / f"img_{stamp}_{i}.png"
+            path.write_bytes(raw)
+            saved.append(str(path))
+        except Exception as e:
+            saved.append(f"(下载失败 {url}: {e})")
+    if not any(not s.startswith("(下载失败") for s in saved):
+        return _blocked("[generate_image] 图片下载失败：" + "；".join(saved))
+    return {"text": "已生成图片素材（本地路径，供 image 参数引用）：\n"
+                    + "\n".join(saved)
+                    + "\n把这些路径作为 create_docx/create_pptx/create_xlsx 的 image 参数传入。",
+            "images": []}
+
+
 def _create_docx(path: str, title: str, paragraphs: list, images: list = None,
                  style: dict = None, wordart: list = None) -> dict:
     """生成 Word 文档（python-docx）：默认商务专业风，支持 style 自定义配色/字体/排版/背景。
@@ -1985,11 +2139,387 @@ def _pptx_font(run, size, bold=False, color="404040", font=None):
     ea.set("typeface", f)
 
 
+# 供 PPT 卡片/图表/图形排版使用的多色板（在主题色基础上增加变化，避免每页单调）
+_PPTX_MULTI = ["1F3864", "2E5E4E", "B0561A", "0E5A8A", "5B2D8F", "8C2F39", "E4572E", "3D6B35"]
+_PPTX_ARR = "→"
+
+
+def _pptx_set_transition(slide, transition: str):
+    """给幻灯片注入页面切换过渡动画（fade/push/wipe/zoom/random；none 或空则无）。
+    python-pptx 不直接支持过渡，需向 <p:sld> 注入 <p:transition> 元素。"""
+    name = (str(transition or "").strip().lower())
+    if not name or name in ("none", "无"):
+        return
+    inner = {"fade": "<p:fade/>", "push": '<p:push dir="l"/>',
+             "wipe": '<p:wipe dir="l"/>', "zoom": '<p:zoom/><p:zoomOptions dir="in"/>',
+             "random": "<p:random/>"}.get(
+        name, "<p:fade/>")
+    ns = ('xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" '
+          'xmlns:p14="http://schemas.microsoft.com/office/powerpoint/2010/main"')
+    xml = f'<p:transition {ns} p14:dur="600">{inner}</p:transition>'
+    try:
+        from pptx.oxml import parse_xml
+        from pptx.oxml.ns import qn
+        trans = parse_xml(xml)
+        sld = slide._element
+        clr = sld.find(qn("p:clrMapOvr"))
+        if clr is not None:
+            clr.addnext(trans)
+        else:
+            sld.append(trans)
+    except Exception:
+        pass
+
+
+def _pptx_add_cards(slide, cards, f, base):
+    """并排彩色卡片：每项 {title, desc, color}，圆角矩形 + 标题 + 说明。"""
+    from pptx.util import Inches
+    from pptx.dml.color import RGBColor
+    from pptx.enum.text import PP_ALIGN
+    from pptx.enum.shapes import MSO_SHAPE
+    cards = [c for c in (cards or []) if isinstance(c, dict)]
+    if not cards:
+        return
+    n = len(cards)
+    gap = 0.15
+    x = 0.6
+    y, h = 2.0, 3.6
+    w = (13.333 - 1.2 - gap * (n - 1)) / n
+    for idx, c in enumerate(cards):
+        color = str(c.get("color") or "").strip() or _PPTX_MULTI[idx % len(_PPTX_MULTI)]
+        card = slide.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE,
+                                      Inches(x), Inches(y), Inches(w), Inches(h))
+        card.fill.solid()
+        card.fill.fore_color.rgb = RGBColor.from_string(color)
+        card.line.color.rgb = RGBColor.from_string(color)
+        card.shadow.inherit = False
+        tf = card.text_frame
+        tf.word_wrap = True
+        tf.margin_left = tf.margin_right = Inches(0.15)
+        tf.margin_top = tf.margin_bottom = Inches(0.15)
+        p1 = tf.paragraphs[0]
+        p1.alignment = PP_ALIGN.CENTER
+        r1 = p1.add_run()
+        r1.text = str(c.get("title") or "")
+        _pptx_font(r1, 22, bold=True, color="FFFFFF", font=f)
+        desc = str(c.get("desc") or "").strip()
+        if desc:
+            p2 = tf.add_paragraph()
+            p2.alignment = PP_ALIGN.CENTER
+            r2 = p2.add_run()
+            r2.text = desc
+            _pptx_font(r2, 14, color="FFFFFF", font=f)
+        x += w + gap
+
+
+def _pptx_add_table(slide, spec, f, base):
+    """添加结构化表格：{header: [..], rows: [[..]], title}，表头主色底白字。"""
+    from pptx.util import Inches, Pt
+    from pptx.dml.color import RGBColor
+    from pptx.enum.text import PP_ALIGN
+    spec = spec or {}
+    header = [str(h) for h in (spec.get("header") or [])]
+    rows = spec.get("rows") or []
+    ncols = max(len(header), max((len(r) for r in rows if isinstance(r, (list, tuple))), default=0))
+    if not ncols:
+        return
+    nrows = 1 + len(rows)
+    y = 1.7
+    if str(spec.get("title") or "").strip():
+        tb = slide.shapes.add_textbox(Inches(0.6), Inches(1.35), Inches(12.1), Inches(0.5))
+        r = tb.text_frame.paragraphs[0].add_run()
+        r.text = str(spec["title"])
+        _pptx_font(r, 18, bold=True, color=base, font=f)
+        y = 1.95
+    tbl = slide.shapes.add_table(nrows, ncols, Inches(0.6), Inches(y),
+                                 Inches(12.1), Inches(min(5.0, 0.4 * nrows))).table
+    tbl.columns[0].width = Inches(3.0)
+    for ci in range(1, ncols):
+        tbl.columns[ci].width = Inches(9.1 / max(ncols - 1, 1))
+    for rn in range(nrows):
+        for cn in range(ncols):
+            cell = tbl.cell(rn, cn)
+            cell.margin_left = cell.margin_right = Inches(0.08)
+            cell.margin_top = cell.margin_bottom = Inches(0.04)
+            if rn == 0:
+                val = header[cn] if cn < len(header) else ""
+                cell.fill.solid()
+                cell.fill.fore_color.rgb = RGBColor.from_string(base)
+            else:
+                src = rows[rn - 1]
+                val = str(src[cn]) if isinstance(src, (list, tuple)) and cn < len(src) else ""
+                cell.fill.solid()
+                cell.fill.fore_color.rgb = RGBColor.from_string(
+                    "FFFFFF" if rn % 2 == 0 else "EEF2F8")
+            para = cell.text_frame.paragraphs[0]
+            rr = para.add_run()
+            rr.text = val
+            _pptx_font(rr, 12, bold=(rn == 0),
+                       color="FFFFFF" if rn == 0 else "404040", font=f)
+            para.alignment = PP_ALIGN.CENTER if rn == 0 else PP_ALIGN.LEFT
+
+
+def _pptx_draw_chart(slide, chart, f, base):
+    """用原生图形绘制图表：column/bar/line/pie/doughnut。"""
+    from pptx.util import Inches, Pt
+    from pptx.dml.color import RGBColor
+    from pptx.enum.text import PP_ALIGN
+    from pptx.enum.shapes import MSO_SHAPE
+    ctype = str(chart.get("type") or "column").lower()
+    labels = [str(x) for x in (chart.get("labels") or [])]
+    raw = [float(v) for v in (chart.get("values") or []) if isinstance(v, (int, float))]
+    n = min(len(labels), len(raw))
+    if n == 0:
+        return
+    labels, values = labels[:n], raw[:n]
+    title = str(chart.get("title") or "").strip()
+    if title:
+        tb = slide.shapes.add_textbox(Inches(0.6), Inches(1.35), Inches(12.1), Inches(0.5))
+        r = tb.text_frame.paragraphs[0].add_run()
+        r.text = title
+        _pptx_font(r, 18, bold=True, color=base, font=f)
+    if ctype in ("pie", "doughnut"):
+        total = sum(values) or 1
+        dia = 3.6
+        cx, cy = 3.4, 2.0 + 2.2
+        start = 0.0
+        for i, v in enumerate(values):
+            color = _PPTX_MULTI[i % len(_PPTX_MULTI)]
+            sweep = v / total * 360.0
+            sh = slide.shapes.add_shape(MSO_SHAPE.PIE,
+                                        Inches(cx - dia / 2), Inches(cy - dia / 2),
+                                        Inches(dia), Inches(dia))
+            try:
+                sh.adjustments[0] = int(start * 60000)
+                sh.adjustments[1] = int((start + sweep) * 60000)
+            except Exception:
+                pass
+            sh.fill.solid()
+            sh.fill.fore_color.rgb = RGBColor.from_string(color)
+            sh.line.color.rgb = RGBColor.from_string("FFFFFF")
+            sh.line.width = Pt(1.5)
+            start += sweep
+        # 图例（右侧）
+        ly = 2.0
+        for i, lb in enumerate(labels):
+            dot = slide.shapes.add_shape(MSO_SHAPE.OVAL, Inches(8.6), Inches(ly), Inches(0.22), Inches(0.22))
+            dot.fill.solid()
+            dot.fill.fore_color.rgb = RGBColor.from_string(_PPTX_MULTI[i % len(_PPTX_MULTI)])
+            dot.line.fill.background()
+            tb = slide.shapes.add_textbox(Inches(8.95), Inches(ly - 0.04), Inches(3.9), Inches(0.4))
+            rr = tb.text_frame.paragraphs[0].add_run()
+            rr.text = f"{lb}  {values[i]:g}"
+            _pptx_font(rr, 12, color="404040", font=f)
+            ly += 0.42
+        return
+    x0_in, y0_in, plot_w_in, plot_h_in = 0.8, 2.0, 10.6, 3.8
+    vmax = max(values) or 1
+    base_y_in = y0_in + plot_h_in
+    if ctype == "bar":
+        # 横向条形
+        bw_in = plot_h_in / n
+        for i, v in enumerate(values):
+            w_in = plot_w_in * (v / vmax)
+            bar = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE,
+                                         Inches(x0_in), Inches(base_y_in - (i + 1) * bw_in),
+                                         Inches(w_in), Inches(bw_in * 0.7))
+            bar.fill.solid()
+            bar.fill.fore_color.rgb = RGBColor.from_string(_PPTX_MULTI[i % len(_PPTX_MULTI)])
+            bar.line.fill.background()
+            tb = slide.shapes.add_textbox(Inches(x0_in + 0.05), Inches(base_y_in - (i + 1) * bw_in - 0.02),
+                                          Inches(3.5), Inches(bw_in * 0.7))
+            rr = tb.text_frame.paragraphs[0].add_run()
+            rr.text = f"{labels[i]}  {v:g}"
+            _pptx_font(rr, 11, color="404040", font=f)
+    else:
+        # 柱状
+        bw_in = plot_w_in / n
+        for i, v in enumerate(values):
+            bh_in = plot_h_in * (v / vmax)
+            bar = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE,
+                                         Inches(x0_in + i * bw_in + 0.12),
+                                         Inches(base_y_in - bh_in),
+                                         Inches(min(0.5, bw_in * 0.6)), Inches(bh_in))
+            bar.fill.solid()
+            bar.fill.fore_color.rgb = RGBColor.from_string(_PPTX_MULTI[i % len(_PPTX_MULTI)])
+            bar.line.fill.background()
+            tb = slide.shapes.add_textbox(Inches(x0_in + i * bw_in), Inches(base_y_in + 0.05),
+                                          Inches(0.9), Inches(0.4))
+            rr = tb.text_frame.paragraphs[0].add_run()
+            rr.text = labels[i]
+            _pptx_font(rr, 10, color="404040", font=f)
+            vt = slide.shapes.add_textbox(Inches(x0_in + i * bw_in + 0.1), Inches(base_y_in - bh_in - 0.3),
+                                          Inches(0.9), Inches(0.3))
+            vr = vt.text_frame.paragraphs[0].add_run()
+            vr.text = f"{v:g}"
+            _pptx_font(vr, 10, bold=True, color="404040", font=f)
+
+
+def _pptx_draw_diagram(slide, diagram, f, base):
+    """图形排版：mindmap(思维导图)/flow(流程图)/compare(对比)/cycle(循环)。"""
+    from pptx.util import Inches, Pt
+    from pptx.dml.color import RGBColor
+    from pptx.enum.text import PP_ALIGN
+    from pptx.enum.shapes import MSO_SHAPE
+    dtype = str(diagram.get("type") or "mindmap").lower()
+    items = [it for it in (diagram.get("items") or [])]
+    title = str(diagram.get("title") or "").strip()
+    if title:
+        tb = slide.shapes.add_textbox(Inches(0.6), Inches(1.35), Inches(12.1), Inches(0.5))
+        r = tb.text_frame.paragraphs[0].add_run()
+        r.text = title
+        _pptx_font(r, 18, bold=True, color=base, font=f)
+    if dtype == "flow":
+        # 横向流程框 + 箭头
+        n = len(items)
+        if n == 0:
+            return
+        gap = 0.5
+        bw = min(2.6, (12.1 - gap * (n - 1)) / n)
+        total_w = n * bw + (n - 1) * gap
+        x = (13.333 - total_w) / 2
+        y = 3.0
+        for i, it in enumerate(items):
+            box = slide.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE,
+                                         Inches(x), Inches(y), Inches(bw), Inches(1.4))
+            color = _PPTX_MULTI[i % len(_PPTX_MULTI)]
+            box.fill.solid()
+            box.fill.fore_color.rgb = RGBColor.from_string(color)
+            box.line.fill.background()
+            tf = box.text_frame
+            tf.word_wrap = True
+            p = tf.paragraphs[0]
+            p.alignment = PP_ALIGN.CENTER
+            r = p.add_run()
+            r.text = str(it)
+            _pptx_font(r, 14, bold=True, color="FFFFFF", font=f)
+            if i < n - 1:
+                ar = slide.shapes.add_shape(MSO_SHAPE.RIGHT_ARROW,
+                                            Inches(x + bw + 0.05), Inches(y + 0.45),
+                                            Inches(gap - 0.1), Inches(0.5))
+                ar.fill.solid()
+                ar.fill.fore_color.rgb = RGBColor.from_string(base)
+                ar.line.fill.background()
+            x += bw + gap
+    elif dtype == "compare":
+        # 左右对比 + 中间 VS
+        n = len(items)
+        if n == 0:
+            return
+        col_w = 5.6
+        gap = 0.6
+        x_l = 0.6
+        x_r = 13.333 - 0.6 - col_w
+        y = 2.0
+        color_l = _PPTX_MULTI[0]
+        color_r = _PPTX_MULTI[1]
+        for cf in (x_l, x_r):
+            color = color_l if cf == x_l else color_r
+            box = slide.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE,
+                                         Inches(cf), Inches(y), Inches(col_w), Inches(4.4))
+            box.fill.solid()
+            box.fill.fore_color.rgb = RGBColor.from_string(color)
+            box.line.fill.background()
+            tf = box.text_frame
+            tf.word_wrap = True
+            tf.margin_left = tf.margin_right = Inches(0.2)
+            first = True
+            for it in items:
+                if isinstance(it, dict):
+                    lines = [str(it.get("title") or ""), str(it.get("left") or ""), str(it.get("right") or "")]
+                else:
+                    lines = [str(it)]
+                for ln in lines:
+                    if not ln:
+                        continue
+                    p = tf.paragraphs[0] if first else tf.add_paragraph()
+                    first = False
+                    r = p.add_run()
+                    r.text = ln
+                    _pptx_font(r, 14, bold=("title" in (str(it) if not isinstance(it, dict) else ""))
+                               or (isinstance(it, dict) and ln == str(it.get("title") or "")),
+                               color="FFFFFF", font=f)
+        vs = slide.shapes.add_textbox(Inches(x_l + col_w + 0.1), Inches(y + 1.8), Inches(gap - 0.2), Inches(0.8))
+        vr = vs.text_frame.paragraphs[0].add_run()
+        vr.text = "VS"
+        _pptx_font(vr, 24, bold=True, color=base, font=f)
+        vs.text_frame.paragraphs[0].alignment = PP_ALIGN.CENTER
+    elif dtype == "cycle":
+        # 环形：中心圆 + 四周节点
+        n = len(items)
+        if n == 0:
+            return
+        cx, cy, radius = 6.67, 3.9, 2.2
+        for i, it in enumerate(items):
+            ang = -90 + i * (360.0 / n)
+            import math
+            bx = cx + radius * math.cos(math.radians(ang)) - 1.0
+            by = cy + radius * math.sin(math.radians(ang)) - 0.6
+            node = slide.shapes.add_shape(MSO_SHAPE.OVAL, Inches(bx), Inches(by), Inches(2.0), Inches(1.2))
+            color = _PPTX_MULTI[i % len(_PPTX_MULTI)]
+            node.fill.solid()
+            node.fill.fore_color.rgb = RGBColor.from_string(color)
+            node.line.fill.background()
+            tf = node.text_frame
+            p = tf.paragraphs[0]
+            p.alignment = PP_ALIGN.CENTER
+            r = p.add_run()
+            r.text = str(it)
+            _pptx_font(r, 12, bold=True, color="FFFFFF", font=f)
+        center = slide.shapes.add_shape(MSO_SHAPE.OVAL, Inches(cx - 1.0), Inches(cy - 0.8), Inches(2.0), Inches(1.6))
+        center.fill.solid()
+        center.fill.fore_color.rgb = RGBColor.from_string(base)
+        center.line.fill.background()
+        tf = center.text_frame
+        p = tf.paragraphs[0]
+        p.alignment = PP_ALIGN.CENTER
+        r = p.add_run()
+        r.text = str(diagram.get("center") or "")
+        _pptx_font(r, 14, bold=True, color="FFFFFF", font=f)
+    else:
+        # mindmap：中心主题 + 四周分支
+        center = str(diagram.get("center") or "").strip()
+        n = len(items)
+        if n == 0:
+            return
+        cx, cy = 6.67, 3.9
+        cnode = slide.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE,
+                                       Inches(cx - 1.5), Inches(cy - 0.6), Inches(3.0), Inches(1.2))
+        cnode.fill.solid()
+        cnode.fill.fore_color.rgb = RGBColor.from_string(base)
+        cnode.line.fill.background()
+        tf = cnode.text_frame
+        p = tf.paragraphs[0]
+        p.alignment = PP_ALIGN.CENTER
+        r = p.add_run()
+        r.text = center or "主题"
+        _pptx_font(r, 16, bold=True, color="FFFFFF", font=f)
+        positions = [(6.67, 1.2), (6.67, 6.4), (1.2, 3.9), (12.13, 3.9),
+                     (1.2, 1.4), (12.13, 1.4), (1.2, 6.4), (12.13, 6.4)]
+        for i, it in enumerate(items):
+            if i >= len(positions):
+                break
+            bx, by = positions[i]
+            node = slide.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE,
+                                          Inches(bx), Inches(by), Inches(2.6), Inches(1.0))
+            color = _PPTX_MULTI[i % len(_PPTX_MULTI)]
+            node.fill.solid()
+            node.fill.fore_color.rgb = RGBColor.from_string(color)
+            node.line.fill.background()
+            tf = node.text_frame
+            p = tf.paragraphs[0]
+            p.alignment = PP_ALIGN.CENTER
+            r = p.add_run()
+            r.text = str(it)
+            _pptx_font(r, 12, bold=True, color="FFFFFF", font=f)
+
+
 def _create_pptx(path: str, title: str, slides: list, style: dict = None) -> dict:
-    """生成 PowerPoint（python-pptx）：16:9，默认商务专业风，支持 style 自定义配色/封面/要点符号。
-    style 可选字段：theme(配色方案)/cover_style(solid/split/centered)/title_color/bg_color/
-    font_name/bullet_style(dot/number/arrow/check)/title_size/body_size；
-    每页 slides 项可带 bg_color/title_color 覆盖全局。"""
+    """生成 PowerPoint（python-pptx）：16:9 宽屏，支持多色卡片/表格/图表/图形排版/切换动画。
+    style 可选：theme(配色)/accent(强调色)/cover_style(封面)/transition(切换动画)/
+    title_color/bg_color/font_name/bullet_style/title_size/body_size；
+    每页 slides 项可带 title/bullets/cards/table/chart/diagram/image/wordart/
+    bg_color/title_color/layout。"""
     try:
         from pptx import Presentation
         from pptx.util import Inches, Pt
@@ -2006,10 +2536,11 @@ def _create_pptx(path: str, title: str, slides: list, style: dict = None) -> dic
         _s = style or {}
         title_size = int(_s.get("title_size") or 26)
         body_size = int(_s.get("body_size") or 18)
-        # PPT 主题色板：偏"整体主题"语义，用 dark 作正文、soft 作浅辅助、base 作主色
+        accent = str(_s.get("accent") or "").strip() or base
         bg_color = str((style or {}).get("bg_color") or "FFFFFF")
         title_color = str((style or {}).get("title_color") or base)
         cover_style = str((style or {}).get("cover_style") or "solid").lower()
+        transition = str((style or {}).get("transition") or "fade").lower()
         bullet_map = {"dot": "•  ", "number": "{}.  ", "arrow": "→  ", "check": "✓  "}
         bullet_fmt = bullet_map.get(str((style or {}).get("bullet_style") or "dot").lower(), "•  ")
         prs = Presentation()
@@ -2019,9 +2550,9 @@ def _create_pptx(path: str, title: str, slides: list, style: dict = None) -> dic
         # 标题页
         if (title or "").strip():
             s = prs.slides.add_slide(blank)
+            _pptx_set_transition(s, transition)
             cover = str(title)
             if cover_style == "split":
-                # 左右分屏：左深色块 + 右白底，标题居左
                 left = s.shapes.add_shape(MSO_SHAPE.RECTANGLE, 0, 0, Inches(5.2), prs.slide_height)
                 left.fill.solid()
                 left.fill.fore_color.rgb = RGBColor.from_string(base)
@@ -2034,7 +2565,6 @@ def _create_pptx(path: str, title: str, slides: list, style: dict = None) -> dic
                 _pptx_font(r, 36, bold=True, color=base, font=f)
                 tf.paragraphs[0].alignment = PP_ALIGN.LEFT
             elif cover_style == "centered":
-                # 居中简约：白底深色标题 + 下方软色短横线
                 tb = s.shapes.add_textbox(Inches(1), Inches(2.4), Inches(11.333), Inches(1.8))
                 tf = tb.text_frame
                 tf.word_wrap = True
@@ -2047,7 +2577,6 @@ def _create_pptx(path: str, title: str, slides: list, style: dict = None) -> dic
                 ln.fill.fore_color.rgb = RGBColor.from_string(soft)
                 ln.line.fill.background()
             else:
-                # solid：全屏主色底 + 白字（默认）
                 bg = s.shapes.add_shape(MSO_SHAPE.RECTANGLE, 0, 0, prs.slide_width, prs.slide_height)
                 bg.fill.solid()
                 bg.fill.fore_color.rgb = RGBColor.from_string(base)
@@ -2065,8 +2594,10 @@ def _create_pptx(path: str, title: str, slides: list, style: dict = None) -> dic
             if not isinstance(item, dict):
                 continue
             slide = prs.slides.add_slide(blank)
+            _pptx_set_transition(slide, transition)
             pg_bg = str(item.get("bg_color") or bg_color)
             pg_title = str(item.get("title_color") or title_color)
+            layout = str(item.get("layout") or "").lower()
             if pg_bg.lower() != "ffffff":
                 bg = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, 0, 0, prs.slide_width, prs.slide_height)
                 bg.fill.solid()
@@ -2080,23 +2611,62 @@ def _create_pptx(path: str, title: str, slides: list, style: dict = None) -> dic
             line = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, Inches(0.6), Inches(1.18),
                                           Inches(12.1), Pt(2.5))
             line.fill.solid()
-            line.fill.fore_color.rgb = RGBColor.from_string(pg_title)
+            line.fill.fore_color.rgb = RGBColor.from_string(accent)
             line.line.fill.background()
-            # 要点正文
-            body = slide.shapes.add_textbox(Inches(0.6), Inches(1.45), Inches(12.1), Inches(5.4))
+            # 彩色卡片（并排展示关键词/数据）
+            _pptx_add_cards(slide, item.get("cards"), f, base)
+            # 表格
+            if item.get("table"):
+                _pptx_add_table(slide, item.get("table"), f, base)
+            # 图表
+            if item.get("chart"):
+                _pptx_draw_chart(slide, item.get("chart"), f, base)
+            # 图形排版（思维导图/流程图/对比/循环）
+            if item.get("diagram"):
+                _pptx_draw_diagram(slide, item.get("diagram"), f, base)
+            # 要点正文（无 cards/table/chart/diagram 时占满；有则放右侧或下方）
+            bullets = item.get("bullets") or []
+            has_block = bool(item.get("cards") or item.get("table")
+                             or item.get("chart") or item.get("diagram"))
+            bx, bw = 0.6, 12.1
+            if layout in ("left_image", "right_image"):
+                img = item.get("image") or ""
+                if isinstance(img, dict) and str(img.get("path") or "").strip():
+                    img_p = _resolve(str(img["path"]))
+                    if img_p.is_file():
+                        fit = _image_scale(str(img_p), 5.6 * 96, 5.2 * 96)
+                        if fit:
+                            sc, w, h = fit
+                            w_in, h_in = w * sc / 96, h * sc / 96
+                            iy = 4.6 - h_in / 2
+                            ix = 0.7 if layout == "left_image" else 13.333 - w_in - 0.7
+                            slide.shapes.add_picture(str(img_p), Inches(ix), Inches(iy),
+                                                     width=Inches(w_in), height=Inches(h_in))
+                            bx = w_in + 1.4 if layout == "left_image" else 0.7
+                            bw = 13.333 - bx - 0.7
+            body = slide.shapes.add_textbox(Inches(bx), Inches(1.5), Inches(bw), Inches(5.4))
             tf = body.text_frame
             tf.word_wrap = True
-            bullets = item.get("bullets") or []
             for j, b in enumerate(bullets):
                 para = tf.paragraphs[0] if j == 0 else tf.add_paragraph()
                 para.space_after = Pt(10)
+                txt = str(b).strip()
+                is_sub = txt.startswith("## ")
+                is_bullet = txt.startswith("- ")
+                if is_sub:
+                    txt = txt[3:].strip()
+                elif is_bullet:
+                    txt = txt[2:].strip()
                 r = para.add_run()
-                prefix = bullet_fmt.format(j + 1) if "{}" in bullet_fmt else bullet_fmt
-                r.text = (prefix if str(b).strip() else "") + str(b).strip()
-                _pptx_font(r, body_size, bold=(j == 0), color=dark, font=f)
-            # 本页插图：要点下方区域（支持水平对齐 + 宽度，等比缩放防溢出幻灯片）
+                prefix = ""
+                if not is_sub and not is_bullet and txt:
+                    prefix = bullet_fmt.format(j + 1) if "{}" in bullet_fmt else bullet_fmt
+                r.text = (prefix + (("• " if is_bullet else "") + txt)) if txt else ""
+                _pptx_font(r, (body_size + 2) if is_sub else body_size,
+                           bold=(is_sub or j == 0), color=dark, font=f)
+            # 本页插图（非图文分栏时）：要点下方区域
             img = item.get("image") or ""
-            if img:
+            if img and layout not in ("left_image", "right_image"):
                 if isinstance(img, str):
                     img_src, ialign, iwidth = img, "center", 8.0
                 else:
@@ -2134,7 +2704,7 @@ def _create_pptx(path: str, title: str, slides: list, style: dict = None) -> dic
                 wr = wtf.paragraphs[0].add_run()
                 wr.text = str(wa["text"])
                 _pptx_font(wr, int(wa.get("size") or 44), bold=True,
-                           color=str(wa.get("color") or base).strip() or base, font=f)
+                           color=str(wa.get("color") or accent).strip() or accent, font=f)
                 wtf.paragraphs[0].alignment = PP_ALIGN.CENTER
             # 页脚页码
             foot = slide.shapes.add_textbox(Inches(11.9), Inches(7.0), Inches(1.0), Inches(0.4))

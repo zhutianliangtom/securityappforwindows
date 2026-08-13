@@ -1758,11 +1758,11 @@ class AgentPanel(QDialog):
             f"QDialog {{ background: qlineargradient(x1:0, y1:0, x2:0, y2:1,"
             f"stop:0 {BG}, stop:1 {BG_BOTTOM}); }}"
             + _QCOMBO
-            # 滚动条纯黑色（垂直右侧 + 水平底部），与窗口背景一起设置避免覆盖
-            + "QScrollBar:vertical { background: transparent; width: 8px; }"
+            # 滚动条纯黑色（轨道+滑块，垂直右侧 + 水平底部），与窗口背景一起设置避免覆盖
+            + "QScrollBar:vertical { background: #000000; width: 8px; }"
               "QScrollBar::handle:vertical { background: #000000;"
               "border-radius: 4px; min-height: 30px; }"
-              "QScrollBar:horizontal { background: transparent; height: 8px; }"
+              "QScrollBar:horizontal { background: #000000; height: 8px; }"
               "QScrollBar::handle:horizontal { background: #000000;"
               "border-radius: 4px; min-width: 30px; }")
         # 全局悬浮提示：深色底 + 白字 + 描边，避免系统默认纯黑底看不清
@@ -1932,13 +1932,13 @@ class AgentPanel(QDialog):
         # 聊天区（气泡）与欢迎页（无对话时居中介绍 AI 功能）用堆叠切换
         self.msg_area = QScrollArea()
         self.msg_area.setWidgetResizable(True)
-        # 滚动条纯黑色：垂直（右侧）+ 水平（底部）
+        # 滚动条纯黑色（轨道+滑块）：垂直（右侧）+ 水平（底部）
         self.msg_area.setStyleSheet(
             "QScrollArea { background: transparent; border: none; }"
-            "QScrollBar:vertical { background: transparent; width: 8px; }"
+            "QScrollBar:vertical { background: #000000; width: 8px; }"
             "QScrollBar::handle:vertical { background: #000000;"
             "border-radius: 4px; min-height: 30px; }"
-            "QScrollBar:horizontal { background: transparent; height: 8px; }"
+            "QScrollBar:horizontal { background: #000000; height: 8px; }"
             "QScrollBar::handle:horizontal { background: #000000;"
             "border-radius: 4px; min-width: 30px; }")
         container = QWidget()

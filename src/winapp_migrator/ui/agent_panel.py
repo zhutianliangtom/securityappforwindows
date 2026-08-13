@@ -487,7 +487,8 @@ class _AgentSettingsDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("AI 设置")
-        self.setMinimumSize(560, 640)
+        self.setMinimumSize(680, 780)
+        self.resize(700, 820)
         self.setStyleSheet(
             f"QDialog {{ background: {PANEL}; }}"
             f"QLabel {{ color: {TEXT}; font-size: 13px; }}"
@@ -557,18 +558,22 @@ class _AgentSettingsDialog(QDialog):
         form.setSpacing(8)
         self.base_edit = QLineEdit(str(m.get("base_url") or ""))
         self.base_edit.setPlaceholderText("https://api.example.com/v1（示例地址）")
+        self.base_edit.setMinimumWidth(360)
         form.addRow("接口地址", self.base_edit)
         self.key_edit = QLineEdit(str(m.get("api_key") or ""))
         self.key_edit.setEchoMode(QLineEdit.EchoMode.Password)
         self.key_edit.setPlaceholderText("sk-xxxxxxxx（示例，填写真实 Key）")
+        self.key_edit.setMinimumWidth(360)
         form.addRow("API Key", self.key_edit)
         self.models_edit = QLineEdit(", ".join(cfg["models"]))
         self.models_edit.setPlaceholderText("模型名逗号分隔，如 deepseek-v4-pro, deepseek-v4-flash")
+        self.models_edit.setMinimumWidth(360)
         form.addRow("模型列表", self.models_edit)
         self.protocol_combo = QComboBox()
         self.protocol_combo.setStyleSheet(
             f"QComboBox {{ background: {BG}; color: {TEXT};"
             f"border: 1px solid {BORDER}; border-radius: 6px; padding: 4px 8px; }}")
+        self.protocol_combo.setMinimumWidth(360)
         self.protocol_combo.addItem("Chat Completions（/v1/chat/completions）", "chat")
         self.protocol_combo.addItem("Responses API（/v1/responses）", "responses")
         pidx = self.protocol_combo.findData(cfg.get("protocol", "chat"))

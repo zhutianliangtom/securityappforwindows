@@ -126,17 +126,14 @@ def _line_icon(kind: str, size: int = 18, color: str = TEXT_DIM) -> QIcon:
         r = s * 0.28
         p.drawRoundedRect(QRectF(s * 0.5 - r, s * 0.5 - r, r * 2, r * 2),
                           s * 0.08, s * 0.08)
-    elif kind == "gear":        # 齿轮（设置）：粗齿 + 粗外圆 + 中心孔，辨识度高
-        cx = cy = s * 0.5
-        p.setPen(QPen(QColor(color), s * 0.085, cap=Qt.PenCapStyle.RoundCap,
+    elif kind == "wrench":      # 扳手（设置）：顶部开口套筒 + 下延手柄，与"太阳"式齿轮彻底区分
+        p.setPen(QPen(QColor(color), s * 0.095, cap=Qt.PenCapStyle.RoundCap,
                       join=Qt.PenJoinStyle.RoundJoin))
-        for i in range(8):
-            a = math.pi * i / 4
-            p.drawLine(QPointF(cx + s * 0.25 * math.cos(a), cy + s * 0.25 * math.sin(a)),
-                       QPointF(cx + s * 0.42 * math.cos(a), cy + s * 0.42 * math.sin(a)))
-        p.drawEllipse(QPointF(cx, cy), s * 0.26, s * 0.26)
-        p.setPen(QPen(QColor(color), s * 0.05))
-        p.drawEllipse(QPointF(cx, cy), s * 0.10, s * 0.10)
+        # 套筒环：缺口朝正上方（40°~140°），其余 260° 闭合
+        p.drawArc(QRectF(s * 0.30, s * 0.10, s * 0.40, s * 0.40), 140 * 16, 260 * 16)
+        # 手柄：从缺口两侧垂直向下延伸
+        p.drawLine(QPointF(s * 0.653, s * 0.429), QPointF(s * 0.66, s * 0.87))
+        p.drawLine(QPointF(s * 0.347, s * 0.429), QPointF(s * 0.34, s * 0.87))
     elif kind == "trash":       # 垃圾桶（清空）
         p.drawLine(QPointF(s * 0.22, s * 0.28), QPointF(s * 0.78, s * 0.28))
         p.drawLine(QPointF(s * 0.36, s * 0.28), QPointF(s * 0.36, s * 0.19))
@@ -1749,6 +1746,9 @@ class AgentPanel(QDialog):
         self._spinner_lbl = None
         self._reasoning_lbl = None
 
+        # /compact 压缩中的打字指示器行（与任务转圈独立，互不干扰）
+        self._compact_row = None
+
         # 任务结束徽章状态
         self._user_stopped = False     # 用户手动点击停止
         self._end_badge_shown = False  # 防止重复显示结束徽章
@@ -1794,8 +1794,10 @@ class AgentPanel(QDialog):
         # resize 防抖：窗口尺寸变化停止后统一重渲染气泡（合并连续 resize，避免卡顿）
         self._resize_timer = QTimer(self)
         self._resize_timer.setSingleShot(True)
-        self._resize_timer.setInterval(120)
+        self._resize_timer.setInterval(160)
         self._resize_timer.timeout.connect(self._rebuild_bubbles_after_resize)
+        self._last_bw = self._last_bmn = -1     # 上次已同步的气泡宽度缓存
+        self._last_img_w = -1                   # 上次重渲染时的截图宽度缓存
 
         threading.Thread(target=self._init_mcp, daemon=True).start()
 
@@ -1832,7 +1834,7 @@ class AgentPanel(QDialog):
         self.new_btn.clicked.connect(self._new_session)
         top.addWidget(self.new_btn)
 
-        self.settings_btn = QPushButton(_line_icon("gear"), "")
+        self.settings_btn = QPushButton(_line_icon("wrench"), "")
         self.settings_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.settings_btn.setAutoDefault(False)
         self.settings_btn.setFixedSize(34, 34)
@@ -2240,10 +2242,13 @@ class AgentPanel(QDialog):
     def resizeEvent(self, e):
         super().resizeEvent(e)
         self._apply_topbar_layout()
-        # 立即同步气泡宽度（轻量操作）；字体/HTML 重渲染交给防抖定时器合并，
-        # 避免最大化↔正常窗口来回切换时对每个气泡全量重建文本造成卡顿
+        # 气泡宽度同步（轻量 setter）；文本/截图重渲染交给防抖定时器合并。
+        # 宽度未变化（仅高度变动）时直接跳过，避免最大化↔正常来回切换时反复遍历气泡
         mw = self._bubble_max_width()
         mn = self._bubble_min_width()
+        if mw == self._last_bw and mn == self._last_bmn:
+            return
+        self._last_bw, self._last_bmn = mw, mn
         for b in self._bubble_widgets:
             try:
                 b.setMaximumWidth(mw)
@@ -2257,19 +2262,19 @@ class AgentPanel(QDialog):
         self._resize_timer.start()
 
     def _rebuild_bubbles_after_resize(self):
-        """resize 停止后统一重渲染（字体缩放 + 用户富文本图片 + AI 气泡 HTML）"""
-        s = self._font_scale()
-        for b in self._bubble_widgets:
-            try:
-                src = b.property("rich_src")   # 用户富文本气泡（含图片）随窗口缩放
-                if src:
-                    b.setText(self._scale_user_html(src, s))
-            except RuntimeError:
-                pass
-        # AI 气泡随窗口缩放重渲染文本（按分组顺序对应，不重建布局）
+        """resize 停止后重渲染。字体固定 14px 不随窗口缩放（_font_scale 恒 1.0），
+        唯一随宽度变化的是截图缩略图宽度（img_w），因此：
+        1. img_w 未跨阈值 → 全部跳过；
+        2. 只重建含截图（image 段）的 AI 气泡，其余气泡交给 QLabel 自动重排。"""
+        img_w = max(200, int(self._bubble_max_width() * 0.4))
+        if img_w == self._last_img_w:
+            return
+        self._last_img_w = img_w
         ai_bubbles = [b for b in self._bubble_widgets
                       if b.property("align") == "ai" and self._bubble_alive(b)]
         for b, g in zip(ai_bubbles, self._split_groups()):
+            if not any(seg["type"] == "image" for seg in g):
+                continue
             try:
                 b.setText(self._build_ai_html(g))
             except RuntimeError:
@@ -2678,6 +2683,43 @@ class AgentPanel(QDialog):
         self._spinner = None
         self._spinner_lbl = None
         self._spinner_row = None
+
+    # ---------- /compact 压缩打字指示器（独立行，与任务转圈互不干扰） ----------
+    def _ensure_compact_row(self):
+        """压缩上下文期间在消息流中显示打字指示器行"""
+        row = self._compact_row
+        if row is not None:
+            # 会话切换/清空对话可能已把该行从布局移除，引用失效时重建
+            if any(self.msg_lay.itemAt(i).layout() is row
+                   for i in range(self.msg_lay.count())):
+                return
+            self._compact_row = None
+        dots = _TypingDots()
+        lbl = QLabel("正在压缩上下文…")
+        lbl.setStyleSheet(f"color: {TEXT_DIM}; font-size: 12px;")
+        top = QHBoxLayout()
+        top.setContentsMargins(0, 0, 0, 0)
+        top.setSpacing(8)
+        top.addWidget(dots)
+        top.addWidget(lbl)
+        top.addStretch(1)
+        self._compact_row = QVBoxLayout()
+        self._compact_row.setContentsMargins(0, 0, 0, 0)
+        self._compact_row.setSpacing(2)
+        self._compact_row.addLayout(top)
+        self.msg_lay.insertLayout(self.msg_lay.count() - 1, self._compact_row)
+        self._scroll_bottom()
+
+    def _hide_compact_row(self):
+        """压缩结束/清空时移除打字指示器行"""
+        row = self._compact_row
+        self._compact_row = None
+        if row is None:
+            return
+        for i in range(self.msg_lay.count()):
+            if self.msg_lay.itemAt(i).layout() is row:
+                self._free_layout_item(self.msg_lay.takeAt(i))
+                break
 
     def _start_think(self):
         """任务进行中：显示转圈；首轮思考重置计时"""
@@ -3157,7 +3199,7 @@ class AgentPanel(QDialog):
         if not self._engine or not self._engine._messages:
             self._add_status("当前无可压缩的上下文", TEXT_DIM)
             return
-        self._add_status("正在压缩上下文（当前模型生成摘要）…", TEXT_DIM)
+        self._ensure_compact_row()
         threading.Thread(target=self._compact_worker, daemon=True).start()
 
     def _compact_worker(self):
@@ -3169,6 +3211,7 @@ class AgentPanel(QDialog):
         self.compact_signal.emit(int(n or 0))
 
     def _on_compact_done(self, n: int):
+        self._hide_compact_row()
         if n:
             self._add_status(f"已压缩上下文：{n} 条旧消息合并为摘要（保留最近 2 条完整）", ACCENT)
         else:

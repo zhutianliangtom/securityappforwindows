@@ -1969,13 +1969,7 @@ class AgentPanel(QDialog):
 
         # 命令提示条：输入 / 时展示可用 skill/命令（高度随显示条数自适应）
         self.cmd_list = QListWidget()
-        self.cmd_list.setStyleSheet(
-            f"QListWidget {{ background: {PANEL}; color: {ACCENT};"
-            f"border: 1px solid {BORDER}; border-radius: 8px;"
-            "font-size: 13px; padding: 4px; }}"
-            f"QListWidget::item {{ padding: 6px 12px 6px 12px; border-radius: 6px; }}"
-            f"QListWidget::item:hover {{ background: {HOVER}; }}"
-            f"QListWidget::item:selected {{ background: {ACCENT}; color: #FFFFFF; }}")
+        self.cmd_list.setStyleSheet(self._cmd_list_qss())
         self.cmd_list.hide()
         self.cmd_list.itemClicked.connect(self._on_cmd_selected)
         root.addWidget(self.cmd_list)
@@ -3057,13 +3051,26 @@ class AgentPanel(QDialog):
                 return
         self.cmd_list.hide()
 
+    def _cmd_list_qss(self, pad: str = "4px") -> str:
+        """命令候选框样式；单行时容器上内边距清零使文字上移"""
+        return (
+            f"QListWidget {{ background: {PANEL}; color: {ACCENT};"
+            f"border: 1px solid {BORDER}; border-radius: 8px;"
+            f"font-size: 13px; padding: {pad}; }}"
+            f"QListWidget::item {{ padding: 6px 12px 6px 12px; border-radius: 6px; }}"
+            f"QListWidget::item:hover {{ background: {HOVER}; }}"
+            f"QListWidget::item:selected {{ background: {ACCENT}; color: #FFFFFF; }}")
+
     def _resize_cmd_list(self):
-        """命令列表高度随显示条数自适应：最多 5 行，最少 1 行"""
+        """命令列表高度随显示条数自适应：最多 5 行，最少 1 行；单行时去掉容器上内边距，文字上移"""
         count = self.cmd_list.count()
         row_h = self.cmd_list.sizeHintForRow(0)
         if row_h <= 0:
             row_h = 30   # 兜底：13px 字体 + item 上下内边距 12px
         self.cmd_list.setFixedHeight(min(count, 5) * row_h)
+        # 单行时容器上内边距 4px→0px，文字整体上移 4px
+        self.cmd_list.setStyleSheet(
+            self._cmd_list_qss("0px 4px 4px 4px" if count == 1 else "4px"))
 
     def _on_cmd_selected(self, item):
         """点击候选框选中命令：填入输入框，光标停在命令名末尾（便于继续输入参数）"""

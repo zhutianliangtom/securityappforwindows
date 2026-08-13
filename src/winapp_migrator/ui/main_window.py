@@ -1146,8 +1146,11 @@ class MainWindow(QMainWindow):
         if notes:
             text += f"\n\n更新说明：\n{notes}"
         if info.get("force"):
-            QMessageBox.warning(self, "发现强制更新", text + "\n\n当前版本已停止服务，必须更新后才能继续使用。")
+            QMessageBox.warning(
+                self, "发现强制更新",
+                text + "\n\n当前版本已停止服务，必须更新后才能继续使用。\n\n更新页已打开，本窗口关闭后应用将退出。")
             webbrowser.open(info["url"])
+            self._exit_forced()
             return
         ret = QMessageBox.question(
             self, "发现新版本", text + "\n\n是否前往下载更新？",
@@ -1155,6 +1158,16 @@ class MainWindow(QMainWindow):
             QMessageBox.StandardButton.No)
         if ret == QMessageBox.StandardButton.Yes:
             webbrowser.open(info["url"])
+
+    def _exit_forced(self):
+        """强制更新：拒绝更新必须退出应用。绕过托盘/防护线程，彻底结束进程"""
+        import os
+        try:
+            if hasattr(self, "tray"):
+                self.tray.hide()
+        except Exception:
+            pass
+        os._exit(0)
 
     def _start_memory_optimize(self):
         """一键优化内存"""

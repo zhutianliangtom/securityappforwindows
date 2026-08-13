@@ -2781,6 +2781,9 @@ class AgentPanel(QDialog):
 
     def showEvent(self, e):
         super().showEvent(e)   # 统一补丁已为 QDialog 深色化标题栏
+        # 面板复用（关闭再打开不销毁），滚动位置不会自动重置 → 打开时自动滚到对话底部
+        QTimer.singleShot(0, self._scroll_bottom)
+        QTimer.singleShot(300, self._scroll_bottom)
         # 默认正常窗口大小（__init__ 中已 resize），不再强制最大化
         # 管理员权限：Windows UIPI 拦截普通 Explorer 的 OLE 拖放，改用 WM_DROPFILES 原生通道
         print(f"[dnd] showEvent is_admin={is_admin()} _admin_dnd={self._admin_dnd}", flush=True)

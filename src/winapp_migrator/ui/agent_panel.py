@@ -2094,10 +2094,12 @@ class AgentPanel(QDialog):
         self._effort = self._model_cfg.get("effort", "medium")
         self._auto_effort = bool(self._model_cfg.get("auto_effort", True))
         self._model_override = None      # 输入框右侧手动指定的模型（None=按力度路由）
+        self._model_override_provider = ""   # 手动指定模型所属服务商名（跨服务商切换连接参数）
         # 记住上次手动选择的模型，重启自动恢复
         _last_model = str(self._settings.value("agent_last_model", "")).strip()
         if _last_model:
             self._model_override = _last_model
+            self._model_override_provider = self._provider_for_model(_last_model)
         self._refresh_text_only()
         self._memory_enabled = bool(_s.get("memory_enabled", True))
         # 执行模式（ask/edit/yolo）在设置页调整，此处仅从 QSettings 读取
@@ -3313,18 +3315,23 @@ class AgentPanel(QDialog):
 
 
     def _sync_model_combo(self):
-        """重建输入框右侧模型下拉：首项「自动选择」+ 全部模型名"""
+        """重建输入框右侧模型下拉：首项「自动选择」+ 所有服务商的全部模型（跨服务商可切换）"""
         cfg = self._model_cfg
-        models = cfg.get("models") or [cfg.get("model") or agent_llm.DEFAULT_MODEL]
+        providers = cfg.get("providers") or []
         self.model_combo.blockSignals(True)
         self.model_combo.clear()
         self.model_combo.addItem("自动选择", None)
-        for x in models:
-            self.model_combo.addItem(x, x)
+        for p in providers:
+            pname = p.get("name", "服务商")
+            for x in p.get("models") or []:
+                self.model_combo.addItem(f"{pname} - {x}", (pname, x))
+        # 恢复当前选中（手动指定模型）
         if self._model_override:
-            idx = self.model_combo.findData(self._model_override)
+            idx = self.model_combo.findData(
+                (self._model_override_provider, self._model_override))
             if idx < 0:      # 手动指定模型已不在列表：清除覆盖回到自动路由
                 self._model_override = None
+                self._model_override_provider = ""
                 self._settings.setValue("agent_last_model", "")
                 idx = 0
             self.model_combo.setCurrentIndex(idx)
@@ -3332,12 +3339,24 @@ class AgentPanel(QDialog):
             self.model_combo.setCurrentIndex(0)
         self.model_combo.blockSignals(False)
 
+    def _provider_for_model(self, model: str) -> str:
+        """返回包含指定模型的服务商名（找不到返回空串）"""
+        for p in (self._model_cfg.get("providers") or []):
+            if model in (p.get("models") or []):
+                return p.get("name", "")
+        return ""
+
     def _on_model_combo(self, idx):
-        """手动切换模型：选中具体模型则本次发送使用之；选「自动」回到力度路由"""
+        """手动切换模型：选中具体模型则本次发送使用其所属服务商；选「自动」回到力度路由"""
         if idx < 0:
             return
         val = self.model_combo.itemData(idx)
-        self._model_override = val if val else None
+        if val:
+            self._model_override = val[1]
+            self._model_override_provider = val[0]
+        else:
+            self._model_override = None
+            self._model_override_provider = ""
         self._settings.setValue("agent_last_model", self._model_override or "")   # 记住选择，重启恢复
         self._refresh_text_only()   # 切换模型立即更新纯文本判断（粘贴图片/附件过滤实时生效）
         # 切换模型不清空上下文：当前对话历史继续沿用，仅后续轮次使用新模型
@@ -3618,12 +3637,25 @@ class AgentPanel(QDialog):
         """按力度/评估结果路由模型并启动任务（评估完成或手动模式时调用）"""
         engine = self._ensure_engine()
         cfg = self._llm_config()
-        model = self._model_override or agent_llm.resolve_model(cfg, effort)
-        base_url = cfg.get("base_url") or agent_llm.DEFAULT_BASE_URL
-        api_key = cfg.get("api_key") or agent_llm.DEFAULT_API_KEY
-        # agnes-2.5-flash 只在内置默认服务可用：无论手动/自动选中，只要当前连接
-        # 不是默认 agnes 服务就同步切过去（否则把该模型名/图片发给不支持的服务器，
-        # 如 DeepSeek 的消息 schema 只接受 text，含 image_url 必 400）
+        providers = cfg.get("providers") or []
+        # 手动选中的模型 → 使用其所属服务商的连接参数；否则当前服务商 + 力度路由
+        if self._model_override:
+            sel = next((p for p in providers
+                        if p.get("name") == self._model_override_provider), None)
+            if sel is None:   # 服务商名异常时按模型名回退匹配
+                sel = next((p for p in providers
+                            if self._model_override in (p.get("models") or [])), None)
+            base_url = (sel or {}).get("base_url") or agent_llm.DEFAULT_BASE_URL
+            api_key = (sel or {}).get("api_key") or agent_llm.DEFAULT_API_KEY
+            protocol = (sel or {}).get("protocol") or "chat"
+            model = self._model_override
+        else:
+            base_url = cfg.get("base_url") or agent_llm.DEFAULT_BASE_URL
+            api_key = cfg.get("api_key") or agent_llm.DEFAULT_API_KEY
+            protocol = cfg.get("protocol") or "chat"
+            model = agent_llm.resolve_model(cfg, effort)
+        # agnes 默认模型只在内置默认服务可用：无论手动/自动选中，只要当前连接
+        # 不是默认 agnes 服务就同步切过去（避免把该模型名/图片发给不支持的服务器）
         if model == agent_llm.DEFAULT_MODEL and base_url != agent_llm.DEFAULT_BASE_URL:
             base_url = agent_llm.DEFAULT_BASE_URL
             api_key = agent_llm.DEFAULT_API_KEY
@@ -3640,6 +3672,7 @@ class AgentPanel(QDialog):
         # 同步客户端连接参数（模型可能来自不同服务商）
         engine.llm.base_url = base_url.rstrip("/")
         engine.llm.api_key = api_key
+        engine.llm.protocol = protocol
         engine.llm.model = model
         engine.llm.reasoning_effort = (agent_llm.reasoning_effort_for(effort)
                                        if cfg.get("send_effort") else None)

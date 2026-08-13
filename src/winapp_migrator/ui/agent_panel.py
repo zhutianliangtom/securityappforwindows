@@ -937,11 +937,9 @@ class _AgentSettingsDialog(QDialog):
             f"border: 1px solid {self._BORDER}; border-radius: 8px; padding: 6px; }}"
             f"QListWidget::item {{ border-radius: 8px; margin: 2px; }}"
             f"QListWidget::item:selected {{ background: {self._PANEL2}; }}")
-        self.provider_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.provider_list.itemClicked.connect(self._on_provider_select)
         self.provider_list.itemDoubleClicked.connect(self._on_provider_edit)
         self.provider_list.itemSelectionChanged.connect(self._update_provider_ui)
-        self.provider_list.customContextMenuRequested.connect(self._on_provider_menu)
         lay.addWidget(self.provider_list, 1)
         self._reload_provider_list()
         # 服务商操作按钮
@@ -959,8 +957,8 @@ class _AgentSettingsDialog(QDialog):
         prow.addWidget(self.del_provider_btn)
         prow.addStretch(1)
         lay.addLayout(prow)
-        # 选中/右键提示语（状态栏）
-        self.provider_hint = QLabel("点击或右键选中服务商卡片（删除按钮随之变红可用）；双击卡片编辑")
+        # 选中提示语（状态栏）
+        self.provider_hint = QLabel("点击选中服务商卡片（删除按钮随之变红可用）；双击卡片编辑")
         self.provider_hint.setStyleSheet(f"color: {self._DIM}; font-size: 12px;")
         self.provider_hint.setWordWrap(True)
         lay.addWidget(self.provider_hint)
@@ -1106,6 +1104,10 @@ class _AgentSettingsDialog(QDialog):
         models = QLabel("模型：" + ", ".join(str(x) for x in (p.get("models") or [])))
         models.setStyleSheet(f"color: {self._DIM}; font-size: 12px;")
         v.addWidget(models)
+        # 保存子标签引用，用于选中时切换纯蓝底+白字
+        card._name_lbl = name
+        card._url_lbl = url
+        card._models_lbl = models
         return card
 
     def _reload_provider_list(self):
@@ -1149,43 +1151,26 @@ class _AgentSettingsDialog(QDialog):
                 f"border: 1px solid {self._BORDER}; border-radius: 8px;"
                 "padding: 7px 16px; font-weight: 600;")
             self.del_provider_btn.setToolTip("请先选中一个服务商")
-            self.provider_hint.setText("点击或右键选中服务商卡片（删除按钮随之变红可用）；双击卡片编辑")
+            self.provider_hint.setText("点击选中服务商卡片（删除按钮随之变红可用）；双击卡片编辑")
             self.provider_hint.setStyleSheet(f"color: {self._DIM}; font-size: 12px;")
-        # 卡片高亮：选中卡片深蓝描边 + 加亮背景
+        # 卡片高亮：选中卡片纯蓝底 + 白字（无边框）
         for i in range(self.provider_list.count()):
             it = self.provider_list.item(i)
             w = self.provider_list.itemWidget(it)
             p = it.data(Qt.ItemDataRole.UserRole)
-            if p is not None and sel is not None and p.get("name") == sel.get("name"):
-                if w is not None:
-                    w.setStyleSheet(
-                        f"background: {self._PANEL2}; border: 1px solid {self._ACCENT};"
-                        "border-radius: 8px;")
+            selected = p is not None and sel is not None and p.get("name") == sel.get("name")
+            if w is None:
+                continue
+            if selected:
+                w.setStyleSheet(f"background: {self._ACCENT}; border-radius: 8px;")
+                w._name_lbl.setStyleSheet("color: #FFFFFF; font-size: 14px; font-weight: 700;")
+                w._url_lbl.setStyleSheet("color: #FFFFFF; font-size: 11px;")
+                w._models_lbl.setStyleSheet("color: #FFFFFF; font-size: 12px;")
             else:
-                if w is not None:
-                    w.setStyleSheet(f"background: {self._PANEL}; border-radius: 8px;")
-
-    def _on_provider_menu(self, pos):
-        """右键菜单：先选中对应卡片，提供「选中提示语 / 编辑 / 删除」"""
-        item = self.provider_list.itemAt(pos)
-        if item is None:
-            return
-        self.provider_list.setCurrentItem(item)
-        sel = self._current_provider()
-        menu = QMenu(self)
-        if sel is not None:
-            hint = menu.addAction(
-                f"已选中「{sel.get('name')}」｜模型：{', '.join(sel.get('models') or [])}")
-            hint.setEnabled(False)
-            menu.addSeparator()
-            act_select = menu.addAction("选中该服务商（加入模型路由）")
-            act_select.triggered.connect(self._update_provider_ui)
-            menu.addSeparator()
-            act_edit = menu.addAction("编辑该服务商…")
-            act_edit.triggered.connect(lambda: self._on_provider_edit(item))
-            act_del = menu.addAction("删除该服务商…")
-            act_del.triggered.connect(self._on_provider_delete)
-        menu.exec(self.provider_list.viewport().mapToGlobal(pos))
+                w.setStyleSheet(f"background: {self._PANEL}; border-radius: 8px;")
+                w._name_lbl.setStyleSheet(f"color: {self._TEXT}; font-size: 14px; font-weight: 700;")
+                w._url_lbl.setStyleSheet(f"color: {self._DIM}; font-size: 11px;")
+                w._models_lbl.setStyleSheet(f"color: {self._DIM}; font-size: 12px;")
 
     def _on_provider_add(self):
         dlg = _ProviderDialog(parent=self)

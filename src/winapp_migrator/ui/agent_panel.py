@@ -1100,20 +1100,29 @@ class _AgentSettingsDialog(QDialog):
             self._reload_mcp_list()
 
     def _on_mode_changed(self, idx):
-        """切到 YOLO 需二次确认，防止误开"""
-        if self.mode_combo.itemData(idx) != "yolo":
-            return
-        ret = QMessageBox.question(
-            self, "开启直接工作模式",
-            "YOLO 模式：AI 将直接执行任务，不再逐步询问/确认/约束，"
-            "仅调用必要的技能与命令完成。\n"
-            "删除系统关键目录等危险操作仍会被沙盒拒绝。确定开启？",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No)
-        if ret != QMessageBox.StandardButton.Yes:
-            self.mode_combo.blockSignals(True)
-            self.mode_combo.setCurrentIndex(0)   # 取消则回到 AskBeforeEdit
-            self.mode_combo.blockSignals(False)
+        """切换执行模式：切到 YOLO 需二次确认，防止误开。
+        确认后同步 self._mode 并持久化，并即时更新引擎的 direct 标志，
+        避免界面显示 YOLO 而 _confirm_tool 仍按旧模式（ask）弹确认导致命令被拒。"""
+        val = self.mode_combo.itemData(idx)
+        if val == "yolo":
+            ret = QMessageBox.question(
+                self, "开启直接工作模式",
+                "YOLO 模式：AI 将直接执行任务，不再逐步询问/确认/约束，"
+                "仅调用必要的技能与命令完成。\n"
+                "删除系统关键目录等危险操作仍会被沙盒拒绝。确定开启？",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No)
+            if ret != QMessageBox.StandardButton.Yes:
+                self.mode_combo.blockSignals(True)
+                self.mode_combo.setCurrentIndex(0)   # 取消则回到 AskBeforeEdit
+                self.mode_combo.blockSignals(False)
+                return
+        # 同步当前模式并持久化，避免界面与 _mode 不一致
+        self._mode = val or "ask"
+        self._settings.setValue("agent_mode", self._mode)
+        # 即时更新已缓存引擎的 direct（YOLO 直行），无需重建引擎
+        if self._engine is not None:
+            self._engine.direct = (self._mode == "yolo")
 
     def _browse_workdir(self):
         """弹出目录选择框，写入工作目录输入框（保存时持久化）"""

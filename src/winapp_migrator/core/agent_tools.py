@@ -235,17 +235,20 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "click",
-            "description": "点击鼠标（可指定左右中键与次数）。"
-                           "文字类目标优先用 click_text；图标/图形目标用准星对齐法分步操控："
-                           "先 move_mouse 移到目标附近，截图看红色准星是否套住目标，"
-                           "未对准则修正坐标再 move_mouse 纠正；对准后不带 x/y 调用 click，"
-                           "直接点击当前鼠标位置（一次点准）。带 x/y 时则移动并点击。"
-                           "目标太小可先 zoom_in 放大。",
+            "description": "点击目标（返回点击后截图反馈）。两种方式：\n"
+                           "1) 传 text：按文字精确定位点击（系统 UIA+OCR 找到按钮文字确切像素中心再点，"
+                           "100% 精准，按钮/菜单/链接等文字类目标最佳，无需估算坐标）。\n"
+                           "2) 传 x/y 坐标：图标/图形目标用——先 move_mouse 移到目标附近，"
+                           "截图看红色准星是否套住，未对准则修正坐标再 move_mouse 纠正；"
+                           "对准后不带 x/y 调用 click 点当前鼠标位置（一次点准）。目标太小可先 zoom_in 放大。",
             "parameters": {"type": "object",
-                           "properties": {"x": {"type": "integer",
-                                                "description": "目标坐标（可选）：提供则移动鼠标到该坐标再点击"},
+                           "properties": {"text": {"type": "string",
+                                                   "description": "（可选）要点击的文字：如按钮文字/菜单项。"
+                                                                  "提供则按文字精确定位，忽略 x/y"},
+                                          "x": {"type": "integer",
+                                                "description": "目标坐标（可选，与 text 二选一）：提供则移动鼠标到该坐标再点击"},
                                           "y": {"type": "integer",
-                                                "description": "目标坐标（可选）：提供则移动鼠标到该坐标再点击"},
+                                                "description": "目标坐标（可选，与 text 二选一）：提供则移动鼠标到该坐标再点击"},
                                           "button": {"type": "string", "enum": ["left", "right", "middle"]},
                                           "clicks": {"type": "integer"}},
                            "required": []},
@@ -787,6 +790,18 @@ def _blocked(text: str) -> dict:
     return {"text": text, "images": []}
 
 
+def _click_feedback(text: str) -> dict:
+    """点击反馈：点击后立即截取当前屏幕，连同操作说明一起返回给模型。
+
+    返回的截图（含红色准星=当前鼠标位置）作为下一轮视觉输入，让模型能直观
+    核对点击是否落在目标上，实现"点击即反馈、可自查纠正"。
+    """
+    try:
+        return {"text": text, "images": [agent_screen.capture_screen_data_url()]}
+    except Exception:
+        return {"text": text, "images": []}
+
+
 def _image_scale(path: str, max_w: float, max_h: float) -> tuple:
     """读取图片像素尺寸，返回 (scale, w, h)：scale 为按 max_w×max_h 等比缩放的比例(≤1)。
     用于文档/幻灯片插图自适应，防止大图/竖图溢出页面。读取失败返回 None。"""
@@ -870,8 +885,7 @@ def execute_tool(name: str, args: dict, allow_dangerous: bool = False,
                         "images": []}
             x, y = hit
             agent_screen.click_physical(x, y, button, 1)   # 物理像素直点，UIA/OCR 坐标无需换算
-            return {"text": f"已按文字「{target}」精确定位并点击屏幕坐标 ({x},{y})",
-                    "images": []}
+            return _click_feedback(f"已按文字「{target}」精确定位并点击屏幕坐标 ({x},{y})")
         if name == "find_app":
             return {"text": agent_find.find_app(
                 str(args.get("query", "")),
@@ -892,6 +906,25 @@ def execute_tool(name: str, args: dict, allow_dangerous: bool = False,
                                     agent_sandbox.to_int(args.get("y")))
             return {"text": f"鼠标已移动到 ({args.get('x')}, {args.get('y')})", "images": []}
         if name == "click":
+            # 文本目标：走 UIA+OCR 精确定位（100% 精准点击按钮），无需模型估算坐标
+            _ctext = str(args.get("text", "")).strip()
+            if _ctext:
+                w, h = agent_screen.screen_size()
+                png = agent_screen.capture_screen_png()
+                elems = agent_locator.locate_elements(png, w, h)
+                hit = agent_locator.find_element(_ctext, elems)
+                if hit is None:
+                    elems = agent_locator.locate_elements(
+                        agent_screen.capture_screen_png(), w, h)
+                    hit = agent_locator.find_element(_ctext, elems)
+                if hit is None:
+                    return {"text": f"[click] 未找到文字「{_ctext}」。可用元素："
+                                    f"{agent_locator.summarize(elems)}。请改用坐标 click 或确认目标存在。",
+                            "images": []}
+                cx, cy = hit
+                agent_screen.click_physical(cx, cy, str(args.get("button", "left")),
+                                            agent_sandbox.to_int(args.get("clicks", 1)))
+                return _click_feedback(f"已按文字「{_ctext}」精确定位并点击 ({cx},{cy})")
             x = args.get("x")
             y = args.get("y")
             if x is None or y is None:
@@ -899,15 +932,15 @@ def execute_tool(name: str, args: dict, allow_dangerous: bool = False,
                 agent_screen.click(None, None,
                                    str(args.get("button", "left")),
                                    agent_sandbox.to_int(args.get("clicks", 1)))
-                return {"text": f"已点击当前鼠标位置 {args.get('button', 'left')} 键 x{args.get('clicks', 1)}",
-                        "images": []}
+                return _click_feedback(f"已点击当前鼠标位置 {args.get('button', 'left')} 键 "
+                                       f"x{args.get('clicks', 1)}")
             x, y = agent_sandbox.to_int(x), agent_sandbox.to_int(y)
             px, py = agent_screen.map_to_screen(x, y)   # 换算后的真实屏幕坐标（供模型核对）
             agent_screen.click(x, y,
                                str(args.get("button", "left")),
                                agent_sandbox.to_int(args.get("clicks", 1)))
-            return {"text": f"已点击 ({x}, {y}) {args.get('button', 'left')} 键 x{args.get('clicks', 1)}"
-                            f"（换算屏幕坐标 {px},{py}）", "images": []}
+            return _click_feedback(f"已点击 ({x}, {y}) {args.get('button', 'left')} 键 "
+                                   f"x{args.get('clicks', 1)}（换算屏幕坐标 {px},{py}）")
         if name == "zoom_in":
             # 模型给的全屏读数 → 物理坐标 → 放大局部截图（切换视觉基准为 zoom 态）
             x, y = agent_sandbox.to_int(args.get("x")), agent_sandbox.to_int(args.get("y"))

@@ -428,6 +428,61 @@ def virtual_desktop(action: str = "new"):
 
 
 # ---- 鼠标 ----
+# SendInput 鼠标事件标志（MOUSEEVENTF_*）
+_F_ABSOLUTE = 0x8000
+_F_MOVE = 0x0001
+_F_LEFTDOWN, _F_LEFTUP = 0x0002, 0x0004
+_F_RIGHTDOWN, _F_RIGHTUP = 0x0008, 0x0010
+_F_MIDDLEDOWN, _F_MIDDLEUP = 0x0020, 0x0040
+
+
+def _send_input_mouse(flags: int, dx: int, dy: int, mouse_data: int = 0, t: int = 0):
+    """SendInput 发送一条鼠标输入（绝对坐标已归一化为 0..65535）。
+
+    相比 user32.mouse_event，SendInput 更底层可靠：用 MOUSEEVENTF_ABSOLUTE|MOVE
+    精确定位后再按下/抬起，兼容高 DPI 屏幕与多数应用，避免点击落空或偏移。
+    """
+    class MOUSEINPUT(ctypes.Structure):
+        _fields_ = [("dx", wintypes.LONG), ("dy", wintypes.LONG),
+                    ("mouseData", wintypes.DWORD), ("dwFlags", wintypes.DWORD),
+                    ("time", wintypes.DWORD), ("dwExtraInfo", ctypes.POINTER(ctypes.c_ulong))]
+
+    class INPUT(ctypes.Structure):
+        class _U(ctypes.Union):
+            _fields_ = [("mi", MOUSEINPUT)]
+        _anonymous_ = ("u",)
+        _fields_ = [("type", wintypes.DWORD), ("u", _U)]
+
+    mi = MOUSEINPUT(dx, dy, mouse_data, flags, t, ctypes.pointer(ctypes.c_ulong(0)))
+    inp = INPUT(0, mi)   # INPUT_MOUSE = 0
+    user32.SendInput(1, ctypes.byref(inp), ctypes.sizeof(INPUT))
+
+
+def _normalize_abs(x: int, y: int) -> tuple:
+    """屏幕物理像素 → SendInput 绝对坐标（0..65535 归一化）"""
+    w, h = screen_size()
+    return int(x * 65535 // max(w - 1, 1)), int(y * 65535 // max(h - 1, 1))
+
+
+def click_at_physical(x: int, y: int, button: str = "left", clicks: int = 1,
+                      interval: float = 0.08):
+    """SendInput 绝对坐标高精度点击（不经过模型坐标换算）。
+
+    先以绝对坐标移动光标到 (x,y) 再按下/抬起，确保位置精确；供 UIA/OCR 定位
+    结果与模型读数换算后的物理坐标使用。
+    """
+    nx, ny = _normalize_abs(int(x), int(y))
+    down = {"left": _F_LEFTDOWN, "right": _F_RIGHTDOWN, "middle": _F_MIDDLEDOWN}[button]
+    up = {"left": _F_LEFTUP, "right": _F_RIGHTUP, "middle": _F_MIDDLEUP}[button]
+    with ai_suppress():
+        for _ in range(clicks):
+            _send_input_mouse(_F_ABSOLUTE | _F_MOVE, nx, ny)   # 精确定位
+            _send_input_mouse(_F_ABSOLUTE | down, nx, ny)      # 按下
+            time.sleep(interval)
+            _send_input_mouse(_F_ABSOLUTE | up, nx, ny)        # 抬起
+            time.sleep(interval)
+
+
 def move_mouse(x: int, y: int):
     x, y = map_to_screen(x, y)   # 截图像素 → 屏幕物理像素（防 DPI 缩放偏移）
     with ai_suppress():
@@ -447,33 +502,12 @@ def click(x=None, y=None, button: str = "left", clicks: int = 1, interval: float
         x, y = _cursor_pos()   # 当前物理坐标，直接点击当前位置
     else:
         x, y = map_to_screen(x, y)
-        with ai_suppress():
-            user32.SetCursorPos(int(x), int(y))
-    down = {"left": _MOUSE_LEFTDOWN, "right": _MOUSE_RIGHTDOWN,
-            "middle": _MOUSE_MIDDLEDOWN}[button]
-    up = {"left": _MOUSE_LEFTUP, "right": _MOUSE_RIGHTUP,
-          "middle": _MOUSE_MIDDLEUP}[button]
-    with ai_suppress():
-        for _ in range(clicks):
-            user32.mouse_event(down, 0, 0, 0, 0)
-            time.sleep(interval)
-            user32.mouse_event(up, 0, 0, 0, 0)
-            time.sleep(interval)
+    click_at_physical(x, y, button, clicks, interval)
 
 
 def click_physical(x: int, y: int, button: str = "left", clicks: int = 1, interval: float = 0.06):
     """物理像素直接点击（不经过模型坐标换算），供 UIA/OCR 定位结果使用（像素级精确）"""
-    move_mouse_physical(x, y)
-    down = {"left": _MOUSE_LEFTDOWN, "right": _MOUSE_RIGHTDOWN,
-            "middle": _MOUSE_MIDDLEDOWN}[button]
-    up = {"left": _MOUSE_LEFTUP, "right": _MOUSE_RIGHTUP,
-          "middle": _MOUSE_MIDDLEUP}[button]
-    with ai_suppress():
-        for _ in range(clicks):
-            user32.mouse_event(down, 0, 0, 0, 0)
-            time.sleep(interval)
-            user32.mouse_event(up, 0, 0, 0, 0)
-            time.sleep(interval)
+    click_at_physical(x, y, button, clicks, interval)
 
 
 def drag(x1: int, y1: int, x2: int, y2: int, duration: float = 0.4):

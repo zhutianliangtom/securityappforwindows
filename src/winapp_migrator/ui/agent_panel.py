@@ -1378,6 +1378,7 @@ class AgentPanel(QDialog):
     eval_signal = pyqtSignal(str)          # agnes-2.5-flash 任务难度评估结果（后台线程 → 主线程）
     ask_signal = pyqtSignal(str)           # ask_user 提问（args_json）
     mcp_signal = pyqtSignal(str)
+    compact_signal = pyqtSignal(int)   # /compact 压缩完成（后台线程 → 主线程，参数=合并条数）
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -1752,6 +1753,7 @@ class AgentPanel(QDialog):
         self.ask_signal.connect(self._on_ask)
         self.mcp_signal.connect(self._on_mcp_status)
         self.eval_signal.connect(self._on_assess_done)
+        self.compact_signal.connect(self._on_compact_done)
 
     # ---------- 欢迎页（无对话时居中介绍 AI 功能） ----------
     def _build_welcome(self) -> QWidget:
@@ -3032,12 +3034,23 @@ class AgentPanel(QDialog):
         self._scroll_bottom()
 
     def _do_compact(self):
-        """/compact：压缩上下文，把旧消息合并为摘要"""
+        """/compact：由当前模型自主生成摘要压缩上下文（后台线程执行，失败回退启发式）"""
         self.input.clear()
         if not self._engine or not self._engine._messages:
             self._add_status("当前无可压缩的上下文", TEXT_DIM)
             return
-        n = self._engine.compress_history(keep_recent=2)
+        self._add_status("正在压缩上下文（当前模型生成摘要）…", TEXT_DIM)
+        threading.Thread(target=self._compact_worker, daemon=True).start()
+
+    def _compact_worker(self):
+        """后台线程：执行模型自主摘要压缩，完成后发信号回主线程更新状态"""
+        try:
+            n = self._engine._auto_compress(keep_recent=2)
+        except Exception:
+            n = 0
+        self.compact_signal.emit(int(n or 0))
+
+    def _on_compact_done(self, n: int):
         if n:
             self._add_status(f"已压缩上下文：{n} 条旧消息合并为摘要（保留最近 2 条完整）", ACCENT)
         else:

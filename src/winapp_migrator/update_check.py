@@ -3,7 +3,7 @@
 服务器地址来源（优先级）：
 1. QSettings("WinAppMigrator", "WinAppMigrator") 的 update_server
 2. 环境变量 UPDATE_SERVER_URL（如 https://example.com）
-未配置则自动禁用轮询。
+3. 内置默认服务器 DEFAULT_SERVER（保证首次启动必检）
 """
 import json
 import os
@@ -14,12 +14,14 @@ from PyQt6.QtCore import QObject, QTimer, pyqtSignal, QSettings
 
 APP_VERSION = "2.0.0"          # 当前客户端版本（发新版时同步修改）
 POLL_INTERVAL_MS = 30_000      # 30s 轮询
+DEFAULT_SERVER = "https://chentian.dpdns.org"   # 默认更新服务器（可被 QSettings/环境变量覆盖）
 
 
 class UpdateChecker(QObject):
     """轮询更新服务器，发现新版本（未提示过）时发出 update_found 信号"""
 
     update_found = pyqtSignal(dict)   # latest/notes/size/force/url
+    manual_result = pyqtSignal(dict)  # 手动检查结果：status=ok|none|noserver|busy|error
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -27,42 +29,67 @@ class UpdateChecker(QObject):
         server = (q.value("update_server", "") or "").strip().rstrip("/")
         if not server:
             server = os.environ.get("UPDATE_SERVER_URL", "").strip().rstrip("/")
+        if not server:
+            server = DEFAULT_SERVER
         self.server = server
         self._timer = QTimer(self)
         self._timer.setInterval(POLL_INTERVAL_MS)
         self._timer.timeout.connect(self.check)
         self._notified = set()   # 本次运行已提示过的版本，避免重复弹窗
+        self._busy = False       # 请求进行中，防止并发检查
 
     def start(self):
-        """启动轮询；未配置服务器地址则静默禁用"""
+        """启动轮询：首次启动立即检查一次，之后每 30s 巡检"""
         if not self.server:
             return
-        self.check()          # 启动立即检查一次
+        self.check()          # 首次启动必须检查（调用服务器 API）
         self._timer.start()
 
-    def check(self):
+    def check(self, manual: bool = False):
+        """检查更新。manual=True 时结果通过 manual_result 信号反馈，供手动按钮使用"""
         if not self.server:
+            if manual:
+                self.manual_result.emit({"status": "noserver", "info": None})
             return
-        threading.Thread(target=self._check_worker, daemon=True).start()
+        if self._busy:
+            if manual:
+                self.manual_result.emit({"status": "busy", "info": None})
+            return
+        self._busy = True
+        threading.Thread(target=self._check_worker, args=(manual,), daemon=True).start()
 
-    def _check_worker(self):
+    def _check_worker(self, manual: bool = False):
         try:
             url = (f"{self.server}/api/update/check?"
                    f"version={APP_VERSION}&platform=windows")
             with urllib.request.urlopen(url, timeout=10) as resp:
                 data = json.loads(resp.read().decode("utf-8"))
             if not data.get("hasUpdate"):
+                if manual:
+                    self.manual_result.emit({"status": "none", "info": None})
                 return
             ver = str(data.get("latest") or "")
-            if not ver or ver in self._notified:
+            if not ver:
+                if manual:
+                    self.manual_result.emit({"status": "none", "info": None})
                 return
-            self._notified.add(ver)
-            self.update_found.emit({
+            info = {
                 "latest": ver,
                 "notes": data.get("notes") or "",
                 "size": data.get("size") or 0,
                 "force": bool(data.get("force")),
                 "url": self.server + (data.get("url") or ""),
-            })
-        except Exception:
-            pass   # 网络异常/服务器不可达：静默失败，下轮重试
+            }
+            if manual:
+                self.manual_result.emit({"status": "ok", "info": info})
+                return
+            if ver in self._notified:
+                return
+            self._notified.add(ver)
+            self.update_found.emit(info)
+        except Exception as e:
+            # 自动轮询：静默失败，下轮重试；手动检查：反馈失败原因
+            if manual:
+                self.manual_result.emit({"status": "error", "info": None, "error": str(e)})
+        finally:
+            self._busy = False

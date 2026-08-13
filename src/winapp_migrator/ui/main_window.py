@@ -412,6 +412,10 @@ class MainWindow(QMainWindow):
         self.refresh_btn = SecondaryButton("重新扫描")
         self.refresh_btn.clicked.connect(self._start_scan)
         search_layout.addWidget(self.refresh_btn)
+
+        self.update_btn = SecondaryButton("检查更新")
+        self.update_btn.clicked.connect(self._on_check_update_clicked)
+        search_layout.addWidget(self.update_btn)
         layout.addLayout(search_layout)
 
         self.app_list = QListWidget()
@@ -1106,7 +1110,31 @@ class MainWindow(QMainWindow):
     def _init_update_check(self):
         self._update_checker = UpdateChecker(self)
         self._update_checker.update_found.connect(self._on_update_found)
+        self._update_checker.manual_result.connect(self._on_manual_check_result)
         self._update_checker.start()
+
+    def _on_check_update_clicked(self):
+        """手动检查更新：调用服务器 API 并反馈结果"""
+        self.update_btn.setText("检查中…")
+        self.update_btn.setEnabled(False)
+        self._update_checker.check(manual=True)
+
+    def _on_manual_check_result(self, result: dict):
+        """手动检查结果反馈：有更新/已最新/失败等"""
+        self.update_btn.setText("检查更新")
+        self.update_btn.setEnabled(True)
+        status = result.get("status")
+        if status == "ok":
+            self._on_update_found(result.get("info") or {})
+        elif status == "none":
+            QMessageBox.information(self, "检查更新", f"已是最新版本（v{APP_VERSION}）")
+        elif status == "noserver":
+            QMessageBox.warning(self, "检查更新", "未配置更新服务器地址")
+        elif status == "busy":
+            QMessageBox.information(self, "检查更新", "正在检查更新，请稍候…")
+        else:
+            err = result.get("error") or "网络异常"
+            QMessageBox.warning(self, "检查更新", f"检查更新失败：{err}")
 
     def _on_update_found(self, info: dict):
         """发现新版本：普通更新弹确认框；强制更新无忽略选项"""

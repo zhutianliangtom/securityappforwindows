@@ -42,6 +42,8 @@ a = Analysis(
         'win32con',
         # win32com 为动态包，需完整收集子模块（快捷方式 TargetPath 读取依赖）
         *collect_submodules('win32com'),
+        # 三件套图片依赖：docx/pptx/openpyxl 的 add_picture/add_image 运行时 import PIL，显式声明确保随包
+        'PIL',
     ],
     hookspath=[],
     hooksconfig={},

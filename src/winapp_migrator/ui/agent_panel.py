@@ -1228,7 +1228,7 @@ class _AgentSettingsDialog(QDialog):
         self.effort_label.setText(self._effort)
 
     def _save(self):
-        # 多服务商：基于卡片列表持久化，当前服务商为 active
+        # 多服务商：基于卡片列表持久化，全部服务商统一参与路由
         providers = [dict(p) for p in getattr(self, "_providers", [])]
         if not providers:
             providers = [{"name": "默认服务商",
@@ -1236,10 +1236,11 @@ class _AgentSettingsDialog(QDialog):
                           "api_key": agent_llm.DEFAULT_API_KEY,
                           "models": [agent_llm.DEFAULT_MODEL],
                           "protocol": "chat"}]
+        first_models = providers[0].get("models") or [agent_llm.DEFAULT_MODEL]
         model = {
             "providers": providers,
-            "model": providers[0]["models"][0],   # 兼容旧字段
-            "models": providers[0]["models"],
+            "model": first_models[0],   # 兼容旧字段
+            "models": providers[0].get("models") or [],
             "send_effort": self.send_effort_check.isChecked(),
             "protocol": providers[0]["protocol"] or "chat",
             "effort": self._effort,
@@ -1494,8 +1495,6 @@ class _ProviderDialog(QDialog):
     def provider_data(self) -> dict:
         models = [x.strip() for x in self.models_edit.text().replace("，", ",").split(",")
                   if x.strip()]
-        if not models:
-            models = [agent_llm.DEFAULT_MODEL]
         return {
             "name": self.name_edit.text().strip() or "服务商",
             "base_url": self.base_edit.text().strip(),

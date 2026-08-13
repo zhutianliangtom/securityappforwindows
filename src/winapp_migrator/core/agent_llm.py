@@ -78,18 +78,18 @@ def load_model_config() -> dict:
             single_model = str(m.get("model") or "").strip()
             if single_model and single_model not in single["models"]:
                 single["models"].insert(0, single_model)
+            # 仅内置默认场景（无任何模型配置）兜底 agnes 默认模型；用户服务商不加
+            if not single["models"]:
+                single["models"] = [DEFAULT_MODEL]
             providers = [single]
-        # 规范化每个服务商
+        # 规范化每个服务商（不向用户服务商默认注入 agnes 模型）
         for p in providers:
             p["name"] = str(p.get("name") or "服务商").strip() or "服务商"
             p["base_url"] = str(p.get("base_url") or DEFAULT_BASE_URL)
             p["api_key"] = str(p.get("api_key") or "")
             p["protocol"] = (p.get("protocol") if p.get("protocol") in ("chat", "responses")
                              else "chat")
-            pms = [str(x).strip() for x in (p.get("models") or []) if str(x).strip()]
-            if DEFAULT_MODEL not in pms:
-                pms.append(DEFAULT_MODEL)
-            p["models"] = pms
+            p["models"] = [str(x).strip() for x in (p.get("models") or []) if str(x).strip()]
         # 聚合所有服务商的模型作为统一路由池（不再区分「当前服务商」）
         all_models = []
         for p in providers:

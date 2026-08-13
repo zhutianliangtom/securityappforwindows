@@ -422,6 +422,66 @@ API/Shell 拿不到的 GUI 操作，统一用 control_ui 派发给「电脑操�
 ## 3. 完成与汇报
 - 目标达成后输出：完成的操作、关键步骤结果、最终状态。""",
     },
+    "browser-control": {
+        "description": "浏览器操控：用独立浏览器实例（CDP）打开网页、截图、按元素编号/文字点击输入、执行JS解析HTML/CSS、读取页面内容，完全不影响用户其他操作",
+        "instruction": """# browser-control：AI 操控浏览器（独立实例，不影响用户）
+
+当用户要求"打开浏览器/打开某网站/在网页上登录/填写表单/刷视频/看视频/抓取网页数据/自动操作网页"时，
+**优先用浏览器操控工具**（browser_open/browser_navigate/browser_snapshot/browser_click/browser_type/
+browser_scroll/browser_eval/browser_html/browser_close），而不是用鼠标键盘去点用户正在用的浏览器。
+
+## 1. 启动（第一步）
+- `browser_open`：启动**独立浏览器实例**（独立持久用户目录+调试端口，与用户正在用的浏览器完全隔离，
+  不碰鼠标键盘、不影响用户其他操作）。留空 engine 自动找 Edge/Chrome。
+- **登录态持久保留**：登录的 cookie/token 保存在持久目录，`browser_close` 后仍保留，
+  下次 `browser_open` 自动恢复、无需用户重复登录。
+
+## 2. 打开网页
+- `browser_navigate(url=网址)` 打开目标网页（自动补全 http/https）。
+
+## 3. 观察（每步操作前后）
+- `browser_snapshot`：返回页面截图 + **可交互元素编号清单 [id] (标签) 文字**。
+- 分析网页内容用 `browser_html(selector=可选CSS选择器)` 读取 HTML/文本摘要。
+- 需要自定义分析/抓取时用 `browser_eval(js=JS代码)` 直接执行 JavaScript（读取/修改 DOM、调用页面函数）。
+
+## 4. 操作（精确点击/输入/滑动）
+- **点击**：`browser_click(id=编号)` 或 `browser_click(text=按钮/链接文字)`，或 `browser_click(selector=CSS选择器)`
+  精确定位（如 #submit / .btn-primary / form button）。系统解析 DOM 坐标派发点击，兼容 React/Vue 框架事件。
+- **输入**：`browser_type(text=内容, id=输入框编号)`、`browser_type(text=内容, target=占位符/标签)` 或
+  `browser_type(text=内容, selector=CSS选择器)`。
+- **滑动**：页面内容超出屏幕（列表/长文/评论区/视频流）需查看更多时，用
+  `browser_scroll(direction=down/up/top/bottom, amount=像素步长, id/selector=滚动容器)` 滚动后再 snapshot。
+- 操作后通常自动返回最新截图确认结果；不确认时可再 `browser_snapshot` 或 `browser_html` 验证。
+
+## 5. 弹窗/iframe/影子DOM/新窗口（关闭按钮点不到时的处理）
+- 元素清单由系统**穿透解析**：跨域 iframe（广告/客服弹窗）与 shadow DOM 里的可交互元素（含关闭按钮）
+  也已在 browser_snapshot 清单中（编号同样可用），直接按 [id] 或文字点击即可，无需估算坐标。
+- 关闭弹窗：优先 `browser_click(text=关闭)` 或按清单找到"关闭/×"图标按钮的编号点击；
+  点不到/没反应时先 `browser_snapshot` 看当前状态再操作，不要无脑重复点击。
+- 若当前页面里的关闭按钮始终找不到，可能是**新窗口/新标签弹窗**：
+  1. `browser_tabs` 列出所有页面标签（含弹窗）；
+  2. `browser_switch_tab(id=弹窗编号)` 切到弹窗标签；
+  3. 再 `browser_snapshot` 找到关闭按钮后 `browser_click`。
+- 确认弹窗是否真的关闭：关闭后再 `browser_snapshot`，弹窗消失即成功。
+
+## 6. 登录页必须等待用户登录完成（强制）
+- 打开需要登录的页面（检测到"登录/注册/输入密码/验证码"等登录表单，或访问受限需登录跳转）时：
+  1. 先用 `browser_snapshot` / `browser_html` 确认当前确实是登录页。
+  2. **不要盲目操作登录表单**：不猜测账号密码、不重复点击登录按钮。
+  3. **通知用户登录**：用 ask_user 告知用户"请在已打开的浏览器窗口中完成登录（账号/密码/验证码）"，
+     并说明登录完成后会继续任务。
+  4. **等待登录完成**：登录期间停止一切网页操作，循环用 `browser_snapshot` / `browser_html`
+     检查是否已登录（登录页消失、出现用户头像/主页内容/跳转回目标页、URL 变化等）。
+  5. 确认已登录后才继续后续操作；登录超时（用户仍未登录）时再次提示用户，不要跳过登录直接操作。
+
+## 7. 收尾
+- 任务完成后 `browser_close` 关闭独立浏览器实例（不影响用户正在用的浏览器）。
+- **登录态/token 保留**：关闭后 cookie/token 仍在持久目录，下次打开浏览器自动恢复，无需重复登录。
+
+## 8. 原则
+- 每步先想清楚目标再操作；操作结果不确定时 snapshot/html 验证，失败先自查再换方案。
+- 涉及账号密码/验证码/手机验证等敏感登录信息时，一律交给用户手动完成，AI 不代为填写、不猜测。""",
+    },
 }
 
 DEFAULT_AGENTS = [
@@ -479,6 +539,74 @@ DEFAULT_AGENTS = [
                           "确认必须 GUI：用 control_ui(goal=...)，goal 写清操作与期望结果，不写坐标",
                           "涉及特定窗口：target_window 传窗口标题，子 Agent 自动聚焦",
                           "完成后用返回的结果总结确认是否达成目标"],
+         },
+         "browser_open": {
+             "理解": "启动独立浏览器实例（Edge/Chrome，独立持久用户目录+调试端口，与用户正在用的浏览器完全隔离）。"
+                    "浏览器任务（打开网页/登录/填表/抓取/自动操作网页）第一步先 browser_open，"
+                    "之后用 browser_navigate/browser_snapshot/browser_click/browser_type/browser_eval/"
+                    "browser_html 完成操作，最后 browser_close 关闭。"
+                    "**登录态/cookie/token 持久保存，关闭后再打开自动恢复，用户无需重复登录。**",
+             "执行拆分": ["浏览器相关任务优先用浏览器操控工具，而不是用 control_ui 去点用户浏览器",
+                          "browser_open 启动后 browser_navigate 打开目标网址",
+                          "browser_snapshot 看页面元素清单，browser_click/browser_type 按编号/文字操作",
+                          "browser_html/browser_eval 读取或解析页面内容",
+                          "完成后 browser_close 关闭实例（登录态自动保留）"],
+         },
+         "browser_navigate": {
+             "理解": "在独立浏览器中打开网页（自动补全 http/https）。需先 browser_open。",
+             "执行拆分": ["确认已 browser_open",
+                          "传入完整网址或可补全的域名，打开后自动截图确认"],
+         },
+         "browser_snapshot": {
+             "理解": "截取独立浏览器当前页面并返回可交互元素编号清单 [id]（截图+语义清单）。"
+                    "每步操作前后先 snapshot 看页面状态与元素。"
+                    "**若页面是登录页（出现登录/密码/验证码等表单），必须立即通知用户登录并等待其完成，禁止直接操作登录表单。**",
+             "执行拆分": ["用 browser_snapshot 观察页面，先判断是否登录页",
+                          "若检测到登录页：停止操作，用 ask_user 请用户在打开的浏览器窗口完成登录，"
+                          "之后循环 snapshot/html 等待登录完成（登录页消失/出现用户信息）",
+                          "确认已登录后再按清单 [id] 或文字用 browser_click/browser_type 继续操作"],
+         },
+         "browser_click": {
+             "理解": "在独立浏览器中点击元素：id/text/selector（CSS 选择器）三选一定位，系统解析 DOM 坐标派发点击"
+                    "（原生 click+合成事件兜底，兼容 React/Vue）。"
+                    "**点击前先确认页面非登录页且已登录；登录表单上的按钮（登录/注册/验证码）不代为操作。**",
+             "执行拆分": ["先 browser_snapshot 拿元素清单并确认页面状态（是否已登录）",
+                          "若未登录/是登录页：先通知用户登录并等待完成，不要点登录按钮",
+                          "定位：优先 id 或 text；元素不易用文字描述时用 selector 精确指定",
+                          "已登录后 browser_click 点击，返回最新截图确认结果"],
+         },
+         "browser_type": {
+             "理解": "在独立浏览器的输入框中输入文本：id/target/selector 三选一定位，先点击聚焦再输入。"
+                    "**账号/密码/验证码输入框不代为填写，一律由用户手动输入。**",
+             "执行拆分": ["先 browser_snapshot 找输入框并确认页面状态",
+                          "若是登录表单（账号/密码/验证码）：不填写，通知用户手动登录并等待完成",
+                          "定位输入框用 id/target，或用 selector 精确定位",
+                          "普通输入框用 browser_type 输入，必要时再点击提交/回车"],
+         },
+         "browser_scroll": {
+             "理解": "滚动独立浏览器页面或指定容器：direction=up/down/left/right/top/bottom，amount 像素步长，"
+                    "id/selector 指定滚动容器（留空滚动整页）。页面内容超屏（列表/长文/评论区/视频流）时使用。",
+             "执行拆分": ["页面内容超出屏幕时用 browser_scroll 滚动（默认向下滚一屏）",
+                          "找长列表/评论区等特定容器时用 id/selector 指定滚动容器",
+                          "滚动后 browser_snapshot 看新内容"],
+         },
+         "browser_eval": {
+             "理解": "在独立浏览器页面执行 JavaScript 并返回结果（读取/修改 DOM、调用页面函数、抓取数据）。",
+             "执行拆分": ["直接执行 JS，返回文本结果",
+                          "用于解析 HTML/CSS、模拟操作、抓取数据"],
+         },
+         "browser_html": {
+             "理解": "读取独立浏览器当前页面 HTML/文本内容，可传 CSS 选择器只读指定区域。用于分析网页与确认结果。"
+                    "**若内容显示需登录/登录页，须通知用户登录并等待完成后再继续。**",
+             "执行拆分": ["读取页面内容摘要或指定区域 HTML，判断是否需登录",
+                          "需登录时先通知用户登录并等待完成",
+                          "登录确认后用于确认操作结果或抓取数据"],
+         },
+         "browser_close": {
+             "理解": "关闭独立浏览器实例（仅关闭 AI 启动的专用实例，不影响用户浏览器）。"
+                    "登录态/cookie/token 保留在持久目录，下次打开自动恢复。任务完成后调用清理资源。",
+             "执行拆分": ["浏览器任务完成后调用 browser_close 清理",
+                          "登录态自动保留，用户下次无需重复登录"],
          },
          "click_text": {
              "理解": "（已由电脑操控专用子 Agent 使用，主 Agent 不直接调用。）",
@@ -991,6 +1119,9 @@ _SKILL_KEYWORDS = {
                          # 常见电脑操控口语：打开浏览器/打开应用/打卡/登录/点赞/点视频/刷视频等
                          "帮我打开", "打开浏览器", "打卡", "登录", "点赞", "点视频",
                          "刷视频", "看视频", "点一下", "帮我点", "帮我登录", "帮我点赞"],
+    "browser-control": ["浏览器", "打开网页", "打开网站", "浏览网页", "网页操作",
+                        "刷视频", "看视频", "刷网页", "网页抓取", "抓取网页", "自动操作网页",
+                        "上网站", "进网站", "网页登录", "网页填表"],
     "ui-automation": ["点击", "输入文字", "操作界面", "打开应用", "操作软件", "自动化",
                       "打开浏览器", "打卡", "登录", "点赞", "点视频", "视频", "点第一个"],
     "screen_operate": ["截图", "屏幕"],
@@ -1087,6 +1218,12 @@ def build_system_prompt(agent_name: str = "", extra_skills: list = None,
     prompt += _skill_router_block()
     prompt += ("\n\n可用内置工具：control_ui(交给电脑操控专用子Agent完成GUI操作，需在图形界面点按钮/"
                "菜单/输入框时用；能 API/Shell 完成的优先用命令)、"
+               "browser_open(启动独立浏览器实例，不影响用户浏览器；浏览器任务第一步用它)、"
+               "browser_navigate(在独立浏览器打开网页)、browser_snapshot(页面截图+元素清单)、"
+               "browser_click(按编号/文字/CSS选择器点击网页元素)、browser_type(向网页输入框输入)、"
+               "browser_scroll(滚动网页/容器)、"
+               "browser_eval(执行JS解析/操作网页)、browser_html(读取页面HTML/文本)、"
+               "browser_close(关闭独立浏览器实例)、"
                "run_command(执行命令，可设 wait/force_quit，长任务用 check_command 轮询进度)、"
                "ask_user(需求不明确时向用户提问)、"
                "find_app(秒查已安装应用路径)、search_files(工作目录内快速查找文件，未设工作目录则搜用户常用目录)、"

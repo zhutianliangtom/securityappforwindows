@@ -21,6 +21,7 @@ from winapp_migrator.core import agent_screen
 from winapp_migrator.core import agent_find
 from winapp_migrator.core import agent_locator
 from winapp_migrator.core import agent_control
+from winapp_migrator.core import agent_browser
 
 # 本地记忆文件（AI 长期记忆，markdown 格式）
 MEMORY_FILE = Path.home() / ".winapp_migrator" / "agent" / "memory.md"
@@ -554,6 +555,165 @@ TOOLS = [
                                "max_chars": {"type": "integer",
                                              "description": "返回内容最大字符数，默认 8000"}},
                            "required": ["url"]},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "browser_open",
+            "description": "启动独立浏览器实例（Edge/Chrome，独立持久用户目录+调试端口，与用户正在用的浏览器完全隔离，"
+                           "不碰鼠标键盘、不影响用户其他操作）。登录态/cookie/token 会持久保存，"
+                           "下次打开浏览器自动恢复、无需重复登录。浏览器任务（打开网页/登录/填表/抓取/自动操作网页）"
+                           "第一步先 browser_open 启动，之后用 browser_navigate/browser_snapshot/browser_click/"
+                           "browser_type/browser_eval/browser_html 完成操作，最后 browser_close 关闭。",
+            "parameters": {"type": "object",
+                           "properties": {
+                               "engine": {"type": "string",
+                                          "description": "（可选）优先使用 edge 或 chrome，留空自动找可用浏览器"},
+                               "headless": {"type": "boolean",
+                                            "description": "（可选）无头模式（不显示窗口），默认 false"}},
+                           "required": []},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "browser_navigate",
+            "description": "在独立浏览器中打开网页（自动补全 http/https）。用 browser_open 启动后使用。",
+            "parameters": {"type": "object",
+                           "properties": {"url": {"type": "string",
+                                                  "description": "要打开的网址，如 https://www.baidu.com"}},
+                           "required": ["url"]},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "browser_snapshot",
+            "description": "截取独立浏览器当前页面并返回可交互元素语义清单 [id] (标签) 文字。"
+                           "每步操作前/操作后先 browser_snapshot 看页面状态与元素，"
+                           "点击/输入用 browser_click(id) / browser_type(text, id) 按编号精确操作，"
+                           "系统解析 DOM 坐标派发输入，无需估算像素。",
+            "parameters": {"type": "object", "properties": {}, "required": []},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "browser_click",
+            "description": "在独立浏览器中点击元素。支持三种定位（任选其一）："
+                           "① id=browser_snapshot 清单里的元素编号；② text=元素文字（按钮/链接/输入框/选项）；"
+                           "③ selector=CSS 选择器精确定位（如 #submit / .btn-primary / form button）。"
+                           "系统解析 DOM 坐标派发点击（含原生 click+合成事件兜底，兼容 React/Vue）。"
+                           "点击后返回最新页面截图。",
+            "parameters": {"type": "object",
+                           "properties": {
+                               "id": {"type": "integer",
+                                      "description": "（推荐）browser_snapshot 清单里的元素编号 [id]"},
+                               "text": {"type": "string",
+                                        "description": "（推荐）目标元素文字，与 id/selector 三选一"},
+                               "selector": {"type": "string",
+                                            "description": "（推荐）CSS 选择器精确定位元素，与 id/text 三选一"},
+                               "button": {"type": "string",
+                                          "description": "鼠标键：left/right/middle，默认 left"}},
+                           "required": []},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "browser_type",
+            "description": "在独立浏览器的输入框中输入文本。支持三种定位（任选其一）："
+                           "① id=browser_snapshot 清单编号；② target=输入框文字（占位符/标签）；"
+                           "③ selector=CSS 选择器精确定位输入框。先点击聚焦再输入。中文/英文/数字均可。",
+            "parameters": {"type": "object",
+                           "properties": {
+                               "text": {"type": "string", "description": "要输入的文本"},
+                               "id": {"type": "integer",
+                                      "description": "（推荐）browser_snapshot 清单里的输入框编号 [id]"},
+                               "target": {"type": "string",
+                                          "description": "（推荐）输入框文字（占位符/标签），与 id/selector 三选一"},
+                               "selector": {"type": "string",
+                                            "description": "（推荐）CSS 选择器定位输入框，与 id/target 三选一"}},
+                           "required": ["text"]},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "browser_scroll",
+            "description": "滚动独立浏览器页面或指定容器。direction=up/down/left/right/top/bottom"
+                           "（top 滚到顶部、bottom 滚到底部，默认 down）；amount 指定像素步长"
+                           "（默认滚动一屏的 80%）；eid/selector 可指定滚动容器（留空滚动整个页面）。"
+                           "页面内容超出屏幕（列表/长文/评论区）需查看更多时使用。",
+            "parameters": {"type": "object",
+                           "properties": {
+                               "direction": {"type": "string",
+                                             "description": "滚动方向：up/down/left/right/top/bottom，默认 down"},
+                               "amount": {"type": "integer",
+                                          "description": "（可选）滚动像素步长，默认一屏 80% 高度"},
+                               "id": {"type": "integer",
+                                      "description": "（可选）要滚动的容器编号 [id]"},
+                               "selector": {"type": "string",
+                                            "description": "（可选）要滚动的容器 CSS 选择器"}},
+                           "required": []},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "browser_eval",
+            "description": "在独立浏览器页面执行 JavaScript 并返回结果。可直接读取/修改 DOM（解析 HTML/CSS）、"
+                           "调用页面函数、抓取数据、模拟操作。返回结果文本。",
+            "parameters": {"type": "object",
+                           "properties": {"js": {"type": "string",
+                                                 "description": "要执行的 JavaScript 代码，return 值会作为结果返回"}},
+                           "required": ["js"]},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "browser_html",
+            "description": "读取独立浏览器当前页面的 HTML/文本内容。传 selector（CSS 选择器）可只读取指定区域，"
+                           "留空返回整页文本摘要。用于分析网页内容、确认操作结果、抓取数据。",
+            "parameters": {"type": "object",
+                           "properties": {"selector": {"type": "string",
+                                                       "description": "（可选）CSS 选择器，如 #content / .price / form"}},
+                           "required": []},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "browser_close",
+            "description": "关闭独立浏览器实例（仅关闭 AI 启动的专用实例，不影响用户正在使用的浏览器）。"
+                           "登录态/cookie/token 会保留在持久目录，下次 browser_open 自动恢复、无需重复登录。"
+                           "浏览器任务完成后调用清理资源。",
+            "parameters": {"type": "object", "properties": {}, "required": []},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "browser_tabs",
+            "description": "列出独立浏览器内所有页面标签（含 window.open 弹出的新窗口/新标签）。"
+                           "当页面弹窗/新窗口里的元素（如关闭按钮）在 browser_snapshot 中找不到时，"
+                           "先 browser_tabs 查看弹窗标签，再用 browser_switch_tab 切过去操作。",
+            "parameters": {"type": "object", "properties": {}, "required": []},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "browser_switch_tab",
+            "description": "切换到指定编号的页面标签（弹窗/新窗口）。切换后 browser_snapshot/browser_click 等"
+                           "操作都针对该标签。弹窗里的关闭按钮：切到弹窗标签后 browser_snapshot 找到关闭按钮再点击。",
+            "parameters": {"type": "object",
+                           "properties": {
+                               "id": {"type": "integer",
+                                      "description": "browser_tabs 返回的标签页编号（从 1 开始）"}},
+                           "required": ["id"]},
         },
     },
     {
@@ -1147,6 +1307,87 @@ def execute_tool(name: str, args: dict, allow_dangerous: bool = False,
                               args.get("headers") if isinstance(args.get("headers"), dict) else None,
                               str(args.get("body", "")),
                               agent_sandbox.to_int(args.get("max_chars", 8000)))
+        # ---- 浏览器操控（独立浏览器实例，CDP） ----
+        if name == "browser_open":
+            ok, msg = agent_browser.controller().start(
+                str(args.get("engine", "")), bool(args.get("headless", False)))
+            return {"text": msg, "images": []}
+        if name == "browser_navigate":
+            ok, msg = agent_browser.controller().navigate(str(args.get("url", "")))
+            if not ok:
+                return {"text": f"[browser_navigate] {msg}", "images": []}
+            try:
+                shot = agent_browser.controller().screenshot()
+                return {"text": msg, "images": [shot]}
+            except Exception:
+                return {"text": msg, "images": []}
+        if name == "browser_snapshot":
+            ctl = agent_browser.controller()
+            try:
+                shot = ctl.screenshot()
+                elems = ctl.summarize()
+            except Exception as e:
+                return {"text": f"[browser_snapshot] {e}", "images": []}
+            return {"text": "页面元素清单（按 [编号] 或文字引用操作）：\n" + elems,
+                    "images": [shot]}
+        if name == "browser_click":
+            ctl = agent_browser.controller()
+            eid = args.get("id")
+            text = str(args.get("text", "")).strip()
+            ok, msg, shot = ctl.click(
+                eid=agent_sandbox.to_int(eid) if eid is not None else None,
+                text=text or None,
+                button=str(args.get("button", "left")))
+            if not ok:
+                return {"text": f"[browser_click] {msg}", "images": []}
+            return {"text": msg, "images": [shot] if shot else []}
+        if name == "browser_type":
+            ctl = agent_browser.controller()
+            eid = args.get("id")
+            ok, msg, shot = ctl.type_text(
+                str(args.get("text", "")),
+                eid=agent_sandbox.to_int(eid) if eid is not None else None,
+                target=str(args.get("target", "")).strip() or None)
+            if not ok:
+                return {"text": f"[browser_type] {msg}", "images": []}
+            return {"text": msg, "images": [shot] if shot else []}
+        if name == "browser_eval":
+            try:
+                res = agent_browser.controller().eval(str(args.get("js", "")))
+            except Exception as e:
+                return {"text": f"[browser_eval] {e}", "images": []}
+            return {"text": res.get("text", ""), "images": []}
+        if name == "browser_html":
+            try:
+                res = agent_browser.controller().html(str(args.get("selector", "")))
+            except Exception as e:
+                return {"text": f"[browser_html] {e}", "images": []}
+            return {"text": res.get("text", ""), "images": []}
+        if name == "browser_scroll":
+            ctl = agent_browser.controller()
+            eid = args.get("id")
+            ok, msg, shot = ctl.scroll(
+                str(args.get("direction", "down")),
+                agent_sandbox.to_int(args.get("amount", 0)) or None,
+                eid=agent_sandbox.to_int(eid) if eid is not None else None,
+                selector=str(args.get("selector", "")).strip() or None)
+            if not ok:
+                return {"text": f"[browser_scroll] {msg}", "images": []}
+            return {"text": msg, "images": [shot] if shot else []}
+        if name == "browser_close":
+            ok, msg = agent_browser.controller().stop()
+            return {"text": msg, "images": []}
+        if name == "browser_tabs":
+            pages = agent_browser.controller().list_pages()
+            if not pages:
+                return {"text": "[browser_tabs] 当前无可用页面标签（浏览器未启动？）", "images": []}
+            rows = [f"[{p['id']}] {p['title']} | {p['url']}" for p in pages]
+            return {"text": "页面标签清单（用 browser_switch_tab(id) 切换）：\n" + "\n".join(rows),
+                    "images": []}
+        if name == "browser_switch_tab":
+            ok, msg = agent_browser.controller().switch_tab(
+                agent_sandbox.to_int(args.get("id", 0)))
+            return {"text": f"[browser_switch_tab] {msg}", "images": []}
         if name == "web_search":
             return _web_search(str(args.get("query", "")),
                                agent_sandbox.to_int(args.get("max_results", 8)))

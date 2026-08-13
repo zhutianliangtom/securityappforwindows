@@ -1973,7 +1973,7 @@ class AgentPanel(QDialog):
             f"QListWidget {{ background: {PANEL}; color: {ACCENT};"
             f"border: 1px solid {BORDER}; border-radius: 8px;"
             "font-size: 13px; padding: 4px; }}"
-            f"QListWidget::item {{ padding: 2px 12px 4px 12px; border-radius: 6px; }}"
+            f"QListWidget::item {{ padding: 6px 12px 6px 12px; border-radius: 6px; }}"
             f"QListWidget::item:hover {{ background: {HOVER}; }}"
             f"QListWidget::item:selected {{ background: {ACCENT}; color: #FFFFFF; }}")
         self.cmd_list.hide()
@@ -3062,7 +3062,7 @@ class AgentPanel(QDialog):
         count = self.cmd_list.count()
         row_h = self.cmd_list.sizeHintForRow(0)
         if row_h <= 0:
-            row_h = 26   # 兜底：13px 字体 + item 内边距
+            row_h = 30   # 兜底：13px 字体 + item 上下内边距 12px
         self.cmd_list.setFixedHeight(min(count, 5) * row_h)
 
     def _on_cmd_selected(self, item):

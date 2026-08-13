@@ -11,7 +11,7 @@ if getattr(sys, "frozen", False):
         sys.path.insert(0, internal_dir)
 
 from PyQt6.QtWidgets import QApplication
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, QSettings
 from PyQt6.QtGui import QFont, QFontDatabase, QIcon
 
 from winapp_migrator.ui.main_window import MainWindow, _app_icon_path
@@ -46,7 +46,14 @@ def main():
     apply_palette(app)
 
     window = MainWindow()
-    window.show()
+    # 隐藏主程序窗口模式：开启后启动只显示 AI 面板，主界面隐藏
+    hide_main = str(QSettings("WinAppMigrator", "WinAppMigrator")
+                    .value("hide_main_window", "0")).strip().lower() in ("1", "true", "yes")
+    if hide_main:
+        window.hide()
+        window._open_agent_panel()
+    else:
+        window.show()
     sys.exit(app.exec())
 
 

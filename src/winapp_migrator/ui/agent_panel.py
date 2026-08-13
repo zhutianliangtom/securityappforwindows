@@ -802,6 +802,12 @@ class _AgentSettingsDialog(QDialog):
         self.memory_check.setChecked(bool(s.get("memory_enabled", True)))
         self.memory_check.setStyleSheet(f"color: {self._TEXT}; font-size: 13px; spacing: 8px;")
         lay.addWidget(self.memory_check)
+        # 隐藏主程序窗口：开启后本窗口（主界面）隐藏，仅显示 AI 面板；重启应用也直接进 AI 面板
+        self.hide_main_check = QCheckBox("隐藏主程序窗口，仅显示 AI 面板")
+        self.hide_main_check.setChecked(self._hide_main_enabled())
+        self.hide_main_check.setStyleSheet(f"color: {self._TEXT}; font-size: 13px; spacing: 8px;")
+        self.hide_main_check.toggled.connect(self._on_hide_main_toggled)
+        lay.addWidget(self.hide_main_check)
         # 执行模式：AskBeforeEdit / Edit / YOLO（原面板顶栏下拉，迁入设置页）
         mode_row = QHBoxLayout()
         mode_row.setSpacing(10)
@@ -845,6 +851,30 @@ class _AgentSettingsDialog(QDialog):
         lay.addWidget(tip)
         lay.addStretch(1)
         return w
+
+    # ---------- 隐藏主程序窗口 ----------
+    def _hide_main_enabled(self) -> bool:
+        return str(QSettings("WinAppMigrator", "WinAppMigrator")
+                   .value("hide_main_window", "0")).strip().lower() in ("1", "true", "yes")
+
+    def _main_window(self):
+        # 本对话框 parent=AgentPanel，AgentPanel 的 parent=MainWindow
+        panel = self.parent()
+        return panel.parent() if panel is not None else None
+
+    def _on_hide_main_toggled(self, checked: bool):
+        """切换时立即持久化并隐藏/显示主程序窗口"""
+        QSettings("WinAppMigrator", "WinAppMigrator").setValue(
+            "hide_main_window", "1" if checked else "0")
+        mw = self._main_window()
+        if mw is None:
+            return
+        if checked:
+            mw.hide()
+        else:
+            mw.show()
+            mw.raise_()
+            mw.activateWindow()
 
     def _build_rules_page(self, s) -> QWidget:
         w = self._page("自定义规则")
@@ -4069,6 +4099,13 @@ class AgentPanel(QDialog):
     # 模型/接口/API Key 已写死，无需设置对话框
 
     def closeEvent(self, event):
+        # 隐藏主程序窗口模式下关闭 AI 面板时，恢复显示主窗口，避免应用无可见窗口
+        if str(self._settings.value("hide_main_window", "0")).strip().lower() in ("1", "true", "yes"):
+            mw = self.parent()
+            if mw is not None:
+                mw.show()
+                mw.raise_()
+                mw.activateWindow()
         if self._engine:
             self._engine.stop()
             self._engine.join(3)

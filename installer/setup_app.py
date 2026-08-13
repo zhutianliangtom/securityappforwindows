@@ -26,10 +26,10 @@ from PyQt6.QtWidgets import (
     QMessageBox, QFrame,
 )
 
-APP_NAME = "WinAppMigrator"
+APP_NAME = "zhuzhu Copilot"
 APP_VERSION = "2.0.0"
-APP_PUBLISHER = "WinAppMigrator"
-UNINSTALL_REG_PATH = r"Software\Microsoft\Windows\CurrentVersion\Uninstall\WinAppMigrator"
+APP_PUBLISHER = "zhuzhu Copilot"
+UNINSTALL_REG_PATH = r"Software\Microsoft\Windows\CurrentVersion\Uninstall\zhuzhu Copilot"
 
 # ------------------------------------------------------------
 # 模式判断
@@ -98,7 +98,7 @@ def app_source() -> Path:
         p = base / "app"
         if p.is_dir():
             return p
-    return Path(__file__).resolve().parent.parent / "dist" / "WinAppMigrator"
+    return Path(__file__).resolve().parent.parent / "dist" / "zhuzhu Copilot"
 
 
 def default_install_dir() -> str:
@@ -453,7 +453,7 @@ class InstallWizard(QMainWindow):
         t5.setObjectName("doneTitle")
         l5.addWidget(t5)
         h5 = QLabel(
-            "⚔️ WinAppMigrator 已就位，随时待命。\n\n"
+            "⚔️ zhuzhu Copilot 已就位，随时待命。\n\n"
             "📌 记住：\n  🔴 红色的 C 盘 = 病，得治。\n  💊 本工具 = 你的处方药。\n\n"
             "      C 盘：谢谢你… 🥹"
         )
@@ -551,7 +551,7 @@ class InstallWizard(QMainWindow):
         if not src.is_dir() or not (src / f"{APP_NAME}.exe").exists():
             QMessageBox.critical(
                 self, "缺少应用文件",
-                "找不到主应用文件。\n\n请先运行 build_setup.bat 生成 dist\\WinAppMigrator，"
+                "找不到主应用文件。\n\n请先运行 build_setup.bat 生成 dist\\zhuzhu Copilot，"
                 "再重新打包本安装器。",
             )
             self.stack.setCurrentIndex(1)
@@ -777,7 +777,7 @@ def main():
         if install_dir is None:
             QMessageBox.information(
                 None, "未安装",
-                "😅 未检测到 WinAppMigrator 的安装记录，无需卸载。",
+                "😅 未检测到 zhuzhu Copilot 的安装记录，无需卸载。",
             )
             return 0
         win = UninstallWizard(install_dir)

@@ -279,7 +279,7 @@ def _app_icon_path() -> str:
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("WinAppMigrator")
+        self.setWindowTitle("zhuzhu Copilot")
         self.setWindowIcon(QIcon(_app_icon_path()))
         self.setMinimumSize(960, 720)
         self.setWindowFlags(Qt.WindowType.FramelessWindowHint)
@@ -332,7 +332,7 @@ class MainWindow(QMainWindow):
         icon.setStyleSheet(f"color: {PALETTE['primary']}; font-size: 20px; font-weight: 700;")
         layout.addWidget(icon)
 
-        title = QLabel("WinAppMigrator")
+        title = QLabel("zhuzhu Copilot")
         title.setStyleSheet(f"font-size: 16px; font-weight: 700; color: {PALETTE['text']};")
         layout.addWidget(title)
 
@@ -583,7 +583,7 @@ class MainWindow(QMainWindow):
     def _setup_tray(self):
         """系统托盘：防护开启时显示图标，右键菜单可还原/退出，清理结果右下角弹窗"""
         self.tray = QSystemTrayIcon(QIcon(_app_icon_path()), self)
-        self.tray.setToolTip("WinAppMigrator · 静默安全防护")
+        self.tray.setToolTip("zhuzhu Copilot · 静默安全防护")
         menu = QMenu(self)
         act_show = menu.addAction("显示主窗口")
         act_show.triggered.connect(self._restore_from_tray)

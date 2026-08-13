@@ -31,8 +31,8 @@ a = Analysis(
 
 pyz = PYZ(a.pure)
 
-# 把已构建好的主应用 dist\WinAppMigrator 整体嵌入（_MEIPASS/app）
-app_tree = Tree(str(_PROJECT_DIR / 'dist' / 'WinAppMigrator'), prefix='app')
+# 把已构建好的主应用 dist\zhuzhu Copilot 整体嵌入（_MEIPASS/app）
+app_tree = Tree(str(_PROJECT_DIR / 'dist' / 'zhuzhu Copilot'), prefix='app')
 a.datas += app_tree
 
 exe = EXE(
@@ -41,7 +41,7 @@ exe = EXE(
     a.binaries,
     a.datas,
     [],
-    name='WinAppMigrator_Setup',
+    name='zhuzhu Copilot Setup',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,

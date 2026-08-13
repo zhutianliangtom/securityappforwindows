@@ -26,13 +26,13 @@ def main():
         Qt.HighDpiScaleFactorRoundingPolicy.PassThrough
     )
     app = QApplication(sys.argv)
-    app.setApplicationName("WinAppMigrator")
-    app.setApplicationDisplayName("WinAppMigrator")
+    app.setApplicationName("zhuzhu Copilot")
+    app.setApplicationDisplayName("zhuzhu Copilot")
 
     # Windows 任务栏独立图标：不设 AppUserModelID 时任务栏会把应用并入 python.exe 并显示默认图标
     if sys.platform == "win32":
         try:
-            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("WinAppMigrator.App")
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("zhuzhu Copilot.App")
         except Exception:
             pass
     # 应用级图标：主窗口与所有对话框（QMessageBox 等）左上角图标均继承自此

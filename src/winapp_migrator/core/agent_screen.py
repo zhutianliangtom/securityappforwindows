@@ -477,7 +477,9 @@ def _send_input_mouse(flags: int, dx: int, dy: int, mouse_data: int = 0, t: int 
         _fields_ = [("type", wintypes.DWORD), ("u", _U)]
 
     mi = MOUSEINPUT(dx, dy, mouse_data, flags, t, ctypes.pointer(ctypes.c_ulong(0)))
-    inp = INPUT(0, mi)   # INPUT_MOUSE = 0
+    inp = INPUT()
+    inp.type = 0          # INPUT_MOUSE
+    inp.u.mi = mi         # 通过命名联合体字段赋值，避免匿名联合体构造类型不匹配
     user32.SendInput(1, ctypes.byref(inp), ctypes.sizeof(INPUT))
 
 
@@ -627,5 +629,7 @@ def _send_unicode(ch: str):
         for down in (True, False):
             ki = KEYBDINPUT(0, ord(ch), 0x0004 if down else 0x0004 | 0x0002,
                             0, ctypes.pointer(ctypes.c_ulong(0)))
-            inp = INPUT(1, ki)  # INPUT_KEYBOARD=1
+            inp = INPUT()
+            inp.type = 1  # INPUT_KEYBOARD
+            inp.u.ki = ki   # 通过命名联合体字段赋值，避免匿名联合体构造类型不匹配
             user32.SendInput(1, ctypes.byref(inp), ctypes.sizeof(INPUT))

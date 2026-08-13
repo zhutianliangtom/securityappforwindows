@@ -1770,6 +1770,65 @@ class _POINT(ctypes.Structure):
     _fields_ = [("x", ctypes.c_long), ("y", ctypes.c_long)]
 
 
+class _AIControlGlow(QWidget):
+    """AI 操控电脑时的屏幕边框闪烁光圈。
+
+    全屏置顶透明悬浮窗，沿屏幕四边绘制一圈缓慢呼吸闪烁的发光描边，
+    用于直观提示"当前 AI 正在操控电脑"。动画由 QTimer 驱动，随 alpha 正弦呼吸。
+    """
+
+    def __init__(self):
+        super().__init__(None)
+        self.setWindowFlags(
+            Qt.WindowType.FramelessWindowHint
+            | Qt.WindowType.WindowStaysOnTopHint
+            | Qt.WindowType.Tool
+            | Qt.WindowType.WindowDoesNotAcceptFocus)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)  # 不拦截鼠标
+        self._phase = 0.0
+        self._timer = QTimer(self)
+        self._timer.setInterval(33)   # ~30fps 呼吸动画
+        self._timer.timeout.connect(self._tick)
+
+    def _screen_geo(self):
+        return QApplication.primaryScreen().availableGeometry()
+
+    def _tick(self):
+        self._phase += 0.06
+        self.update()
+
+    def show_glow(self):
+        r = self._screen_geo()
+        self.setGeometry(r)
+        self.show()
+        self.raise_()
+        self._timer.start()
+
+    def hide_glow(self):
+        self._timer.stop()
+        self.hide()
+
+    def paintEvent(self, _ev):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        w, h = self.width(), self.height()
+        if w <= 0 or h <= 0:
+            return
+        # 呼吸强度：0.45 ~ 1.0 正弦脉动（缓慢闪烁）
+        base = 0.45 + 0.55 * (0.5 + 0.5 * math.sin(self._phase))
+        c = QColor(ACCENT)   # 深蓝系主色
+        max_w = int(22 * base) + 6
+        # 沿屏幕四边多层羽化描边，内层更亮、外层更淡，营造发光光圈
+        for i in range(max_w, 0, -1):
+            alpha = int(130 * base * (1 - i / max_w)) + 12
+            p.setPen(QPen(QColor(c.red(), c.green(), c.blue(), min(alpha, 255)), i))
+            p.setBrush(Qt.BrushStyle.NoBrush)
+            inset = max_w // 2 - i // 2
+            p.drawRect(inset, inset, w - 2 * inset, h - 2 * inset)
+        p.end()
+
+
 class AgentPanel(QDialog):
     delta_signal = pyqtSignal(str)
     status_signal = pyqtSignal(str)
@@ -1896,6 +1955,7 @@ class AgentPanel(QDialog):
 
         self._build_ui()
         self._init_subtitle()   # 全局置顶悬浮字幕窗（AI 操控电脑时显示操作字幕）
+        self._glow = _AIControlGlow()   # 屏幕边框闪烁光圈（AI 操控中提示）
         self._sync_model_combo()   # 填充输入框右侧模型下拉（设置里的模型列表）
         self._connect_signals()
         self._restore_workdir()   # 恢复上次选择的工作目录（QSettings 持久化）
@@ -2120,6 +2180,8 @@ class AgentPanel(QDialog):
         self._subtitle_op = op
         self._subtitle_ai = ""
         self._render_subtitle()
+        if self._glow:
+            self._glow.show_glow()   # AI 操控中：点亮屏幕边框闪烁光圈
 
     def _render_subtitle(self):
         if not self._subtitle:
@@ -2142,6 +2204,8 @@ class AgentPanel(QDialog):
         self._subtitle_active = False
         self._subtitle_op = ""
         self._subtitle_ai = ""
+        if self._glow:
+            self._glow.hide_glow()   # 停止 AI 操控：熄灭屏幕边框光圈
         if self._subtitle:
             self._subtitle.hide()
 

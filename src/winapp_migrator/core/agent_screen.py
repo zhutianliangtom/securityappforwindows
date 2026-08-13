@@ -478,11 +478,11 @@ def click_at_physical(x: int, y: int, button: str = "left", clicks: int = 1,
             time.sleep(interval)
 
 
-def _move_human(x2: int, y2: int, duration: float = 0.22):
-    """真人式平滑移动：从当前光标位置到目标 (x2,y2)。
+def _move_human(x2: int, y2: int, duration: float = 0):
+    """真人式平滑移动（Windows 优化）：从当前光标位置到目标 (x2,y2)。
 
-    走最短直线路径，带 ease-in-out 加速/减速与轻微垂直弧度（真人很少走完美直线），
-    分步 SetCursorPos 插值，末段精确落到目标。用于代替"瞬移"式移动，更接近真人操作。
+    避免激进/瞬移：时长随距离自适应、弧度温和、ease-out 快起慢落（接近迅速、落点缓），
+    分步 SetCursorPos 插值，末段精确落到目标。
     """
     x1, y1 = _cursor_pos()
     dx, dy = x2 - x1, y2 - y1
@@ -491,17 +491,19 @@ def _move_human(x2: int, y2: int, duration: float = 0.22):
         with ai_suppress():
             user32.SetCursorPos(int(x2), int(y2))
         return
-    steps = max(int(duration / 0.008), 8)
-    arc = min(dist * 0.10, 42)            # 弧度幅度随距离，限幅
+    # 时长随距离自适应：短距快、长距慢（整体温和，不激进）
+    dur = duration or (0.24 + min(dist / 1500.0, 0.20))
+    steps = max(int(dur / 0.010), 12)
+    arc = min(dist * 0.06, 26)            # 温和弧度（限幅）
     px, py = -dy / dist, dx / dist        # 路径垂直单位向量
     with ai_suppress():
         for i in range(1, steps + 1):
             t = i / steps
-            ease = t * t * (3 - 2 * t)                       # ease-in-out
-            bend = math.sin(math.pi * t) * arc               # 两端归零的弧度
+            ease = 1 - (1 - t) ** 2       # 快起慢落：接近迅速、落点缓，真人手感
+            bend = math.sin(math.pi * t) * arc
             user32.SetCursorPos(int(x1 + dx * ease + px * bend),
                                 int(y1 + dy * ease + py * bend))
-            time.sleep(duration / steps)
+            time.sleep(dur / steps)
         user32.SetCursorPos(int(x2), int(y2))   # 精确落点保证
 
 

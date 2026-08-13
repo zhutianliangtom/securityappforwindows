@@ -20,6 +20,7 @@ from winapp_migrator.core import agent_sandbox
 from winapp_migrator.core import agent_screen
 from winapp_migrator.core import agent_find
 from winapp_migrator.core import agent_locator
+from winapp_migrator.core import agent_control
 
 # 本地记忆文件（AI 长期记忆，markdown 格式）
 MEMORY_FILE = Path.home() / ".winapp_migrator" / "agent" / "memory.md"
@@ -865,24 +866,15 @@ def execute_tool(name: str, args: dict, allow_dangerous: bool = False,
             return {"text": f"屏幕分辨率 {w}x{h}",
                     "images": [agent_screen.capture_screen_data_url()]}
         if name == "click_text":
-            # 按文字精确定位：UIA + OCR 找到文字中心坐标，直接点击（像素级，无需视觉读数）
+            # 按文字精确定位（电脑操控 Agent 最优逻辑：UIA+OCR 多策略 + 精准点击）
             target = str(args.get("text", "")).strip()
             button = str(args.get("button", "left"))
             if not target:
                 return {"text": "[click_text] 缺少要点击的文字参数 text", "images": []}
-            elems = agent_locator.get_screen_elements()
-            hit = agent_locator.find_element(target, elems)
+            hit, msg = agent_control.controller().click_text(target, button)
             if hit is None:
-                # 兜底：强制重扫一次（界面可能刚变化），仍未命中则报错让模型换方案
-                elems = agent_locator.get_screen_elements(force=True)
-                hit = agent_locator.find_element(target, elems)
-            if hit is None:
-                return {"text": f"[click_text] 未找到文字「{target}」。屏幕上的文字元素："
-                                f"{agent_locator.summarize(elems)}。请改用 click 视觉定位或确认目标存在。",
-                        "images": []}
-            x, y = hit
-            agent_screen.click_physical(x, y, button, 1)   # 物理像素直点，UIA/OCR 坐标无需换算
-            return _click_feedback(f"已按文字「{target}」精确定位并点击屏幕坐标 ({x},{y})")
+                return {"text": f"[click_text] {msg}", "images": []}
+            return _click_feedback(msg)
         if name == "find_app":
             return {"text": agent_find.find_app(
                 str(args.get("query", "")),
@@ -899,42 +891,30 @@ def execute_tool(name: str, args: dict, allow_dangerous: bool = False,
         if name == "capture_window":
             return _capture_window(str(args.get("window", "")))
         if name == "move_mouse":
-            agent_screen.move_mouse(agent_sandbox.to_int(args.get("x")),
-                                    agent_sandbox.to_int(args.get("y")))
+            agent_control.controller().move(agent_sandbox.to_int(args.get("x")),
+                                            agent_sandbox.to_int(args.get("y")))
             return {"text": f"鼠标已移动到 ({args.get('x')}, {args.get('y')})", "images": []}
         if name == "click":
-            # 文本目标：走 UIA+OCR 精确定位（100% 精准点击按钮），无需模型估算坐标
+            # 电脑操控 Agent 最优逻辑：优先 text 精准定位，其次坐标，最后当前光标
+            ctl = agent_control.controller()
             _ctext = str(args.get("text", "")).strip()
             if _ctext:
-                elems = agent_locator.get_screen_elements()
-                hit = agent_locator.find_element(_ctext, elems)
+                hit, msg = ctl.click_text(_ctext, str(args.get("button", "left")))
                 if hit is None:
-                    elems = agent_locator.get_screen_elements(force=True)
-                    hit = agent_locator.find_element(_ctext, elems)
-                if hit is None:
-                    return {"text": f"[click] 未找到文字「{_ctext}」。可用元素："
-                                    f"{agent_locator.summarize(elems)}。请改用坐标 click 或确认目标存在。",
-                            "images": []}
-                cx, cy = hit
-                agent_screen.click_physical(cx, cy, str(args.get("button", "left")),
-                                            agent_sandbox.to_int(args.get("clicks", 1)))
-                return _click_feedback(f"已按文字「{_ctext}」精确定位并点击 ({cx},{cy})")
+                    return {"text": f"[click] {msg}", "images": []}
+                return _click_feedback(msg)
             x = args.get("x")
             y = args.get("y")
             if x is None or y is None:
                 # 不带坐标：点击当前鼠标位置（配合 move_mouse 先移动对准、截图纠正后点准）
-                agent_screen.click(None, None,
-                                   str(args.get("button", "left")),
-                                   agent_sandbox.to_int(args.get("clicks", 1)))
-                return _click_feedback(f"已点击当前鼠标位置 {args.get('button', 'left')} 键 "
-                                       f"x{args.get('clicks', 1)}")
+                _, msg = ctl.click(button=str(args.get("button", "left")),
+                                   clicks=agent_sandbox.to_int(args.get("clicks", 1)))
+                return _click_feedback(msg)
             x, y = agent_sandbox.to_int(x), agent_sandbox.to_int(y)
             px, py = agent_screen.map_to_screen(x, y)   # 换算后的真实屏幕坐标（供模型核对）
-            agent_screen.click(x, y,
-                               str(args.get("button", "left")),
-                               agent_sandbox.to_int(args.get("clicks", 1)))
-            return _click_feedback(f"已点击 ({x}, {y}) {args.get('button', 'left')} 键 "
-                                   f"x{args.get('clicks', 1)}（换算屏幕坐标 {px},{py}）")
+            _, msg = ctl.click(x, y, button=str(args.get("button", "left")),
+                               clicks=agent_sandbox.to_int(args.get("clicks", 1)))
+            return _click_feedback(msg + f"（换算屏幕坐标 {px},{py}）")
         if name == "zoom_in":
             # 模型给的全屏读数 → 物理坐标 → 放大局部截图（切换视觉基准为 zoom 态）
             x, y = agent_sandbox.to_int(args.get("x")), agent_sandbox.to_int(args.get("y"))

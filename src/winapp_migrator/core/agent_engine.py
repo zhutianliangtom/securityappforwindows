@@ -21,7 +21,7 @@ from winapp_migrator.core.agent_screen import virtual_desktop
 
 # 工具结果进入对话上下文的长度上限：长输出（如 run_command 回显）截断后仍进上下文，
 # 完整内容由 AI 按需用 read_file/check_command 查看，避免上下文无限膨胀烧 tokens
-_TOOL_TEXT_MAX = 3000
+_TOOL_TEXT_MAX = 12000
 
 # 开发类工具：动手开发/修改代码前必须先确认用户开发规则（首次调用被拦截，规则确认后下一轮放行）
 _DEV_TOOLS = frozenset({"write_file", "edit_file", "delete_file",

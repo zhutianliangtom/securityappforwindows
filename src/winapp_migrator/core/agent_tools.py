@@ -83,10 +83,21 @@ def _kill_process_tree(pid: int) -> bool:
         return False
 
 
-def _drain_pipe(pipe, lines: list, lock: threading.Lock):
-    """后台线程逐行读取管道并存入共享缓冲（防管道填满导致进程阻塞）"""
+def _decode_robust(raw: bytes) -> str:
+    """子进程/文件字节 → 文本：UTF-8 优先（现代工具主流），失败回退控制台 OEM 代码页
+    （中文系统 GBK），避免 UTF-8 输出被按 GBK 解码成乱码、或 GBK 输出解码崩溃"""
+    if raw.startswith(b"\xef\xbb\xbf"):
+        return raw.decode("utf-8-sig", errors="replace")
     try:
-        for line in iter(pipe.readline, ""):
+        return raw.decode("utf-8")
+    except UnicodeDecodeError:
+        return raw.decode(_console_encoding(), errors="replace")
+
+
+def _drain_pipe(pipe, lines: list, lock: threading.Lock):
+    """后台线程逐行读取管道（二进制）并存入共享缓冲（防管道填满导致进程阻塞）"""
+    try:
+        for line in iter(pipe.readline, b""):
             with lock:
                 lines.append(line)
     except Exception:
@@ -101,8 +112,8 @@ def _drain_pipe(pipe, lines: list, lock: threading.Lock):
 def _collect(rec: dict) -> str:
     """汇总后台命令的已收集输出（stdout + stderr，带截断）"""
     with rec["lock"]:
-        out = "".join(rec["out"]).strip()
-        err = "".join(rec["err"]).strip()
+        out = _decode_robust(b"".join(rec["out"])).strip()
+        err = _decode_robust(b"".join(rec["err"])).strip()
     text = out
     if err:
         text += f"\n[stderr] {err[:8000]}" if text else f"[stderr] {err[:8000]}"
@@ -880,12 +891,10 @@ def _run_command(command: str, wait: int = 5, force_quit: bool = False) -> dict:
     """
     try:
         wait = max(0, int(wait))   # 不做上限：长命令可无限等待，由 stop/转后台机制兜底
-        # 控制台程序按 OEM 代码页输出（中文系统 GBK，英文 cp437），
-        # 用 text=True 默认 UTF-8 会解码失败导致 reader 线程崩溃、输出丢失
+        # 二进制模式读取管道，统一由 _decode_robust 智能解码（UTF-8 优先，回退 OEM 代码页），
+        # 兼容现代工具 UTF-8 输出与传统控制台 GBK 输出
         proc = subprocess.Popen(command, shell=True, stdout=subprocess.PIPE,
-                                stderr=subprocess.PIPE, text=True,
-                                encoding=_console_encoding(),
-                                errors="replace",
+                                stderr=subprocess.PIPE,
                                 cwd=WORKDIR or None,     # 命令默认在工作目录执行
                                 creationflags=_CREATE_NO_WINDOW)
     except Exception as e:
@@ -908,8 +917,8 @@ def _run_command(command: str, wait: int = 5, force_quit: bool = False) -> dict:
         time.sleep(1.0)
 
     with lock:
-        out = "".join(out_lines).strip()
-        err = "".join(err_lines).strip()
+        out = _decode_robust(b"".join(out_lines)).strip()
+        err = _decode_robust(b"".join(err_lines)).strip()
     code = proc.poll()
 
     def _compose() -> str:
@@ -932,8 +941,8 @@ def _run_command(command: str, wait: int = 5, force_quit: bool = False) -> dict:
         for t in threads:
             t.join(1.0)
         with lock:
-            out = "".join(out_lines).strip()
-            err = "".join(err_lines).strip()
+            out = _decode_robust(b"".join(out_lines)).strip()
+            err = _decode_robust(b"".join(err_lines)).strip()
         code = proc.poll()
         return {"text": f"命令在 {wait}s 内未完成，已按 force_quit 强制结束（退出码 {code}）。\n" + _compose(),
                 "images": []}
@@ -984,8 +993,9 @@ def _read_file(path: str) -> dict:
         size = os.path.getsize(p)
         if size > 200 * 1024:
             return _blocked(f"[沙盒] 文件过大（{size} 字节 > 200KB）")
-        with open(p, "r", encoding="utf-8", errors="replace") as f:
-            return {"text": f.read()[:30000], "images": []}
+        with open(p, "rb") as f:
+            raw = f.read()
+        return {"text": _decode_robust(raw)[:30000], "images": []}
     except Exception as e:
         return _blocked(f"[沙盒] 读取失败: {e}")
 

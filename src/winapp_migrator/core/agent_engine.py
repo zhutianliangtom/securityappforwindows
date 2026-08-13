@@ -251,6 +251,84 @@ class AgentEngine:
         self._messages.extend(recent)
         return len(old)
 
+    def _auto_compress(self, keep_recent: int = 60) -> int:
+        """上下文压缩：优先让当前模型自主生成摘要（保留关键信息），失败回退启发式合并。
+        返回被合并的消息条数（0 表示无需压缩）。"""
+        if len(self._messages) <= keep_recent + 1:
+            return 0
+        # 压缩边界不切断 assistant(tool_calls)/tool 回复配对
+        start = max(len(self._messages) - keep_recent, 1)
+        while start > 1 and self._messages[start].get("role") == "tool":
+            start -= 1
+        head = self._messages[0]
+        recent = self._messages[start:]
+        old = self._messages[1:start]
+        summary = self._llm_summarize(old)   # 当前模型自主摘要（失败返回空串）
+        if not summary:
+            summary = self._heuristic_summary(old)
+        self._messages = [head]
+        if summary:
+            self._messages.append({"role": "user",
+                                   "content": agent_llm.build_content(summary)})
+        self._messages.extend(recent)
+        return len(old)
+
+    def _llm_summarize(self, old: list) -> str:
+        """调用当前模型对旧消息生成摘要（失败/超时返回空串，由调用方回退启发式）"""
+        try:
+            texts = []
+            for m in old:
+                c = m.get("content")
+                if isinstance(c, str) and c:
+                    texts.append(f"[{m.get('role')}] {c}")
+                elif isinstance(c, list):
+                    parts = [x.get("text") for x in c
+                             if isinstance(x, dict) and x.get("type") == "text" and x.get("text")]
+                    if parts:
+                        texts.append(f"[{m.get('role')}] {' '.join(parts)}")
+            joined = "\n".join(texts).strip()
+            if not joined:
+                return ""
+            if len(joined) > 40000:   # 摘要输入截断保护：只保留更近的部分
+                joined = joined[-40000:]
+            sys_p = ("你是对话上下文压缩助手。把以下历史对话压缩为简洁摘要，保留："
+                     "任务目标、已完成的关键步骤与结论、用户的偏好与约束、未解决的问题。"
+                     "只输出摘要正文，不要任何前缀或解释。")
+            res = self.llm.chat(
+                [{"role": "system", "content": sys_p},
+                 {"role": "user", "content": f"历史对话：\n{joined}"}],
+                max_tokens=1024, stop=lambda: self._stop.is_set())
+            return str(res.get("text") or "").strip()
+        except Exception:
+            return ""
+
+    @staticmethod
+    def _heuristic_summary(old: list) -> str:
+        """启发式摘要兜底：任务目标 + 旧消息尾部细节（与 compress_history 一致）"""
+        parts, first_goal = [], ""
+        for m in old:
+            c = m.get("content")
+            texts = []
+            if isinstance(c, str) and c:
+                texts.append(c)
+            elif isinstance(c, list):
+                for x in c:
+                    if isinstance(x, dict) and x.get("type") == "text" and x.get("text"):
+                        texts.append(x["text"])
+            joined = "\n".join(texts)
+            if joined:
+                if not first_goal and m.get("role") == "user":
+                    first_goal = joined[:500]
+                parts.append(joined)
+        summary_parts = []
+        if first_goal:
+            summary_parts.append(f"任务目标：{first_goal}")
+        tail = "\n".join(parts)
+        if tail:
+            summary_parts.append(tail[-1500:])
+        return ("（上下文已压缩，以下是此前对话的关键信息）\n"
+                + "\n".join(summary_parts)) if summary_parts else ""
+
     def _prune_images(self, max_keep=2):
         """历史中的截图只保留最近 max_keep 张，其余剥离 image_url 只留文本，防止上下文膨胀"""
         seen = 0
@@ -506,24 +584,31 @@ class AgentEngine:
                     if self.on_status:
                         self.on_status("已停止")
                     return
-                # 每轮重建系统提示词：用户中途新增/修改的规则在下一轮立即生效
-                self._messages[0]["content"] = self._system_prompt(agent_name, skills)
+                # 每轮重建系统提示词：用户中途新增/修改的规则在下一轮立即生效；
+                # 内容未变化时不覆盖，保持发送前缀稳定利于上下文缓存命中
+                new_prompt = self._system_prompt(agent_name, skills)
+                if self._messages[0].get("content") != new_prompt:
+                    self._messages[0]["content"] = new_prompt
                 if self.on_status:
                     self.on_status("正在思考…")
-                self._prune_images(2)  # 历史截图只保留最近 2 张，其余剥离成纯文本，控制视觉输入 tokens
                 if self.text_only:
-                    self._strip_images(self._messages)   # 纯文本模型：发送前清掉全部 image_url（历史残留/自动截图都清）
-                # 自动压缩：上下文过长时合并旧消息（保留任务目标），防止长任务中 AI 遗忘开头。
-                # 阈值/保留量取较大值：让 AI 记住最近 40 条完整消息（约十余轮对话），仅真正超长时才压缩
-                if len(self._messages) > 120:
-                    n = self.compress_history(keep_recent=40)
+                    # 纯文本模型：发送副本剥离图片，不改存储历史 → 前缀稳定利于缓存命中
+                    send_msgs = [dict(m) for m in self._messages]
+                    self._strip_images(send_msgs)
+                else:
+                    self._prune_images(2)   # 视觉模型：历史截图只保留最近 2 张，防上下文膨胀
+                    send_msgs = self._messages
+                # 自动压缩：上下文过长时让当前模型自主摘要压缩（失败回退启发式），
+                # 阈值/保留量取较大值：让 AI 记住最近 60 条完整消息，仅真正超长时才压缩
+                if len(self._messages) > 200:
+                    n = self._auto_compress(keep_recent=60)
                     if n and self.on_status:
-                        self.on_status(f"上下文较长，已自动压缩 {n} 条旧消息")
+                        self.on_status(f"上下文较长，已由模型自动摘要压缩 {n} 条旧消息")
                 # tokens 预计算
                 self.last_estimate = agent_llm.estimate_tokens(
                     "".join(m["content"] for m in self._messages if isinstance(m.get("content"), str)))
                 result = self.llm.chat_stream(
-                    self._messages, tools=self._all_tools(), tool_choice="auto",
+                    send_msgs, tools=self._all_tools(), tool_choice="auto",
                     on_delta=self.on_delta,
                     on_reasoning=self.on_reasoning,
                     stop=lambda: self._stop.is_set())

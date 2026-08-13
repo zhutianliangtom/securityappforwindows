@@ -585,6 +585,55 @@ class LLMClient:
         return {"text": "".join(text_parts), "tool_calls": calls, "usage": usage,
                 "cache": {"hit": hit, "miss": miss}}
 
+    def chat(self, messages: list, max_tokens: int = 1024,
+             timeout: float = 60.0, stop: Optional[Callable[[], bool]] = None) -> dict:
+        """非流式单次对话（内部小请求：上下文自主摘要等）。返回 {"text", "usage"}"""
+        if self.protocol == "responses":
+            raise AgentLLMError("responses 协议不支持内部摘要请求")
+        payload = {
+            "model": self.model,
+            "messages": _sanitize_messages(messages),
+            "stream": False,
+            "max_tokens": max_tokens,
+        }
+        req = urllib.request.Request(
+            f"{self.base_url}/chat/completions",
+            data=json.dumps(payload).encode("utf-8"),
+            headers={"Content-Type": "application/json",
+                     "User-Agent": _UA,
+                     "Authorization": f"Bearer {self.api_key}"},
+            method="POST")
+        resp = None
+        last_err = None
+        for attempt in range(_MAX_RETRIES):
+            if stop and stop():
+                raise AgentLLMError("已停止")
+            try:
+                resp = urllib.request.urlopen(req, timeout=timeout)
+                break
+            except urllib.error.HTTPError as e:
+                last_err = f"HTTP {e.code}: {e.read().decode('utf-8', 'replace')[:300]}"
+                if e.code in (429, 500, 502, 503, 504) and attempt < _MAX_RETRIES - 1:
+                    time.sleep(_RETRY_DELAY * (attempt + 1))
+                    continue
+                raise AgentLLMError(last_err)
+            except urllib.error.URLError as e:
+                last_err = f"网络错误: {e.reason}"
+                if attempt < _MAX_RETRIES - 1:
+                    time.sleep(_RETRY_DELAY * (attempt + 1))
+                    continue
+                raise AgentLLMError(last_err)
+        if resp is None:
+            raise AgentLLMError(last_err or "请求失败")
+        data = json.loads(resp.read().decode("utf-8", "replace"))
+        msg = ((data.get("choices") or [{}])[0].get("message") or {})
+        c = msg.get("content")
+        if isinstance(c, list):   # 部分 API 返回分段数组
+            text = "".join(str(x.get("text") or "") for x in c if isinstance(x, dict))
+        else:
+            text = str(c or "")
+        return {"text": text, "usage": data.get("usage")}
+
     def _responses_stream(self, messages: list, tools=None,
                           on_delta=None, on_reasoning=None, stop=None) -> dict:
         """Responses API（/v1/responses）流式对话。返回结构与 chat_stream 一致。

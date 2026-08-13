@@ -2666,6 +2666,11 @@ class AgentPanel(QDialog):
         self._settings.setValue("agent_last_model", self._model_override or "")   # 记住选择，重启恢复
         self._refresh_text_only()   # 切换模型立即更新纯文本判断（粘贴图片/附件过滤实时生效）
         self._refresh_route_label()
+        # 切换模型不清空上下文：当前对话历史继续沿用，仅后续轮次使用新模型
+        if self._model_override:
+            self._add_status(f"已切换到模型 {self._model_override}，对话上下文已保留", OK)
+        else:
+            self._add_status("已切换为自动选择模型，对话上下文已保留", OK)
 
     def _reconnect_mcp(self):
         threading.Thread(target=self._init_mcp, daemon=True).start()

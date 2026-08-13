@@ -429,8 +429,6 @@ def virtual_desktop(action: str = "new"):
 
 # ---- 鼠标 ----
 # SendInput 鼠标事件标志（MOUSEEVENTF_*）
-_F_ABSOLUTE = 0x8000
-_F_MOVE = 0x0001
 _F_LEFTDOWN, _F_LEFTUP = 0x0002, 0x0004
 _F_RIGHTDOWN, _F_RIGHTUP = 0x0008, 0x0010
 _F_MIDDLEDOWN, _F_MIDDLEUP = 0x0020, 0x0040
@@ -458,28 +456,23 @@ def _send_input_mouse(flags: int, dx: int, dy: int, mouse_data: int = 0, t: int 
     user32.SendInput(1, ctypes.byref(inp), ctypes.sizeof(INPUT))
 
 
-def _normalize_abs(x: int, y: int) -> tuple:
-    """屏幕物理像素 → SendInput 绝对坐标（0..65535 归一化）"""
-    w, h = screen_size()
-    return int(x * 65535 // max(w - 1, 1)), int(y * 65535 // max(h - 1, 1))
-
-
 def click_at_physical(x: int, y: int, button: str = "left", clicks: int = 1,
-                      interval: float = 0.08):
-    """SendInput 绝对坐标高精度点击（不经过模型坐标换算）。
+                      interval: float = 0.04):
+    """高精度点击（不经过模型坐标换算）。
 
-    先以绝对坐标移动光标到 (x,y) 再按下/抬起，确保位置精确；供 UIA/OCR 定位
-    结果与模型读数换算后的物理坐标使用。
+    先用 SetCursorPos 把光标精确移动到物理坐标 (x,y)，再 SendInput 相对按下/抬起（点在光标处）。
+    相比绝对坐标归一化，SetCursorPos 在多显示器/虚拟屏下更精确，且省去每次移动；SendInput
+    比 mouse_event 更可靠，多数应用都能正确响应。
     """
-    nx, ny = _normalize_abs(int(x), int(y))
+    with ai_suppress():
+        user32.SetCursorPos(int(x), int(y))
     down = {"left": _F_LEFTDOWN, "right": _F_RIGHTDOWN, "middle": _F_MIDDLEDOWN}[button]
     up = {"left": _F_LEFTUP, "right": _F_RIGHTUP, "middle": _F_MIDDLEUP}[button]
     with ai_suppress():
         for _ in range(clicks):
-            _send_input_mouse(_F_ABSOLUTE | _F_MOVE, nx, ny)   # 精确定位
-            _send_input_mouse(_F_ABSOLUTE | down, nx, ny)      # 按下
+            _send_input_mouse(down, 0, 0)   # 相对事件：点在当前光标位置
             time.sleep(interval)
-            _send_input_mouse(_F_ABSOLUTE | up, nx, ny)        # 抬起
+            _send_input_mouse(up, 0, 0)
             time.sleep(interval)
 
 
@@ -495,7 +488,7 @@ def move_mouse_physical(x: int, y: int):
         user32.SetCursorPos(int(x), int(y))
 
 
-def click(x=None, y=None, button: str = "left", clicks: int = 1, interval: float = 0.1):
+def click(x=None, y=None, button: str = "left", clicks: int = 1, interval: float = 0.05):
     """点击。x/y 提供时换算并移动过去再点击；x/y 为空时点击当前鼠标位置（不移动）。
     后者供 AI 分步操控：先用 move_mouse 移动指针对准（截图看准星），纠正后再点当前指针。"""
     if x is None or y is None:

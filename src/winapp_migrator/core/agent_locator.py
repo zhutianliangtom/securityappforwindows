@@ -10,9 +10,32 @@ AI 定位目标时按此优先级取坐标，彻底绕开视觉模型"读刻度"
 
 import asyncio
 import re
+import time
 
 # 无意义词（OCR/UIA 噪声，过滤掉避免干扰匹配）
 _NOISE = {"|", "-", "_", ".", "·", "…", "→", "√", "×", "✓", "✕"}
+
+# 屏幕元素扫描缓存：连续点击时复用同一份 UIA+OCR 结果，避免每次都全屏 OCR（大提速）
+_LOC_CACHE = {"elems": None, "t": 0.0}
+_LOC_TTL = 1.5   # 秒：1.5s 内复用缓存，超过或强制刷新则重扫
+
+
+def get_screen_elements(force: bool = False) -> list:
+    """合并 UIA+OCR 的屏幕元素定位，带 TTL 缓存。
+
+    连续点击/多步操作时，1.5s 内复用上次扫描结果，避免重复全屏 OCR（最耗时的环节）。
+    force=True 时强制重扫（如点击后界面变化需要重新定位）。
+    """
+    now = time.time()
+    if not force and _LOC_CACHE["elems"] is not None and now - _LOC_CACHE["t"] < _LOC_TTL:
+        return _LOC_CACHE["elems"]
+    from winapp_migrator.core import agent_screen
+    png = agent_screen.capture_screen_png()
+    w, h = agent_screen.screen_size()
+    elems = locate_elements(png, w, h)
+    _LOC_CACHE["elems"] = elems
+    _LOC_CACHE["t"] = now
+    return elems
 
 
 def _meaningful(text: str) -> bool:

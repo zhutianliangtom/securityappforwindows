@@ -870,14 +870,11 @@ def execute_tool(name: str, args: dict, allow_dangerous: bool = False,
             button = str(args.get("button", "left"))
             if not target:
                 return {"text": "[click_text] 缺少要点击的文字参数 text", "images": []}
-            w, h = agent_screen.screen_size()
-            png = agent_screen.capture_screen_png()
-            elems = agent_locator.locate_elements(png, w, h)
+            elems = agent_locator.get_screen_elements()
             hit = agent_locator.find_element(target, elems)
             if hit is None:
-                # 兜底：重新截图 OCR 一次（UIA 有时缓存延迟），仍未命中则报错让模型换方案
-                elems = agent_locator.locate_elements(
-                    agent_screen.capture_screen_png(), w, h)
+                # 兜底：强制重扫一次（界面可能刚变化），仍未命中则报错让模型换方案
+                elems = agent_locator.get_screen_elements(force=True)
                 hit = agent_locator.find_element(target, elems)
             if hit is None:
                 return {"text": f"[click_text] 未找到文字「{target}」。屏幕上的文字元素："
@@ -909,13 +906,10 @@ def execute_tool(name: str, args: dict, allow_dangerous: bool = False,
             # 文本目标：走 UIA+OCR 精确定位（100% 精准点击按钮），无需模型估算坐标
             _ctext = str(args.get("text", "")).strip()
             if _ctext:
-                w, h = agent_screen.screen_size()
-                png = agent_screen.capture_screen_png()
-                elems = agent_locator.locate_elements(png, w, h)
+                elems = agent_locator.get_screen_elements()
                 hit = agent_locator.find_element(_ctext, elems)
                 if hit is None:
-                    elems = agent_locator.locate_elements(
-                        agent_screen.capture_screen_png(), w, h)
+                    elems = agent_locator.get_screen_elements(force=True)
                     hit = agent_locator.find_element(_ctext, elems)
                 if hit is None:
                     return {"text": f"[click] 未找到文字「{_ctext}」。可用元素："

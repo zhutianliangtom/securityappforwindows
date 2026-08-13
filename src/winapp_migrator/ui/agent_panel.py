@@ -2204,6 +2204,7 @@ class AgentPanel(QDialog):
 
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._refresh_meta)
+        self._timer.timeout.connect(self._track_target_window)
         self._timer.start(400)
 
         self._action_anim = QTimer(self)
@@ -4238,6 +4239,17 @@ class AgentPanel(QDialog):
             while item.layout().count():
                 self._free_layout_item(item.layout().takeAt(0))
             item.layout().deleteLater()
+
+    def _track_target_window(self):
+        """轮询观测前台应用窗口，保持 agent_screen 的粘性目标新鲜。
+
+        用户在面板输入时面板占前台，第一张截图会因拿不到目标窗口而丢失语义树；
+        这里持续把用户正在使用的应用窗口记录下来，面板前台时也能回退到它。
+        """
+        try:
+            agent_screen.peek_foreground_app()
+        except Exception:
+            pass
 
     def _refresh_meta(self):
         """轮询刷新 tokens / 按钮反馈状态 / 卡死兜底"""

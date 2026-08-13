@@ -40,6 +40,7 @@ _shot_size = None    # 原始截图尺寸 (w, h)，物理屏幕采样基准
 _model_size = None   # 发给视觉模型的截图尺寸（统一缩放到 _MODEL_W 宽），模型刻度读数基准
 _MODEL_W = 1280      # 视觉模型统一输入宽度：截图先缩放再叠刻度，刻度与所见图像同基准，杜绝 API 二次缩放导致的读数偏差
 _view = None         # 当前视觉基准：None=全屏；否则 {"cx","cy","region","img_w","img_h","x0","y0"}（zoom 放大态）
+_last_app_hwnd = 0   # 最近观测到的非本程序前台应用窗口（粘性目标，面板前台时回退用它）
 
 
 def capture_screen_png() -> bytes:
@@ -122,7 +123,7 @@ def capture_screen_data_url(grid: bool = True, mark_cursor: bool = True) -> str:
     """
     import base64
     global _model_size, _view
-    hwnd = _foreground_window_hwnd()
+    hwnd = foreground_window_hwnd()
     if hwnd:
         try:
             return capture_window_data_url(hwnd, grid=grid, mark_cursor=mark_cursor)
@@ -156,6 +157,10 @@ def _foreground_window_hwnd() -> int:
 
 
 def _fg_hwnd_impl() -> int:
+    """返回当前**真实**前台的非本程序应用窗口句柄；本程序/桌面前台或不可用时返回 0。
+
+    同时把观测到的应用窗口更新为粘性目标 _last_app_hwnd（供前台为本程序时回退）。
+    """
     hwnd = user32.GetForegroundWindow()
     if not hwnd:
         return 0
@@ -173,12 +178,38 @@ def _fg_hwnd_impl() -> int:
     w, h = rect.right - rect.left, rect.bottom - rect.top
     if w < 100 or h < 60:          # 过小窗口（如某些托盘气泡）无截取价值
         return 0
+    global _last_app_hwnd
+    _last_app_hwnd = int(hwnd)
     return int(hwnd)
 
 
+def _is_alive_window(hwnd: int) -> bool:
+    """窗口句柄是否仍为有效的可见窗口（防止粘性目标指向已关闭窗口）"""
+    return bool(hwnd) and bool(user32.IsWindow(int(hwnd))) \
+        and bool(user32.IsWindowVisible(int(hwnd)))
+
+
 def foreground_window_hwnd() -> int:
-    """当前前台应用窗口句柄（公开接口）；0=桌面/本程序前台/不可用。"""
-    return _foreground_window_hwnd()
+    """当前目标应用窗口句柄（公开接口，粘性）。
+
+    真实前台应用窗口优先；当前台为本程序面板（用户正在输入）时，回退到最近
+    观测到的应用窗口（_last_app_hwnd），避免第一张截图丢失目标窗口导致模型
+    拿不到语义树而盲猜坐标乱移。已关闭/不可见则回退 0（走全屏兜底）。
+    """
+    real = _fg_hwnd_impl()
+    if real:
+        return real
+    if _is_alive_window(_last_app_hwnd):
+        return _last_app_hwnd
+    return 0
+
+
+def peek_foreground_app() -> int:
+    """观测并记录当前真实前台应用窗口（供面板轮询保持粘性目标新鲜）；返回句柄或 0。
+
+    面板前台时 _fg_hwnd_impl 返回 0 且不动 _last_app_hwnd，粘性目标得以保留。
+    """
+    return _fg_hwnd_impl()
 
 
 def window_title(hwnd: int) -> str:

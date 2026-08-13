@@ -2658,6 +2658,7 @@ class AgentPanel(QDialog):
             return
         val = self.model_combo.itemData(idx)
         self._model_override = val if val else None
+        self._settings.setValue("agent_last_model", self._model_override or "")   # 记住选择，重启恢复
         self._refresh_text_only()   # 切换模型立即更新纯文本判断（粘贴图片/附件过滤实时生效）
         self._refresh_route_label()
 

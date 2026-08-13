@@ -45,46 +45,45 @@ from winapp_migrator.core.agent_screen import capture_screen_data_url
 from winapp_migrator.ui.widgets import add_brand_footer
 from winapp_migrator.utils.helpers import is_admin
 
-# ---------- 深色"星际控制台"主题（极简精修） ----------
-BG = "#0B1220"            # 窗口底色（深蓝黑）
-BG_BOTTOM = "#0E1A2E"     # 窗口底色渐变收尾
-PANEL = "#111A2E"         # 面板底色
-CARD = "#141F36"          # 卡片/气泡底色（比 PANEL 略亮）
-BORDER = "#1E2A44"        # 边框
-BORDER_SOFT = "#19263F"   # 更柔和的边框
-TEXT = "#E6EDF7"          # 主文本
-TEXT_DIM = "#8A9BB8"      # 次要文本
-ACCENT = "#22D3EE"        # 强调（青）
-ACCENT_HOVER = "#67E8F9"  # 强调悬停
-LINK_COLOR = "#4B89FF"    # 可点击链接（蓝）
-USER_BG = "#0EA5E9"       # 用户气泡/发送按钮底色
-AI_BG = "#141F36"         # AI 气泡底色
+# ---------- 深色极简主题（纯黑 / 淡黑 / 白 / 深蓝） ----------
+BG = "#000000"            # 纯黑（窗口底色）
+BG_BOTTOM = "#0A0A0A"     # 窗口底色渐变收尾（淡黑）
+PANEL = "#141414"         # 淡黑（面板/输入框底色）
+CARD = "#1E1E1E"          # 淡黑亮一档（卡片/气泡底色）
+BORDER = "#2A2A2A"        # 边框（深灰）
+BORDER_SOFT = "#242424"   # 更柔和的边框
+TEXT = "#F5F5F5"          # 白（主文本）
+TEXT_DIM = "#8A8A8A"      # 灰（次要文本）
+ACCENT = "#1E40AF"        # 深蓝（强调）
+ACCENT_HOVER = "#2563EB"  # 深蓝悬停
+LINK_COLOR = "#3B82F6"    # 可点击链接（蓝）
+USER_BG = "#1E40AF"       # 用户气泡/发送按钮底色（深蓝）
+AI_BG = "#1E1E1E"         # AI 气泡底色（淡黑）
 OK = "#34D399"
 WARN = "#FBBF24"
 ERR = "#F87171"
-HOVER = "#16233C"         # 幽灵按钮 hover 背景
+HOVER = "#262626"         # 幽灵按钮 hover 背景（淡黑亮）
 
 # 面板级控件样式（统一控件语言，避免各处内联重复）
 _BTN_GHOST = (f"QPushButton {{ background: transparent; color: {TEXT_DIM};"
               f"border: 1px solid {BORDER}; border-radius: 8px; padding: 6px 12px;"
               f"font-size: 12px; font-weight: 600; }}"
-              f"QPushButton:hover {{ border-color: {ACCENT}; color: {ACCENT};"
+              f"QPushButton:hover {{ border-color: {ACCENT_HOVER}; color: {TEXT};"
               f"background: {HOVER}; }}")
-_BTN_GHOST_ACCENT = (f"QPushButton {{ background: transparent; color: {ACCENT};"
+_BTN_GHOST_ACCENT = (f"QPushButton {{ background: transparent; color: {ACCENT_HOVER};"
                      f"border: 1px solid {BORDER_SOFT}; border-radius: 8px;"
                      f"padding: 6px 12px; font-size: 12px; font-weight: 600; }}"
-                     f"QPushButton:hover {{ border-color: {ACCENT}; background: {HOVER}; }}")
-_BTN_PRIMARY = (f"QPushButton {{ background: qlineargradient(x1:0, y1:0, x2:1, y2:1,"
-                f"stop:0 {ACCENT}, stop:1 {USER_BG}); color: #06281B; border: none;"
+                     f"QPushButton:hover {{ border-color: {ACCENT_HOVER}; background: {HOVER}; }}")
+_BTN_PRIMARY = (f"QPushButton {{ background: {ACCENT}; color: #FFFFFF; border: none;"
                 f"border-radius: 10px; padding: 0 16px; font-size: 13px; font-weight: 700; }}"
-                f"QPushButton:hover {{ background: {ACCENT}; }}"
+                f"QPushButton:hover {{ background: {ACCENT_HOVER}; }}"
                 f"QPushButton:disabled {{ background: {CARD}; color: {TEXT_DIM}; }}")
 _QCOMBO = (f"QComboBox {{ background: {PANEL}; color: {TEXT}; border: 1px solid {BORDER};"
            f"border-radius: 8px; padding: 5px 10px; font-size: 12px; }}"
            f"QComboBox::drop-down {{ border: none; width: 22px; }}"
            f"QComboBox QAbstractItemView {{ background: {PANEL}; color: {TEXT};"
            f"border: 1px solid {BORDER}; selection-background-color: {HOVER};"
-           f"selection-color: {ACCENT}; }}")
+           f"selection-color: {TEXT}; }}")
 
 
 def _app_icon_path() -> str:
@@ -198,7 +197,7 @@ def _inline_md(s: str) -> str:
     for idx, html in formulas.items():
         s = s.replace(idx, html)
     s = re.sub(r"`([^`]+)`",
-               r"<code style='background:#0B1220;color:#22D3EE;padding:1px 5px;"
+               r"<code style='background:#141414;color:#60A5FA;padding:1px 5px;"
                r"border-radius:4px;font-family:Consolas;'>\1</code>", s)
     s = re.sub(r"\*\*([^*]+)\*\*", r"<b>\1</b>", s)
     # [text](url) 先占位，避免其 href/文字被 _linkify 二次加工
@@ -233,9 +232,9 @@ def _md_table_to_html(lines: list) -> str:
         return ""
     ncol = max(len(rows[0]), len(sep), max(len(r) for r in rows[2:])) if rows[2:] else \
         max(len(rows[0]), len(sep))
-    th = ("border:1px solid #1E2A44;padding:4px 8px;background:#0B1220;"
-          "color:#E6EDF7;font-weight:600;")
-    td = "border:1px solid #1E2A44;padding:4px 8px;color:#C9D6EA;"
+    th = ("border:1px solid #2A2A2A;padding:4px 8px;background:#1E1E1E;"
+          "color:#F5F5F5;font-weight:600;")
+    td = "border:1px solid #2A2A2A;padding:4px 8px;color:#B8B8B8;"
     out = ["<table style='border-collapse:collapse;margin:6px 0;font-size:13px;'>"]
     out.append("<tr>")
     for c in range(ncol):
@@ -262,9 +261,9 @@ def _md_to_html(raw: str) -> str:
         s = lines[i].strip()
         if s.startswith("```"):
             if in_code:
-                out.append("<pre style='background:#0B1220;color:#E6EDF7;padding:8px;"
+                out.append("<pre style='background:#141414;color:#F5F5F5;padding:8px;"
                            "border-radius:6px;font-family:Consolas;font-size:12px;"
-                           f"border:1px solid #1E2A44;'>" + _esc("\n".join(code_buf)) + "</pre>")
+                           f"border:1px solid #2A2A2A;'>" + _esc("\n".join(code_buf)) + "</pre>")
                 code_buf = []
                 in_code = False
             else:
@@ -318,7 +317,7 @@ def _md_to_html(raw: str) -> str:
                 out.append("</ul>")
                 in_list = False
             lvl = len(m.group(1))
-            out.append(f"<h{lvl} style='margin:8px 0 4px;color:#E6EDF7;"
+            out.append(f"<h{lvl} style='margin:8px 0 4px;color:#F5F5F5;"
                        f"font-size:{max(13, 20 - lvl)}px;'>{_inline_md(m.group(2))}</h{lvl}>")
             i += 1
             continue
@@ -336,9 +335,9 @@ def _md_to_html(raw: str) -> str:
         out.append("<p style='margin:4px 0;'>" + _inline_md(s) + "</p>")
         i += 1
     if in_code:
-        out.append("<pre style='background:#0B1220;color:#E6EDF7;padding:8px;"
+        out.append("<pre style='background:#141414;color:#F5F5F5;padding:8px;"
                    "border-radius:6px;font-family:Consolas;font-size:12px;"
-                   f"border:1px solid #1E2A44;'>" + _esc("\n".join(code_buf)) + "</pre>")
+                   f"border:1px solid #2A2A2A;'>" + _esc("\n".join(code_buf)) + "</pre>")
     if in_list:
         out.append("</ul>")
     return "".join(out)
@@ -1049,122 +1048,6 @@ class _McpServerDialog(QDialog):
         return d
 
 
-class _McpManagerDialog(QDialog):
-    """MCP 服务器管理：列表 + 添加/编辑/删除 + 保存并重连"""
-
-    def __init__(self, on_saved, parent=None):
-        super().__init__(parent)
-        self.setWindowTitle("MCP 服务器配置")
-        self.setMinimumSize(520, 420)
-        self.on_saved = on_saved
-        self.servers = agent_skills.load_mcp_servers()
-        A = _AgentSettingsDialog
-        self.setStyleSheet(
-            f"QDialog {{ background: {A._BG}; }}"
-            f"QLabel {{ color: {A._TEXT}; font-size: 13px; }}"
-            f"QListWidget {{ background: {A._PANEL}; color: {A._TEXT};"
-            f"border: 1px solid {A._BORDER}; border-radius: 8px; padding: 6px; }}"
-            f"QListWidget::item {{ padding: 8px 10px; border-radius: 6px; }}"
-            f"QListWidget::item:selected {{ background: {A._PANEL2};"
-            f"color: {A._ACCENT_HOVER}; }}"
-            f"QPushButton {{ border: none; border-radius: 8px; padding: 7px 16px;"
-            "font-weight: 700; }}")
-
-        lay = QVBoxLayout(self)
-        lay.setContentsMargins(16, 14, 16, 14)
-        lay.setSpacing(10)
-
-        head = QLabel("已配置的 MCP 服务器（保存后自动重连，AI 即可调用其工具）")
-        head.setStyleSheet(f"color: {TEXT_DIM}; font-size: 12px;")
-        lay.addWidget(head)
-
-        self.list_w = QListWidget()
-        self.list_w.setMinimumHeight(220)
-        lay.addWidget(self.list_w, 1)
-
-        btns = QHBoxLayout()
-        add_b = QPushButton(_std_icon(QStyle.StandardPixmap.SP_FileDialogNewFolder), "添加")
-        add_b.setStyleSheet(f"background: {A._ACCENT}; color: #FFFFFF;"
-                            "border: none;")
-        add_b.clicked.connect(self._on_add)
-        edit_b = QPushButton("编辑")
-        edit_b.setStyleSheet(f"background: {A._PANEL}; color: {A._TEXT};"
-                             f"border: 1px solid {A._BORDER};")
-        edit_b.clicked.connect(self._on_edit)
-        del_b = QPushButton("删除")
-        del_b.setStyleSheet(f"background: {A._PANEL}; color: {A._DIM};"
-                            f"border: 1px solid {A._BORDER};")
-        del_b.clicked.connect(self._on_delete)
-        for b in (add_b, edit_b, del_b):
-            b.setAutoDefault(False)
-        btns.addWidget(add_b)
-        btns.addWidget(edit_b)
-        btns.addWidget(del_b)
-        btns.addStretch(1)
-        lay.addLayout(btns)
-
-        save_b = QPushButton(_std_icon(QStyle.StandardPixmap.SP_DialogYesButton), "保存并重连")
-        save_b.setStyleSheet(f"background: {A._ACCENT}; color: #FFFFFF; border: none;")
-        save_b.setAutoDefault(False)
-        save_b.clicked.connect(self._on_save)
-        cancel_b = QPushButton("取消")
-        cancel_b.setStyleSheet(f"background: {A._PANEL}; color: {A._TEXT};"
-                               f"border: 1px solid {A._BORDER};")
-        cancel_b.setAutoDefault(False)
-        cancel_b.clicked.connect(self.reject)
-        foot = QHBoxLayout()
-        foot.addWidget(save_b)
-        foot.addWidget(cancel_b)
-        lay.addLayout(foot)
-        add_brand_footer(self)
-
-        self._reload_list()
-
-    def _reload_list(self):
-        self.list_w.clear()
-        for s in self.servers:
-            typ = "stdio" if s.get("type", "stdio") == "stdio" else "sse"
-            detail = s.get("command", "") or s.get("url", "")
-            self.list_w.addItem(f"{s.get('name', '?')}  [{typ}]  {detail}")
-
-    def _current_server(self) -> dict:
-        row = self.list_w.currentRow()
-        if 0 <= row < len(self.servers):
-            return self.servers[row]
-        return None
-
-    def _on_add(self):
-        dlg = _McpServerDialog(parent=self)
-        if dlg.exec() == QDialog.DialogCode.Accepted:
-            self.servers.append(dlg.server_data())
-            self._reload_list()
-
-    def _on_edit(self):
-        s = self._current_server()
-        if s is None:
-            QMessageBox.information(self, "提示", "请先选择一个服务器")
-            return
-        dlg = _McpServerDialog(server=s, parent=self)
-        if dlg.exec() == QDialog.DialogCode.Accepted:
-            self.servers[self.list_w.currentRow()] = dlg.server_data()
-            self._reload_list()
-
-    def _on_delete(self):
-        row = self.list_w.currentRow()
-        if 0 <= row < len(self.servers):
-            self.servers.pop(row)
-            self._reload_list()
-
-    def _on_save(self):
-        if agent_skills.save_mcp_servers(self.servers):
-            if self.on_saved:
-                self.on_saved()   # 触发后台重连
-            QMessageBox.information(self, "已保存", "MCP 配置已保存，正在重新连接…")
-            self.accept()
-        else:
-            QMessageBox.warning(self, "错误", "保存 MCP 配置失败（无写入权限）")
-
-
 class _AskUserDialog(QDialog):
     """AI 提问弹窗（TRAE 风格）：单选/多选选项或自由回答"""
 
@@ -1774,13 +1657,6 @@ class AgentPanel(QDialog):
         self.mcp_label.setMaximumWidth(120)
         top.addWidget(self.mcp_label)
 
-        self.mcp_btn = QPushButton(_std_icon(QStyle.StandardPixmap.SP_ComputerIcon), "MCP")
-        self.mcp_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.mcp_btn.setAutoDefault(False)
-        self.mcp_btn.setStyleSheet(_BTN_GHOST_ACCENT)
-        self.mcp_btn.clicked.connect(self._open_mcp_manager)
-        top.addWidget(self.mcp_btn)
-
         self.settings_btn = QPushButton(_std_icon(QStyle.StandardPixmap.SP_FileDialogDetailedView), "设置")
         self.settings_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.settings_btn.setAutoDefault(False)
@@ -1869,7 +1745,7 @@ class AgentPanel(QDialog):
             "font-size: 13px; padding: 4px; }}"
             f"QListWidget::item {{ padding: 2px 12px 4px 12px; border-radius: 6px; }}"
             f"QListWidget::item:hover {{ background: {HOVER}; }}"
-            f"QListWidget::item:selected {{ background: {ACCENT}; color: #06281B; }}")
+            f"QListWidget::item:selected {{ background: {ACCENT}; color: #FFFFFF; }}")
         self.cmd_list.hide()
         self.cmd_list.itemClicked.connect(self._on_cmd_selected)
         root.addWidget(self.cmd_list)
@@ -2270,7 +2146,6 @@ class AgentPanel(QDialog):
         """顶部工具栏随窗口宽度自适应：宽窗口显示完整文字，窄窗口紧凑"""
         wide = self._topbar_wide()
         self.new_btn.setText("新对话" if wide else "新")
-        self.mcp_btn.setText("MCP 管理" if wide else "MCP")
         self.mcp_label.setMaximumWidth(1200 if wide else 120)
         # MCP 状态：完整或截断（截断逻辑与 _on_mcp_status 保持一致）
         full = getattr(self, "_mcp_full", "MCP: 连接中…")
@@ -2358,7 +2233,7 @@ class AgentPanel(QDialog):
                                  "padding: 10px 14px; font-size: 14px;")
         else:
             bubble.setTextFormat(Qt.TextFormat.RichText)    # AI 消息富文本（思考/操作/正文）
-            bubble.setStyleSheet(f"background: rgba(20, 31, 54, 0.75); color: {TEXT};"
+            bubble.setStyleSheet(f"background: rgba(30, 30, 30, 0.78); color: {TEXT};"
                                  f"border: 1px solid {BORDER_SOFT}; border-radius: 16px;"
                                  "padding: 10px 14px; font-size: 14px;")
         row = QHBoxLayout()
@@ -2769,11 +2644,6 @@ class AgentPanel(QDialog):
         self._mcp_full = text   # 保存完整文本，由 _apply_topbar_layout 按窗口宽度决定完整/截断
         self.mcp_label.setStyleSheet(f"color: {color}; font-size: 12px;")
         self._apply_topbar_layout()
-
-    def _open_mcp_manager(self):
-        """打开 MCP 服务器配置面板；保存后后台重连"""
-        dlg = _McpManagerDialog(on_saved=self._reconnect_mcp, parent=self)
-        dlg.exec()
 
     def _open_settings(self):
         """打开 AI 设置；保存后应用（刷新纯文本/记忆状态，空闲时重建引擎）"""

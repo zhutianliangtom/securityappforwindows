@@ -62,7 +62,12 @@ class UpdateChecker(QObject):
         try:
             url = (f"{self.server}/api/update/check?"
                    f"version={APP_VERSION}&platform=windows")
-            with urllib.request.urlopen(url, timeout=10) as resp:
+            # 服务器/Cloudflare 会拦截 Python-urllib 默认 UA（403），伪装桌面浏览器 UA
+            req = urllib.request.Request(url, headers={
+                "User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                               "AppleWebKit/537.36 (KHTML, like Gecko) "
+                               "Chrome/126.0 Safari/537.36 zhuzhuCopilot")})
+            with urllib.request.urlopen(req, timeout=10) as resp:
                 data = json.loads(resp.read().decode("utf-8"))
             if not data.get("hasUpdate"):
                 if manual:

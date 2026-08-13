@@ -1012,8 +1012,8 @@ def build_system_prompt(agent_name: str = "", extra_skills: list = None,
         prompt += "\n\n当前未开启记忆功能：不要调用 save_memory / load_memory。"
     if direct:
         prompt += ("\n\n当前为「直接工作模式」（用户已开启无确认直行）：直接调用完成任务所需的"
-                   "必要技能与命令，无需逐步询问或请求确认；仅当信息确实缺失且会做错方向、"
-                   "或涉及不可逆/危险操作时，才调用 ask_user 提问；不要做多余的确认、验证或演示步骤。")
+                   "必要技能与命令，无需逐步询问或请求确认；禁止调用 ask_user 向用户提问，"
+                   "信息不足时基于现有上下文自主合理决策；不要做多余的确认、验证或演示步骤。")
     settings = load_settings()
     rules = settings.get("custom_rules") or []
     valid = [str(r).strip() for r in rules if str(r).strip()]

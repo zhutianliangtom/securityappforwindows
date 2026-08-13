@@ -322,6 +322,9 @@ class AgentEngine:
             # 记忆关闭：不暴露 save_memory/load_memory
             tools = [t for t in tools
                      if t["function"]["name"] not in ("save_memory", "load_memory")]
+        if self.direct:
+            # 直接工作模式：不暴露提问工具，AI 完全自主执行（即使调用也被 _execute 拦截）
+            tools = [t for t in tools if t["function"]["name"] != "ask_user"]
         if self.mcp:
             # MCP 工具并入：与内置工具/其他服务器同名时跳过（内置优先），
             # 否则同名工具会让上游报 "Tool names must be unique"
@@ -359,6 +362,10 @@ class AgentEngine:
             return {"text": "[自动模式] 系统已在独立虚拟桌面执行本任务，结束后自动返回主桌面，无需手动切换", "images": []}
         if name == "ask_user":
             # 提问工具：不经沙盒/确认，直接向用户提问
+            if self.direct:
+                # 直接工作模式禁止提问：返回引导，让 AI 基于现有信息自主决策并继续
+                return {"text": "[直接工作模式] 已禁止向用户提问，"
+                                "请基于现有上下文自主判断并直接执行下一步。", "images": []}
             if self.ask_user:
                 return {"text": self.ask_user(args), "images": []}
             return {"text": "[ask_user] 未接入提问面板", "images": []}

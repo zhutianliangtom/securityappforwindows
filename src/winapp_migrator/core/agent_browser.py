@@ -615,12 +615,23 @@ function(){
 
     # 在某 frame 上下文内遍历其可交互元素（含 open shadow DOM），
     # 写入 data-wmb-id 并返回 [{id,text,placeholder,type,label,class}]。
+    # 额外做"结构性关闭按钮"识别：弹窗（position:fixed 大层）右上角的纯图标元素
+    # 往往就是关闭按钮，但无 aria-label/title/文字/close class（如抖音登录弹窗），
+    # 靠位置启发式把它标记为「关闭」加入清单，AI 即可按编号点击。
     _FRAME_MARK_JS = r"""
 (function(){
   var sel = __SEL__;
   var out = [];
   var idx = 0;
+  // 清除上一次标记残留的 data-wmb-id / data-wmb-close（属性持久留在 DOM 上，
+  // 不清除会导致第二次标记时旧元素被跳过、编号错位）
+  var olds = document.querySelectorAll('[data-wmb-id],[data-wmb-close]');
+  for (var oi=0;oi<olds.length;oi++){
+    olds[oi].removeAttribute('data-wmb-id');
+    olds[oi].removeAttribute('data-wmb-close');
+  }
   function txt(el){
+    if (el.getAttribute && el.getAttribute('data-wmb-close')) return '关闭';
     var t = (el.innerText||el.value||'').trim();
     if (!t) t = (el.getAttribute('aria-label')||'').trim();
     if (!t) t = (el.title||'').trim();
@@ -642,6 +653,71 @@ function(){
     out.push({id: idx, tag: tag, text: text, placeholder: placed,
               type: el.type||'', label: label, class: cls});
   }
+  // 结构性关闭按钮：弹窗（fixed 遮罩/层）内部的最大面板，取其右上角纯图标元素
+  function scanPopupClose(){
+    var all = document.querySelectorAll('*');
+    var vw = window.innerWidth, vh = window.innerHeight;
+    var panels = [];
+    var i, j;
+    // 1) 收集候选弹窗面板：fixed 层（z>=100 或带弹窗关键词）内部的最大适中子容器；
+    //    若 fixed 层自身非全屏（即弹窗本体），直接用它。
+    for (i=0;i<all.length;i++){
+      var el = all[i];
+      var cs;
+      try { cs = getComputedStyle(el); } catch(e){ continue; }
+      if (cs.position !== 'fixed') continue;
+      var r = el.getBoundingClientRect();
+      if (r.width < 200 || r.height < 200) continue;
+      var z = parseInt(cs.zIndex, 10) || 0;
+      var s = ((typeof el.className === 'string' ? el.className : '') || '') + ' ' + (el.id||'');
+      if (z < 100 && !/login|modal|popup|dialog|mask|qrcode|panel/i.test(s)) continue;
+      var fullscreen = r.width >= vw * 0.9 && r.height >= vh * 0.9;
+      if (fullscreen){
+        // 全屏遮罩：内部最大的"面板"子容器（尺寸适中、位于视口内）
+        var bestChild = null, bestArea = 0;
+        var inner = el.querySelectorAll('*');
+        for (j=0;j<inner.length;j++){
+          var ch = inner[j];
+          var cr = ch.getBoundingClientRect();
+          if (cr.width < 200 || cr.height < 150) continue;
+          if (cr.width > vw * 0.95 || cr.height > vh * 0.95) continue;
+          if (cr.left < -1 || cr.top < -1) continue;
+          var a = cr.width * cr.height;
+          if (a > bestArea){ bestArea = a; bestChild = ch; }
+        }
+        if (bestChild) panels.push(bestChild);
+      } else {
+        panels.push(el);
+      }
+    }
+    if (!panels.length) return null;
+    // 取面积最大的面板
+    var best = null, bestArea = 0;
+    for (i=0;i<panels.length;i++){
+      var pr = panels[i].getBoundingClientRect();
+      var a = pr.width * pr.height;
+      if (a > bestArea){ bestArea = a; best = panels[i]; }
+    }
+    var pr = best.getBoundingClientRect();
+    var x0 = pr.right - 70, x1 = pr.right + 1, y0 = pr.top, y1 = pr.top + 70;
+    var cands = [];
+    var inner = best.querySelectorAll('*');
+    for (var k=0;k<inner.length;k++){
+      var el2 = inner[k];
+      var er = el2.getBoundingClientRect();
+      if (er.width < 16 || er.height < 16 || er.width > 90 || er.height > 90) continue;
+      if (er.right < x0 || er.left > x1 || er.bottom < y0 || er.top > y1) continue;
+      var hasIcon = el2.tagName === 'SVG' || el2.tagName === 'IMG' ||
+                    (el2.querySelector && el2.querySelector('svg,img'));
+      if (!hasIcon) continue;
+      var t2 = (el2.innerText||'').trim();
+      if (t2) continue;
+      cands.push({el: el2, area: er.width * er.height});
+    }
+    if (!cands.length) return null;
+    cands.sort(function(a,b){ return a.area - b.area; });
+    return cands[0].el;
+  }
   function walkDoc(doc){
     var nodes;
     try { nodes = doc.querySelectorAll(sel); } catch(e){ nodes = []; }
@@ -654,6 +730,12 @@ function(){
     }
   }
   walkDoc(document);
+  // 弹窗右上角纯图标关闭按钮（无任何语义属性时兜底识别）
+  var closeEl = scanPopupClose();
+  if (closeEl && !closeEl.getAttribute('data-wmb-id')){
+    closeEl.setAttribute('data-wmb-close','1');
+    handle(closeEl);
+  }
   return JSON.stringify(out);
 })()
 """

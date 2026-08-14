@@ -154,7 +154,7 @@ def _model_tier(model: str) -> str:
 
 
 def requires_vision(text: str, images: list) -> bool:
-    """是否需要视觉模型：本次带图，或为电脑操控/需看屏幕的任务（截图类）"""
+    """是否需要视觉模型：本次带图，或为需看页面截图/浏览器操作的任务"""
     if images:
         return True
     t = (text or "").strip()
@@ -184,7 +184,7 @@ def resolve_model(cfg: dict, effort: str = "medium", vision_needed: bool = False
         return name
     all_models = m.get("models") or []
     # 视觉任务：只在视觉模型内路由；无视觉模型时回退内置 agnes（视为视觉模型），
-    # 否则纯文本模型看不到截图/图片，电脑操控必然乱移鼠标
+    # 否则纯文本模型看不到浏览器页面截图，无法理解网页状态
     if vision_needed:
         pool = [x for x in all_models if is_vision_model(m, x)]
         if not pool:

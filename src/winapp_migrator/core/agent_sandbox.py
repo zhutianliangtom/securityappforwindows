@@ -182,27 +182,9 @@ def assess_path(path: str, operation: str = "write") -> tuple:
 
 
 def assess_tool(name: str, args: dict) -> tuple:
-    """工具级评估：坐标越界、命令/路径分级。返回 (level, reason)"""
+    """工具级评估：命令/路径分级。返回 (level, reason)"""
     if name == "run_command":
         return assess_command(str(args.get("command", "")))
-    if name in ("move_mouse", "click", "drag"):
-        # 语义定位（text/id）无需坐标，不参与坐标校验
-        if name == "click" and (str(args.get("text", "")).strip()
-                                or args.get("id") is not None):
-            return "safe", ""
-        import ctypes
-        w = ctypes.windll.user32.GetSystemMetrics(0)
-        h = ctypes.windll.user32.GetSystemMetrics(1)
-        coords = [(args.get("x"), args.get("y"))]
-        if name == "drag":
-            coords += [(args.get("x2"), args.get("y2"))]
-        for x, y in coords:
-            if x is None or y is None:
-                return "risky", "缺少坐标参数"
-            if not (0 <= to_int(x) < w and 0 <= to_int(y) < h):
-                return "risky", f"坐标越界 ({x},{y})，屏幕 {w}x{h}"
-    if name == "click_text" and not str(args.get("text", "")).strip():
-        return "risky", "缺少要点击的文字参数"
     # 重量级操作：卸载/迁移/内存优化涉及删改系统与应用，需用户确认
     if name in ("uninstall_app", "migrate_app", "optimize_memory"):
         return "risky", f"{name} 为重量级操作，需用户确认"

@@ -17,10 +17,7 @@ from datetime import datetime
 from pathlib import Path
 
 from winapp_migrator.core import agent_sandbox
-from winapp_migrator.core import agent_screen
 from winapp_migrator.core import agent_find
-from winapp_migrator.core import agent_locator
-from winapp_migrator.core import agent_control
 from winapp_migrator.core import agent_browser
 
 # 本地记忆文件（AI 长期记忆，markdown 格式）
@@ -125,76 +122,6 @@ TOOLS = [
     {
         "type": "function",
         "function": {
-            "name": "control_ui",
-            "description": "用鼠标/键盘操控电脑完成一个 GUI 操作目标，交给「电脑操控专用子 Agent」执行。\n"
-                           "**优先用 run_command / 文件操作等 API/脚本方式**，只有目标无法用命令完成"
-                           "（如点击软体内的按钮/菜单、在图形界面里输入、拖拽）时才调用本工具。"
-                           "goal 描述要完成的操作目标（说清点哪个、输什么、期望结果）；"
-                           "target_window 可选，指定要操作的窗口标题（模糊匹配）。"
-                           "子 Agent 会先截图拿到元素清单，按编号/文字精确点击输入，完成后返回结果总结。",
-            "parameters": {"type": "object",
-                           "properties": {
-                               "goal": {"type": "string",
-                                        "description": "要完成的 GUI 操作目标，写清操作对象与期望结果"},
-                               "target_window": {"type": "string",
-                                                 "description": "（可选）目标窗口标题（模糊匹配）；留空操作当前前台应用"}},
-                           "required": ["goal"]},
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "screenshot",
-            "description": "截取当前目标窗口（前台应用窗口）并返回可点击/可输入元素的编号语义清单 "
-                           "[id] (类型) 文字。操作界面时**必须按清单里的 id 或文字引用**（click(id=..) "
-                           "或 click_text(text=..) / type_text target/id），系统精确定位像素，"
-                           "不要自己读坐标/猜位置。",
-            "parameters": {"type": "object", "properties": {}, "required": []},
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "refresh_screen",
-            "description": "界面发生变化后刷新目标窗口的语义元素清单（不需要重新发送截图，更快）。"
-                           "点击/输入会改变界面时，下一步操作前先 refresh_screen 拿到最新 [id] 清单。",
-            "parameters": {"type": "object", "properties": {}, "required": []},
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "get_screen_size",
-            "description": "获取屏幕分辨率（宽、高像素），用于计算点击/移动坐标。",
-            "parameters": {"type": "object", "properties": {}, "required": []},
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "list_windows",
-            "description": "枚举当前可见窗口（标题+编号），供 AI 选择目标窗口聚焦操作，"
-                           "避免全屏截图中其他窗口干扰。",
-            "parameters": {"type": "object", "properties": {}, "required": []},
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "capture_window",
-            "description": "截取指定窗口（只截该窗口，避开其他窗口遮挡/干扰），返回窗口截图与窗口内可点击/可输入"
-                           "元素的编号语义清单 [id]。后续用 click(id=..)/click_text/type_text 操作该窗口。"
-                           "先调用 list_windows 确认目标窗口，window 传标题（模糊）或编号。",
-            "parameters": {"type": "object",
-                           "properties": {
-                               "window": {"type": "string",
-                                          "description": "目标窗口：标题（支持模糊匹配）或 list_windows 返回的编号"}},
-                           "required": ["window"]},
-        },
-    },
-    {
-        "type": "function",
-        "function": {
             "name": "find_app",
             "description": "快速查找已安装应用（扫描开始菜单/桌面快捷方式/注册表，秒查带缓存），"
                            "返回可启动的完整路径候选。当用户要打开某个应用而你不确定其确切名称/"
@@ -234,122 +161,6 @@ TOOLS = [
                                "multi_select": {"type": "boolean",
                                                 "description": "是否允许多选，默认 false"}},
                            "required": ["question"]},
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "click_text",
-            "description": "按文字精确定位点击：输入目标文字（如按钮文字、菜单项、输入框标签），"
-                           "系统通过 Windows 原生控件(UIA)与屏幕OCR找到该文字的确切像素位置并点击，"
-                           "像素级精确，无需自己估算坐标。文字类目标（按钮/菜单/对话框按钮）优先用它，"
-                           "找不到时才用 click 视觉定位。",
-            "parameters": {"type": "object",
-                           "properties": {"text": {"type": "string",
-                                                   "description": "要点击的文字内容，如 确定/取消/开始/新建 等"},
-                                          "button": {"type": "string", "enum": ["left", "right", "middle"],
-                                                     "description": "鼠标键，默认 left"}},
-                           "required": ["text"]},
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "move_mouse",
-            "description": "移动鼠标到指定像素坐标（不点击）。移动后截图会显示红色准星标记鼠标位置，"
-                           "用于图标目标的对齐：看准星是否套住目标，未对准按偏移修正坐标再移动，对准后再 click。",
-            "parameters": {"type": "object",
-                           "properties": {"x": {"type": "integer"}, "y": {"type": "integer"}},
-                           "required": ["x", "y"]},
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "click",
-            "description": "点击目标。三种方式，**优先语义定位**：\n"
-                           "1) 传 text：按文字精确定位点击（系统 UIA+OCR 找到按钮文字确切像素中心再点，"
-                           "100% 精准，按钮/菜单/输入框/链接等文字类目标最佳）。\n"
-                           "2) 传 id：按 screenshot/refresh_screen 返回清单里的编号 [id] 点击（最稳，无需写长文字）。\n"
-                           "3) 传 x/y 坐标：**仅限无文字的纯图标目标**——先 move_mouse 移到目标附近，"
-                           "截图看红色准星是否套住，未对准按偏移修正再 move_mouse 纠正；对准后调用。"
-                           "目标太小可先 zoom_in 放大。",
-            "parameters": {"type": "object",
-                           "properties": {"text": {"type": "string",
-                                                   "description": "（推荐）要点击的文字：如按钮文字/菜单项。提供则按文字精确定位，忽略 x/y"},
-                                          "id": {"type": "integer",
-                                                 "description": "（推荐）screenshot/refresh_screen 清单里的元素编号 [id]。与 text 二选一"},
-                                          "x": {"type": "integer",
-                                                "description": "（仅纯图标）目标坐标：提供则移动鼠标到该坐标再点击"},
-                                          "y": {"type": "integer",
-                                                "description": "（仅纯图标）目标坐标：提供则移动鼠标到该坐标再点击"},
-                                          "button": {"type": "string", "enum": ["left", "right", "middle"]},
-                                          "clicks": {"type": "integer"}},
-                           "required": []},
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "zoom_in",
-            "description": "以指定屏幕坐标为中心放大 400×400 区域（放大 3 倍并叠加细网格刻度），"
-                           "返回放大后的局部截图。用于两步精确定位：先在全屏图上估出目标附近坐标，"
-                           "再 zoom_in 放大后按放大图里的红色准星对齐目标（若鼠标在区域内），"
-                           "或按细刻度读数，随后用该坐标调用 click。"
-                           "注意：放大图内的坐标读数同样可直接作为 click 的 x/y，系统自动换算。",
-            "parameters": {"type": "object",
-                           "properties": {"x": {"type": "integer",
-                                                "description": "目标附近的屏幕坐标 X（全屏刻度读数）"},
-                                          "y": {"type": "integer",
-                                                "description": "目标附近的屏幕坐标 Y（全屏刻度读数）"}},
-                           "required": ["x", "y"]},
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "drag",
-            "description": "从 (x1,y1) 拖动鼠标到 (x2,y2)（按住左键拖拽）。",
-            "parameters": {"type": "object",
-                           "properties": {"x1": {"type": "integer"}, "y1": {"type": "integer"},
-                                          "x2": {"type": "integer"}, "y2": {"type": "integer"}},
-                           "required": ["x1", "y1", "x2", "y2"]},
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "scroll",
-            "description": "滚动鼠标滚轮，正值向上、负值向下（120 为 1 格）。",
-            "parameters": {"type": "object",
-                           "properties": {"delta": {"type": "integer"}},
-                           "required": ["delta"]},
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "press_key",
-            "description": "按键盘虚拟键：enter/tab/escape/backspace/space/delete/home/end/"
-                           "pageup/pagedown/up/down/left/right/f1-f12 等。",
-            "parameters": {"type": "object",
-                           "properties": {"key": {"type": "string"}},
-                           "required": ["key"]},
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "type_text",
-            "description": "输入文本（支持中文），可含特殊键名 enter/tab。"
-                           "target（文字）或 id（清单编号）二选一指定目标输入框/控件，先自动点击定位再输入，最稳。",
-            "parameters": {"type": "object",
-                           "properties": {"text": {"type": "string"},
-                                          "target": {"type": "string",
-                                                     "description": "（推荐）目标输入框/区域文字，如 搜索、文件名、地址栏"},
-                                          "id": {"type": "integer",
-                                                 "description": "（推荐）screenshot/refresh_screen 清单里的输入框编号 [id]"}},
-                           "required": ["text"]},
         },
     },
     {
@@ -1056,55 +867,9 @@ TOOLS = [
 # 子 Agent 工具名（由 agent_engine 拦截调度，携带 LLM 客户端执行；不在此直接实现）
 SUB_AGENT_TOOLS = ("dispatch_sub_agents", "explore_project", "search_large")
 
-# 电脑操控工具集：只归「电脑操控专用子 Agent」所有，主 Agent 不直接调用。
-# 主 Agent 通过 control_ui 派发目标，由子 Agent 用这些工具完成 GUI 操作。
-UI_CONTROL_TOOLS = frozenset({
-    "screenshot", "refresh_screen", "get_screen_size",
-    "list_windows", "capture_window",
-    "click", "click_text", "move_mouse", "zoom_in",
-    "drag", "scroll", "press_key", "type_text",
-})
-
 # 沙盒拒绝返回（无截图）
 def _blocked(text: str) -> dict:
     return {"text": text, "images": []}
-
-
-def _click_feedback(text: str) -> dict:
-    """点击/输入反馈：返回操作结果文本（不强制每步整屏截图）。
-
-    语义树优先模式下，模型凭返回文本 + 自身步骤即可推进；需要看界面时
-    再主动调用 screenshot，避免每步都整屏大写图往返，流畅度大提速。
-    """
-    return {"text": text, "images": []}
-
-
-def _screenshot_snapshot(hwnd: int = 0) -> dict:
-    """截取目标窗口（或前台应用窗口）并返回其语义元素编号清单。
-
-    只截目标窗口（避免其他窗口干扰），返回窗口图 + 紧凑语义清单；
-    坐标由系统解析，模型按 [id]/文字引用即可，无需读像素刻度。
-    """
-    if not hwnd:
-        hwnd = agent_screen.foreground_window_hwnd()
-    if hwnd:
-        agent_locator.set_target_window(hwnd, agent_screen.window_title(hwnd))
-        try:
-            url = agent_screen.capture_window_data_url(hwnd)
-        except Exception:
-            url = agent_screen.capture_screen_data_url()
-        scope = f"「{agent_screen.window_title(hwnd) or hwnd}」窗口"
-    else:
-        agent_locator.set_target_window(0)
-        url = agent_screen.capture_screen_data_url()
-        scope = "全屏"
-    elems = agent_locator.get_elements(force=True)
-    text = (f"已截取{scope}。可点击/输入元素清单（按 [编号] 或文字引用，勿读坐标）：\n"
-            + agent_locator.summarize(elems)
-            + "\n点击用 click_text(text=...) 或 click(id=...)，"
-              "输入用 type_text(text=..., target=...)。"
-              "界面变化后先 refresh_screen 刷新清单。")
-    return {"text": text, "images": [url]}
 
 
 def _image_scale(path: str, max_w: float, max_h: float) -> tuple:
@@ -1157,26 +922,6 @@ def execute_tool(name: str, args: dict, allow_dangerous: bool = False,
         return _blocked(f"[沙盒拒绝] {reason}")
 
     try:
-        if name == "screenshot":
-            return _screenshot_snapshot()
-        if name == "refresh_screen":
-            elems = agent_locator.get_elements(force=True)
-            return {"text": "已刷新目标窗口语义清单：\n" + agent_locator.summarize(elems),
-                    "images": []}
-        if name == "get_screen_size":
-            w, h = agent_screen.screen_size()
-            return {"text": f"屏幕分辨率 {w}x{h}",
-                    "images": [agent_screen.capture_screen_data_url()]}
-        if name == "click_text":
-            # 按文字精确定位（电脑操控 Agent 最优逻辑：语义树多策略 + 精准点击）
-            target = str(args.get("text", "")).strip()
-            button = str(args.get("button", "left"))
-            if not target:
-                return {"text": "[click_text] 缺少要点击的文字参数 text", "images": []}
-            hit, msg = agent_control.controller().click_text(target, button)
-            if hit is None:
-                return {"text": f"[click_text] {msg}", "images": []}
-            return _click_feedback(msg)
         if name == "find_app":
             return {"text": agent_find.find_app(
                 str(args.get("query", "")),
@@ -1188,81 +933,6 @@ def execute_tool(name: str, args: dict, allow_dangerous: bool = False,
             return {"text": agent_find.search_files(
                 str(args.get("query", "")), folder,
                 agent_sandbox.to_int(args.get("limit", 30))), "images": []}
-        if name == "list_windows":
-            return _list_windows()
-        if name == "capture_window":
-            return _capture_window(str(args.get("window", "")))
-        if name == "move_mouse":
-            agent_control.controller().move(agent_sandbox.to_int(args.get("x")),
-                                            agent_sandbox.to_int(args.get("y")))
-            return {"text": f"鼠标已移动到 ({args.get('x')}, {args.get('y')})", "images": []}
-        if name == "click":
-            # 电脑操控 Agent 最优逻辑：优先 text/id 语义定位，坐标仅图标兜底
-            ctl = agent_control.controller()
-            _ctext = str(args.get("text", "")).strip()
-            _uid = args.get("id")
-            if _ctext:
-                hit, msg = ctl.click_text(_ctext, str(args.get("button", "left")))
-                if hit is None:
-                    return {"text": f"[click] {msg}", "images": []}
-                return _click_feedback(msg)
-            if _uid is not None:
-                hit, msg = ctl.click_id(agent_sandbox.to_int(_uid),
-                                        str(args.get("button", "left")))
-                if hit is None:
-                    return {"text": f"[click] {msg}", "images": []}
-                return _click_feedback(msg)
-            x = args.get("x")
-            y = args.get("y")
-            if x is None or y is None:
-                # 不带坐标：点击当前鼠标位置（配合 move_mouse 先移动对准、截图纠正后点准）
-                _, msg = ctl.click(button=str(args.get("button", "left")),
-                                   clicks=agent_sandbox.to_int(args.get("clicks", 1)))
-                return _click_feedback(msg)
-            x, y = agent_sandbox.to_int(x), agent_sandbox.to_int(y)
-            px, py = agent_screen.map_to_screen(x, y)   # 换算后的真实屏幕坐标（供模型核对）
-            _, msg = ctl.click(x, y, button=str(args.get("button", "left")),
-                               clicks=agent_sandbox.to_int(args.get("clicks", 1)))
-            return _click_feedback(msg + f"（换算屏幕坐标 {px},{py}）")
-        if name == "zoom_in":
-            ctl = agent_control.controller()
-            (px, py), url = ctl.zoom(agent_sandbox.to_int(args.get("x")),
-                                     agent_sandbox.to_int(args.get("y")))
-            return {"text": f"已放大屏幕坐标 ({px},{py}) 附近 400×400 区域（3 倍）。"
-                            "请基于放大图内的细网格刻度精确读取目标坐标，再调用 click。",
-                    "images": [url]}
-        if name == "drag":
-            ctl = agent_control.controller()
-            ctl.drag(agent_sandbox.to_int(args.get("x1")),
-                     agent_sandbox.to_int(args.get("y1")),
-                     agent_sandbox.to_int(args.get("x2")),
-                     agent_sandbox.to_int(args.get("y2")))
-            return {"text": f"已从 ({args.get('x1')},{args.get('y1')}) 拖到 ({args.get('x2')},{args.get('y2')})",
-                    "images": []}
-        if name == "scroll":
-            agent_control.controller().scroll(agent_sandbox.to_int(args.get("delta")))
-            return {"text": f"已滚动 {args.get('delta')}", "images": []}
-        if name == "press_key":
-            agent_control.controller().press(str(args["key"]))
-            return {"text": f"已按键 {args['key']}", "images": []}
-        if name == "type_text":
-            text = str(args.get("text", ""))
-            target = str(args.get("target", "")).strip()
-            uid = args.get("id")
-            ctl = agent_control.controller()
-            if target:
-                hit, msg = ctl.click_text(target)
-                if hit is None:
-                    return {"text": f"[type_text] {msg}", "images": []}
-            elif uid is not None:
-                hit, msg = ctl.click_id(agent_sandbox.to_int(uid))
-                if hit is None:
-                    return {"text": f"[type_text] {msg}", "images": []}
-            ctl.type_text(text)
-            return {"text": f"已输入文本（{len(text)} 字符）"
-                            + (f"到「{target}」" if target
-                               else f"到编号 [{uid}]" if uid is not None else ""),
-                    "images": []}
         if name == "run_command":
             return _run_command(str(args.get("command", "")),
                                 agent_sandbox.to_int(args.get("wait", 5)),
@@ -1618,60 +1288,6 @@ def _list_directory(path: str) -> dict:
         return {"text": text, "images": []}
     except Exception as e:
         return _blocked(f"[沙盒] 读取失败: {e}")
-
-
-def _list_windows() -> dict:
-    """枚举可见窗口（标题+编号），供 AI 选择目标窗口"""
-    try:
-        wins = agent_screen.list_windows()
-    except Exception as e:
-        return {"text": f"[list_windows] 枚举失败: {e}", "images": []}
-    if not wins:
-        return {"text": "未发现可见窗口（请先打开目标窗口）", "images": []}
-    lines = [f"{i + 1}. {w['title']}（{w['w']}x{w['h']} @{w['x']},{w['y']}）"
-             for i, w in enumerate(wins[:40])]
-    more = f"\n…共 {len(wins)} 个窗口" if len(wins) > 40 else ""
-    return {"text": "可见窗口：\n" + "\n".join(lines) + more, "images": []}
-
-
-def _capture_window(window: str) -> dict:
-    """截取指定窗口（标题模糊/编号），返回截图与窗口内文字元素清单"""
-    try:
-        wins = agent_screen.list_windows()
-    except Exception as e:
-        return {"text": f"[capture_window] 窗口枚举失败: {e}", "images": []}
-    if not wins:
-        return {"text": "[capture_window] 未发现可见窗口，请先打开目标窗口", "images": []}
-    q = str(window or "").strip().lower()
-    if not q:
-        return {"text": "[capture_window] 缺少 window 参数（窗口标题或 list_windows 编号）", "images": []}
-    target = None
-    try:   # 编号定位
-        idx = int(q) - 1
-        if 0 <= idx < len(wins):
-            target = wins[idx]
-    except ValueError:
-        pass
-    if target is None:   # 标题模糊匹配：全等 → 包含 → 任一分词
-        for w in wins:
-            t = w["title"].lower()
-            if t == q or q in t or any(tok and tok in t for tok in q.split()):
-                target = w
-                break
-    if target is None:
-        cand = "\n".join(f"{i + 1}. {w['title']}" for i, w in enumerate(wins[:30]))
-        return {"text": f"[capture_window] 未找到窗口「{window}」。可见窗口：\n{cand}", "images": []}
-    try:
-        hwnd = target["hwnd"]
-        agent_locator.set_target_window(hwnd, target["title"])
-        url = agent_screen.capture_window_data_url(hwnd)
-        elems = agent_locator.get_elements(force=True)
-        summary = agent_locator.summarize(elems)
-        return {"text": f"已截取窗口「{target['title']}」（{target['w']}x{target['h']}）。"
-                        f"可点击/输入元素清单（按 [编号] 或文字引用，勿读坐标）：\n{summary}",
-                "images": [url]}
-    except Exception as e:
-        return {"text": f"[capture_window] 截取失败: {e}", "images": []}
 
 
 _MEMORY_MAX_TOTAL = 50 * 1024   # 记忆文件总上限 50KB（超出后截断旧部分）

@@ -21,9 +21,10 @@ from pathlib import Path
 CONFIG_DIR = Path.home() / ".winapp_migrator" / "agent"
 
 # 技能体系统一为市场标准 md 格式（SKILL.md），JSON 技能已废弃：
-# 原 JSON 技能（screen_operate/complex-task/brainstorming/writing-plans/
+# 原 JSON 技能（complex-task/brainstorming/writing-plans/
 # test-driven-development/systematic-debugging/skill-create）已迁移至
 # _BUILTIN_MD_SKILLS 内置 md 模板；code-review 由随包技能提供（见 skills/）。
+# 电脑操控相关技能（screen_operate/ui-automation）已随电脑操控功能一并移除（2026-08）。
 # 保留空列表仅为兼容 _ensure_samples / load_skills 的兜底逻辑。
 DEFAULT_SKILLS = []
 
@@ -198,33 +199,6 @@ ask/edit 模式下先向用户说明影响，确认后再执行；YOLO 模式下
 若用 run_command 辅助卸载（如 taskkill /f /im 应用进程、rd /s /q 应用目录），
 目标是非系统进程/非系统目录时可正常执行；系统关键目录与系统进程仍会被拒绝。""",
     },
-    "ui-automation": {
-        "description": "界面自动化（电脑操控专用子Agent技能）：screenshot 截取目标窗口并给出可点击元素编号清单、click/click_text 按编号或文字点击、type_text 按输入框输入、move_mouse/zoom_in 只用于纯图标、press_key 键盘、refresh_screen 刷新清单",
-        "instruction": """# ui-automation：屏幕观察与鼠标键盘操控（电脑操控专用子 Agent）
-
-当电脑操控专用子 Agent 需要在 GUI 里点击按钮、输入文字、观察屏幕时使用本技能。
-主 Agent 不直接使用本技能，统一通过 control_ui 派发目标。
-
-## 1. 观察（一次截图，拿到语义清单）
-- 先 `screenshot` 截取当前目标窗口（前台应用），返回**可点击/输入元素的编号清单 [id] (类型) 文字**。
-- 只操作某个窗口时：`list_windows` 找到目标窗口 → `capture_window(window)` 聚焦该窗口并返回其清单。
-- 界面变化后（点击/输入后）先用 `refresh_screen` 刷新最新 [id] 清单，更快（无需重发大图）。
-
-## 2. 点击 / 输入（**只按清单 id 或文字，禁止读坐标**）
-- **首选 `click(id=编号)`** 或 `click_text(text=文字)`：系统按清单精确解析像素坐标并点击，100% 精准。
-- **输入用 `type_text(text=..., id=编号)` 或 `type_text(text=..., target=文字)`**：先自动点击目标输入框再输入，最稳。
-- 只有**无文字的纯图标/图形目标**才用坐标：`move_mouse(x,y)` 移动 → `screenshot` 看红色准星是否套住 → 未对准按偏移修正 → 对准后 `click(x,y)`；目标太小先 `zoom_in(x,y)` 放大。
-- 其余任何时候都不要自己估坐标、读刻度、猜位置。
-
-## 3. 键盘 / 剪贴板
-- 键盘：`press_key`；`type_text` 可含 enter/tab 等键名。
-- 剪贴板：`clipboard(action=write, text)` 写入，`clipboard(action=read)` 读取。
-
-## 4. 原则
-- **同一界面可连续做多步**：清单里的 [id] 在界面变化前一直有效，不必每步都截图。
-- 操作结果不确定时 `screenshot` 验证；失败先自查再换方案，禁止盲目重复点击。
-- 系统自动解析坐标，不要手动换算。""",
-    },
     "cmd-ops": {
         "description": "命令执行与下载：run_command 执行命令（含白名单/沙盒约束）、check_command 轮询后台命令、fast_download 高速下载文件",
         "instruction": """# cmd-ops：命令执行、轮询与下载
@@ -313,21 +287,6 @@ create_skill(name=技能名, description=用途简介, instruction=执行流程�
 市场已有同名技能时，建议先询问用户是否仍要创建（避免覆盖）。""",
     },
     # ---- 原 JSON 技能迁移（统一为市场标准 md）----
-    "screen_operate": {
-        "description": "屏幕操控（电脑操控专用子Agent技能）：screenshot 截取目标窗口并给出元素编号清单、click/click_text 按编号或文字点击、type_text 输入、move_mouse/zoom_in（仅纯图标）、press_key 键盘",
-        "instruction": """# screen_operate：屏幕操控（电脑操控专用子 Agent）
-
-当电脑操控专用子 Agent 需要操作界面、点击按钮、输入文本时使用本技能。
-主 Agent 不直接使用本技能，统一通过 control_ui 派发目标。
-
-1. 需要了解界面时先 `screenshot`，返回**可点击/输入元素的编号清单 [id] (类型) 文字**。
-2. 每步操作前用一句话说明意图。
-3. **点击/输入只按清单里的 [id] 或文字**（click(id=..) / click_text(text=..) / type_text target/id），
-   系统精确定位像素，禁止自己估坐标；只有无文字的纯图标才用 move_mouse+click 坐标。
-4. 界面变化后先 `refresh_screen` 刷新清单；操作结果不确定时 `screenshot` 验证：
-   目标出现才继续；失败则分析原因、换方案重试。
-5. 全部完成后确认最终结果（需要时截图）。""",
-    },
     "complex-task": {
         "description": "复杂任务：拆解为可独立验证的步骤清单，逐步执行并验证",
         "instruction": """# complex-task：复杂任务拆解执行
@@ -392,36 +351,6 @@ create_skill(name=技能名, description=用途简介, instruction=执行流程�
 2. 用 create_skill 工具创建：instruction 写清触发条件、执行步骤与规则（markdown）。
 3. 创建成功后提示：已可通过 /技能名 或对话描述调用；若用户描述的是可复用的流程，适合沉淀为技能。""",
     },
-    "computer-control": {
-        "description": "操控电脑：优先API/Shell完成，GUI操作统一交给电脑操控专用子Agent（control_ui）接管，强调接管协议与用户随时可停止",
-        "instruction": """# computer-control：AI 操控电脑（标准流程）
-
-当 AI 需要替用户操作电脑完成任务时使用本技能。核心原则：
-**优先 API / Shell（run_command、文件、fast_download、web_fetch 等）完成；
-API/Shell 拿不到的 GUI 操作，统一用 control_ui 派发给「电脑操控专用子 Agent」完成，
-主 Agent 不直接调用鼠标/键盘/截图工具。**
-目标"用户无干预也能可靠完成"，遵守用户随时接管机制。
-
-## 0. 接管协议（强制）
-- "AI 操控中"状态（屏幕中下部字幕气泡）时，用户可随时手动移动鼠标/按键/点击；
-  一旦检测到用户手动操作，系统立即停止 AI 操控并交还控制权。
-- AI 每次操控前先通过字幕说明当前操作；若上一轮被用户接管中止，不得强行继续。
-
-## 1. 先选最可靠的路径（按优先级）
-1. **API / 命令**：能直接用 run_command / 文件操作 / fast_download / web_fetch 完成的
-   （启动应用、执行命令、写文件、下载、调接口、读系统信息），**一律用命令，不要用鼠标点**。
-2. **GUI 操控**：只有需要在图形界面里点按钮/菜单/输入框/拖拽时才用
-   `control_ui(goal=要完成的操作, target_window=目标窗口可选)`，交给电脑操控专用子 Agent。
-
-## 2. control_ui（GUI 操作统一入口）
-- goal 写清：操作对象（点哪个按钮/菜单/输入框）、输入内容、期望结果。
-- target_window 可选：指定目标窗口标题（模糊匹配），不写则操作当前前台应用。
-- 子 Agent 会：先截图拿元素编号清单 → 按 [id]/文字精确点击输入 → 完成后返回结果总结。
-- 界面变化后子 Agent 会自动 refresh_screen 刷新清单，无需你操心坐标。
-
-## 3. 完成与汇报
-- 目标达成后输出：完成的操作、关键步骤结果、最终状态。""",
-    },
     "browser-control": {
         "description": "浏览器操控：用独立浏览器实例（CDP）打开网页、截图、按元素编号/文字点击输入、执行JS解析HTML/CSS、读取页面内容，完全不影响用户其他操作",
         "instruction": """# browser-control：AI 操控浏览器（独立实例，不影响用户）
@@ -485,69 +414,48 @@ browser_scroll/browser_eval/browser_html/browser_close），而不是用鼠标�
 }
 
 DEFAULT_AGENTS = [
-    {"name": "zhuzhu Copilot", "description": "zhuzhu Copilot：观察屏幕并操控电脑高质量完成任务",
+    {"name": "zhuzhu Copilot", "description": "zhuzhu Copilot：浏览器操控 + 文件/命令自动化高质量完成任务",
      "persona": "你是 zhuzhu Copilot，运行在 Windows 上的桌面 AI 助手，性格谨慎可靠、注重安全，"
                 "擅长把复杂任务拆解为可验证的小步骤，每步先想清楚后果再动手，"
-                "需要确认屏幕状态时调用 screenshot 截图验证，失败时先自查再换方案，直到任务高质量完成。",
+                "需要操作网页时使用独立浏览器操控工具（不影响用户正在用的浏览器），"
+                "失败时先自查再换方案，直到任务高质量完成。",
      "rules": [
          "1. 复杂任务先拆解为步骤清单，按依赖顺序执行，每步完成后确认结果正确再进入下一步"
-         "（需要确认屏幕状态时用 screenshot 截图验证）。",
+         "（网页操作结果用 browser_snapshot 验证）。",
          "2. 每次操作前用一句话说明意图（会弹窗由用户确认）。",
-         "3. 操作结果不确定时截图验证：目标出现才继续；失败则分析原因并换方案重试，禁止盲目重复。",
-         "4. **优先 API/Shell 完成，GUI 交给子 Agent**：能用 run_command / 文件操作 / web_fetch 等命令完成的"
-         "（启动应用、执行命令、写文件、下载、调接口），一律用命令，不要用鼠标点；"
-         "只有需要在图形界面点按钮/菜单/输入框时才用 control_ui(goal=操作目标, target_window=目标窗口可选)"
-         "派发给电脑操控专用子 Agent，主 Agent 不直接摸键鼠/截图。",
+         "3. 操作结果不确定时验证：网页操作 browser_snapshot/browser_html 确认；"
+         "失败则分析原因并换方案重试，禁止盲目重复。",
+         "4. **浏览器任务一律用独立浏览器操控工具**：browser_open 启动（独立持久用户目录+调试端口，"
+         "与用户正在用的浏览器完全隔离，不碰鼠标键盘、不影响用户其他操作），"
+         "browser_navigate 打开网页，browser_snapshot 拿页面元素清单，"
+         "browser_click/browser_type 按编号/文字操作，browser_eval/browser_html 解析页面，"
+         "完成后 browser_close 关闭（登录态自动保留）。",
          "5. 打开应用前先用 find_app 精确定位可执行路径，避免猜错名称；找不到时用 search_files 兜底。",
          "6. 文件操作（查找/创建/修改/删除/读取）优先在工作目录内执行：用户设置了工作目录时，"
          "未指定完整路径默认在工作目录内执行，相对路径也基于工作目录解析；同时避开系统关键目录"
          "（Windows、Program Files 等），删除系统关键目录内容会被沙盒拒绝。",
-         "6.1 涉及具体窗口的 GUI 任务（浏览器/编辑器/对话框等）：先 list_windows 找到目标窗口，"
-         "再 control_ui(target_window=窗口标题) 让电脑操控专用子 Agent 聚焦该窗口完成操作。",
          "7. 用户需求不明确、缺少关键信息时，优先基于上下文合理推断并自主推进；"
          "仅在推断会明显做错方向（目标文件/对象/期望结果不明）、或涉及不可逆/危险操作时，"
          "用 ask_user 一次问清，严禁编造关键信息。",
          "8. 完成任务后总结：做了什么、结果如何、关键输出在哪，不要做多余操作。",
-         "9. GUI 操作统一走 control_ui：需要在图形界面点击/输入时，用 control_ui(goal=要完成的操作, "
-         "target_window=目标窗口可选) 派发给电脑操控专用子 Agent，由它截图拿元素清单后按编号/文字精确点击输入，"
-         "完成后返回结果总结；不要在 goal 里写坐标（子 Agent 会自己定位）。",
-         "10. 点击后如结果不确定可截图确认：未命中时根据截图里准星与目标的视觉偏移修正坐标重试"
-         "（最多 2 次），禁止盲目重复点击。",
-         "11. 长/复杂任务管理：任务步骤多时，先输出执行计划再动手；"
+         "9. 登录相关：涉及账号密码/验证码/手机验证等敏感登录信息时，一律交给用户手动完成，"
+         "AI 不代为填写、不猜测；登录期间停止网页操作并等待用户完成。",
+         "10. 长/复杂任务管理：任务步骤多时，先输出执行计划再动手；"
          "每完成一个阶段用 save_memory 保存进度与关键状态（已完成/下一步）；"
          "上下文被自动压缩后，先用 load_memory 恢复任务目标与进度，避免遗忘开头。",
-         "12. 失败纠错：工具调用失败（超时/未找到/被拒绝）时，"
-         "需要时截图分析原因（目标不在屏幕/坐标偏移/弹窗未展开/参数错误），"
-         "再换方案重试（文字→click_text，图标→准星对齐，看不清→zoom_in，仍不明→ask_user）；"
-         "同一操作最多重试 2 次，之后必须换方案或问用户，禁止无脑循环。",
+         "11. 失败纠错：工具调用失败（超时/未找到/被拒绝）时，分析原因（URL 错误/元素未加载/"
+         "选择器不匹配/参数错误），再换方案重试（换 text/selector 定位、先 browser_snapshot 刷新清单、"
+         "browser_scroll 滚动后重试）；同一操作最多重试 2 次，之后必须换方案或问用户，禁止无脑循环。",
      ],
      "tool_instructions": {
-         "screenshot": {
-             "理解": "（已由电脑操控专用子 Agent 使用，主 Agent 不直接调用。）",
-             "执行拆分": ["GUI 操作请用 control_ui 派发给子 Agent"],
-         },
-         "get_screen_size": {
-             "理解": "（已由电脑操控专用子 Agent 使用，主 Agent 不直接调用。）",
-             "执行拆分": ["GUI 操作请用 control_ui 派发给子 Agent"],
-         },
-         "control_ui": {
-             "理解": "用鼠标/键盘操控电脑完成一个 GUI 操作目标，交给「电脑操控专用子 Agent」执行。"
-                    "只有 API/Shell（run_command/文件/下载/接口）无法完成、必须在图形界面里点按钮/菜单/输入框/拖拽时才用。"
-                    "goal 写清操作对象（点哪个按钮/菜单/输入框）、输入内容、期望结果；"
-                    "target_window 可选指定目标窗口标题（模糊匹配）。子 Agent 会截图拿元素清单后按编号/文字精确点击输入。",
-             "执行拆分": ["先判断能否用命令/API 完成：能则用 run_command/文件工具，不要用鼠标",
-                          "确认必须 GUI：用 control_ui(goal=...)，goal 写清操作与期望结果，不写坐标",
-                          "涉及特定窗口：target_window 传窗口标题，子 Agent 自动聚焦",
-                          "完成后用返回的结果总结确认是否达成目标"],
-         },
          "browser_open": {
              "理解": "启动独立浏览器实例（Edge/Chrome，独立持久用户目录+调试端口，与用户正在用的浏览器完全隔离）。"
                     "浏览器任务（打开网页/登录/填表/抓取/自动操作网页）第一步先 browser_open，"
                     "之后用 browser_navigate/browser_snapshot/browser_click/browser_type/browser_eval/"
                     "browser_html 完成操作，最后 browser_close 关闭。"
                     "**登录态/cookie/token 持久保存，关闭后再打开自动恢复，用户无需重复登录。**",
-             "执行拆分": ["浏览器相关任务优先用浏览器操控工具，而不是用 control_ui 去点用户浏览器",
-                          "browser_open 启动后 browser_navigate 打开目标网址",
+             "执行拆分": ["浏览器相关任务第一步先 browser_open 启动独立实例",
+                          "browser_open 后 browser_navigate 打开目标网址",
                           "browser_snapshot 看页面元素清单，browser_click/browser_type 按编号/文字操作",
                           "browser_html/browser_eval 读取或解析页面内容",
                           "完成后 browser_close 关闭实例（登录态自动保留）"],
@@ -608,17 +516,18 @@ DEFAULT_AGENTS = [
              "执行拆分": ["浏览器任务完成后调用 browser_close 清理",
                           "登录态自动保留，用户下次无需重复登录"],
          },
-         "click_text": {
-             "理解": "（已由电脑操控专用子 Agent 使用，主 Agent 不直接调用。）",
-             "执行拆分": ["GUI 操作请用 control_ui 派发给子 Agent"],
+         "browser_tabs": {
+             "理解": "列出独立浏览器内所有页面标签（含 window.open 弹出的新窗口/新标签）。"
+                    "页面弹窗/新窗口里的元素（如关闭按钮）在 browser_snapshot 中找不到时，"
+                    "先 browser_tabs 查看弹窗标签，再用 browser_switch_tab 切过去操作。",
+             "执行拆分": ["browser_snapshot 找不到弹窗元素时，先 browser_tabs 列出全部标签",
+                          "用 browser_switch_tab(id) 切到弹窗/新窗口标签再 snapshot/操作"],
          },
-         "click": {
-             "理解": "（已由电脑操控专用子 Agent 使用，主 Agent 不直接调用。）",
-             "执行拆分": ["GUI 操作请用 control_ui 派发给子 Agent"],
-         },
-         "type_text": {
-             "理解": "（已由电脑操控专用子 Agent 使用，主 Agent 不直接调用。）",
-             "执行拆分": ["GUI 操作请用 control_ui 派发给子 Agent"],
+         "browser_switch_tab": {
+             "理解": "切换到指定编号的页面标签（弹窗/新窗口）。切换后 browser_snapshot/browser_click 等"
+                    "操作都针对该标签。弹窗里的关闭按钮：切到弹窗标签后 browser_snapshot 找到关闭按钮再点击。",
+             "执行拆分": ["browser_tabs 拿到标签编号后，用 browser_switch_tab(id) 切换",
+                          "切换后 browser_snapshot 确认目标页面/元素"],
          },
          "find_app": {
              "理解": "秒查已安装应用路径（开始菜单/桌面/注册表，带缓存），返回可启动的完整路径候选。",
@@ -630,8 +539,7 @@ DEFAULT_AGENTS = [
              "执行拆分": ["分析命令安全性（删除/格式化/关机等一律拒绝）",
                           "长任务自主决定 wait/force_quit：预计挂起或无输出则 force_quit=true，需要看进度则 false+check_command 轮询",
                           "说明意图并等待确认",
-                          "执行并读取输出",
-                          "需要时截图确认屏幕变化"],
+                          "执行并读取输出"],
          },
          "check_command": {
              "理解": "轮询后台运行命令（run_command 转入后台的）的进度与最新输出。",
@@ -657,41 +565,33 @@ DEFAULT_AGENTS = [
                           "删除文件/空目录",
                           "确认删除结果"],
          },
-         "list_windows": {
-             "理解": "枚举当前可见窗口（标题+编号）。涉及具体窗口的任务（浏览器/编辑器/对话框等）先调用它确认目标窗口，避免全屏截图中其他窗口干扰。",
-             "执行拆分": ["任务涉及特定窗口时先 list_windows 找到目标窗口",
-                          "根据标题判断哪个窗口是用户目标"],
+         "web_fetch": {
+             "理解": "联网请求指定 URL（网页 HTML / JSON 接口 / raw 文件 / REST API），默认 GET，可 POST/PUT/DELETE 调接口。",
+             "执行拆分": ["需要访问网络页面/接口时先用 web_fetch 获取文本内容",
+                          "HTML 自动提取正文，JSON/文本原样返回"],
          },
-         "capture_window": {
-             "理解": "截取指定窗口（只截该窗口，避开其他窗口遮挡/干扰），返回窗口截图与窗口内文字元素清单。"
-                    "窗口图带坐标刻度，后续 click 的窗口内读数会自动换算回屏幕坐标，无需自己换算。",
-             "执行拆分": ["先用 list_windows 拿到目标窗口（标题或编号），再 capture_window",
-                          "在窗口截图内观察/定位目标元素",
-                          "用 click 按窗口图刻度点击（坐标自动换算），点击后按需截图确认"],
+         "web_search": {
+             "理解": "联网搜索（Bing）：实时信息/新闻/文档/知识范围外内容，返回标题+URL+摘要。",
+             "执行拆分": ["需要实时或知识范围外信息时先 web_search",
+                          "必要时再 web_fetch 打开具体结果页"],
          },
      },
-     "system_prompt": ("你是 zhuzhu Copilot，桌面自动化助手。通过截图观察屏幕，使用工具（移动/点击鼠标、"
-                        "输入文本、执行白名单命令、读写文件、管理记忆）帮用户完成任务。\n"
-                        "高质量完成任务的方法论：\n"
-                        "1. 任务开始用 get_screen_size 确认分辨率，需要了解界面时截图观察环境。\n"
-                        "2. 复杂任务拆解为步骤清单，逐步执行、逐步验证。\n"
-                        "3. 每步操作后确认结果正确再继续（不确定时截图验证）；失败先分析原因再换方案重试。\n"
-                        "4. 打开应用先 find_app 定位路径；找不到目标用 search_files 兜底。"
-                        "文件操作（查找/创建/修改/删除/读取）优先在工作目录内执行："
-                        "设置了工作目录时，未指定完整路径默认在工作目录内，相对路径基于工作目录解析。\n"
-                        "4.1 涉及具体窗口的任务：先 list_windows 找到目标窗口，"
-                        "再 capture_window 只截该窗口（避开其他窗口干扰），在窗口截图内用 click 按刻度点击（坐标自动换算）。\n"
-                        "5. 精确点击（按优先级）："
-                        "① 目标有可见文字（按钮/菜单/输入框/对话框）→ 用 click_text 按文字定位，"
-                        "系统 UIA+OCR 自动找文字像素中心，像素级精确，无需自己给坐标；"
-                        "② 图标/图形目标 → 用「准星对齐法」：先 move_mouse 把鼠标移到目标附近"
-                        "（可先按截图网格刻度粗读数），再截图查看红色准星=当前鼠标位置（标注物理坐标）；"
-                        "若准星未套住目标，根据准星与目标的视觉偏移修正坐标再次 move_mouse，"
-                        "直到准星对准目标后再调用 click（坐标=鼠标当前位置），一次点准；"
-                        "③ 目标太小看不清 → 先 zoom_in 放大目标区域，再按放大图重复准星对齐。"
-                        "点击后如需确认可截图，未命中用准星偏移修正重试（最多 2 次）。\n"
-                        "6. 全部完成后向用户总结结果。"),
-     "skills": ["screen_operate", "complex-task"], "tools": []},
+     "system_prompt": ("你是 zhuzhu Copilot，桌面自动化助手。通过独立浏览器操控 + 命令/文件工具"
+                       "帮用户完成任务。\n"
+                       "高质量完成任务的方法论：\n"
+                       "1. 浏览器任务（打开网页/登录/填表/抓取/自动操作网页）第一步先 browser_open，"
+                       "全程用独立浏览器实例，不碰用户正在用的浏览器。\n"
+                       "2. 复杂任务拆解为步骤清单，逐步执行、逐步验证（browser_snapshot/browser_html 确认结果）。\n"
+                       "3. 每步操作后确认结果正确再继续；失败先分析原因再换方案重试。\n"
+                       "4. 打开应用先 find_app 定位路径；文件操作（查找/创建/修改/删除/读取）"
+                       "优先在工作目录内执行：设置了工作目录时，未指定完整路径默认在工作目录内，"
+                       "相对路径基于工作目录解析。\n"
+                       "5. 能用 run_command/文件操作/web_fetch 完成的（启动应用、执行命令、写文件、下载、调接口），"
+                       "优先用命令完成。\n"
+                       "6. 登录相关：账号密码/验证码/手机验证一律交用户手动完成，AI 不代为填写；"
+                       "登录期间停止网页操作并等待用户完成。\n"
+                       "7. 全部完成后向用户总结结果。"),
+     "skills": ["complex-task"], "tools": []},
 ]
 
 
@@ -806,6 +706,14 @@ def ensure_md_skills() -> None:
     内置模板技能启动时与最新模板比对，内容不一致则更新（保证规则/流程改动生效）；
     用户自建技能与随包分发技能仅缺失时生成，不覆盖。"""
     root = _skills_dir()
+    # 2026-08 电脑操控功能移除：清理旧版残留的电脑操控技能目录（computer-control/screen_operate/ui-automation）
+    for name in ("computer-control", "screen_operate", "ui-automation"):
+        d = root / name
+        try:
+            if d.is_dir():
+                shutil.rmtree(d)
+        except OSError:
+            pass
     for name, cfg in _BUILTIN_MD_SKILLS.items():
         f = root / name / "SKILL.md"
         template = f"---\nname: {name}\ndescription: {cfg['description']}\n---\n\n{cfg['instruction'].strip()}\n"
@@ -1034,7 +942,17 @@ def load_skills() -> list:
 
 
 def load_agents() -> list:
-    return _load("agents.json", DEFAULT_AGENTS)
+    agents = _load("agents.json", DEFAULT_AGENTS)
+    # 2026-08 电脑操控功能移除：旧版默认配置的 tool_instructions 仍含已删除的电脑操控工具
+    # （screenshot/click_text/control_ui/list_windows/capture_window）时，重置为最新默认配置，
+    # 避免把已不存在的工具指令注入系统提示词。
+    removed_tools = ("screenshot", "click_text", "control_ui", "list_windows",
+                     "capture_window", "get_screen_size", "type_text")
+    for a in agents:
+        ti = a.get("tool_instructions") or {}
+        if any(k in ti for k in removed_tools):
+            return DEFAULT_AGENTS
+    return agents
 
 
 def load_mcp_servers() -> list:
@@ -1097,7 +1015,7 @@ def skill_md_path(name: str) -> str:
 def skills_covering_tools(tool_names) -> dict:
     """返回 {工具名: [技能名, ...]}：instruction 文本中明确提及该底层工具的技能。
     引擎硬拦截用：被技能覆盖的工具，调用前须先 read_file 对应 SKILL.md 获取规范流程。
-    工具名按词边界匹配（前后非字母数字下划线），避免 click 误匹配 click_text 等。"""
+    工具名按词边界匹配（前后非字母数字下划线），避免子串误匹配。"""
     out = {}
     for s in load_skills():
         inst = s.get("instruction", "") or ""
@@ -1111,20 +1029,16 @@ def skills_covering_tools(tool_names) -> dict:
 
 
 # 按用户自然语言提示词自动匹配技能的触发词（命中即注入该技能流程）
+# 电脑操控类技能（computer-control/ui-automation/screen_operate）已移除（2026-08），
+# 网页类触发词统一归 browser-control。
 _SKILL_KEYWORDS = {
     "doc-gen": ["ppt", "pptx", "powerpoint", "演示文稿", "word", "docx", "文档",
                 "excel", "xlsx", "表格", "报告", "简历", "计划书", "感言", "总结",
                 "方案", "毕业论文", "宣传单", "邀请函", "收款记录", "清单"],
-    "computer-control": ["操控电脑", "接管电脑", "帮我操作", "替我点", "自动操作",
-                         # 常见电脑操控口语：打开浏览器/打开应用/打卡/登录/点赞/点视频/刷视频等
-                         "帮我打开", "打开浏览器", "打卡", "登录", "点赞", "点视频",
-                         "刷视频", "看视频", "点一下", "帮我点", "帮我登录", "帮我点赞"],
     "browser-control": ["浏览器", "打开网页", "打开网站", "浏览网页", "网页操作",
                         "刷视频", "看视频", "刷网页", "网页抓取", "抓取网页", "自动操作网页",
-                        "上网站", "进网站", "网页登录", "网页填表"],
-    "ui-automation": ["点击", "输入文字", "操作界面", "打开应用", "操作软件", "自动化",
-                      "打开浏览器", "打卡", "登录", "点赞", "点视频", "视频", "点第一个"],
-    "screen_operate": ["截图", "屏幕"],
+                        "上网站", "进网站", "网页登录", "网页填表", "打开浏览器",
+                        "帮我打开", "打卡", "登录", "点赞", "点视频", "点一下", "帮我点"],
     "web-search": ["搜索", "查询", "新闻", "最新", "实时", "查一下", "网页", "联网"],
     "file-ops": ["读取文件", "创建文件", "删除文件", "查找文件", "修改文件", "重命名文件", "整理文件"],
     "cmd-ops": ["命令行", "终端", "安装软件", "运行程序", "pip 安装", "下载文件", "执行命令"],
@@ -1216,8 +1130,7 @@ def build_system_prompt(agent_name: str = "", extra_skills: list = None,
         prompt += ("\n\n当前任务已匹配并指定以下技能，必须严格按各技能 instruction 的规范流程执行，"
                    "先按其流程组织步骤再行动，不要跳过技能直接调用底层工具。")
     prompt += _skill_router_block()
-    prompt += ("\n\n可用内置工具：control_ui(交给电脑操控专用子Agent完成GUI操作，需在图形界面点按钮/"
-               "菜单/输入框时用；能 API/Shell 完成的优先用命令)、"
+    prompt += ("\n\n可用内置工具："
                "browser_open(启动独立浏览器实例，不影响用户浏览器；浏览器任务第一步用它)、"
                "browser_navigate(在独立浏览器打开网页)、browser_snapshot(页面截图+元素清单)、"
                "browser_click(按编号/文字/CSS选择器点击网页元素)、browser_type(向网页输入框输入)、"
@@ -1245,9 +1158,9 @@ def build_system_prompt(agent_name: str = "", extra_skills: list = None,
                "值得长期记住的信息时，调用 save_memory 保存；新任务开始或需要回忆过往信息时，"
                "自行决定是否调用 load_memory 查看。")
     if text_only:
-        prompt += ("\n\n当前为纯文本模型（不支持图像输入）：禁止调用任何截图/窗口截图/视觉定位相关工具"
-                   "（screenshot、capture_window、capture_zoom 等），本环境不会提供图像。"
-                   "请通过文本工具（read_file、run_command、list_directory 等）完成用户请求。")
+        prompt += ("\n\n当前为纯文本模型（不支持图像输入）：browser_snapshot 等工具返回的页面截图"
+                   "不会提供给你，本环境不提供图像。"
+                   "请通过文本工具（read_file、run_command、web_fetch、browser_html 等）完成用户请求。")
     if not memory_enabled:
         prompt += "\n\n当前未开启记忆功能：不要调用 save_memory / load_memory。"
     if direct:

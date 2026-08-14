@@ -1,8 +1,9 @@
-"""Agent 引擎：循环"截屏分析 → 调用工具 → 截图验证"
+"""Agent 引擎：循环"浏览器观察 → 调用工具 → 验证结果"
 
 - 流式输出：LLM 逐 token 回调（UI 实时显示）
 - 工具调用：内置工具 + MCP 工具；每个工具执行前回调 confirm（UI 弹窗每步确认）
-- 截图：AI 按需调用 screenshot/capture_window 工具主动截图，返回的图像作为视觉输入
+- 浏览器：AI 用 browser_open/navigate/snapshot/click 等独立浏览器工具操控网页，
+  browser_snapshot 返回的页面截图作为视觉输入
 - 沙盒：危险工具即使批准也由 agent_tools 硬拒绝
 - tokens：发送前预计算（estimate），响应后累计实际 usage
 """
@@ -18,7 +19,6 @@ from PyQt6.QtCore import Qt, QByteArray, QBuffer, QIODevice
 from PyQt6.QtGui import QImage
 
 from winapp_migrator.core import agent_llm, agent_tools, agent_skills, agent_subagent
-from winapp_migrator.core import agent_screen, agent_locator
 from winapp_migrator.core.agent_screen import virtual_desktop
 
 # 开发类工具：动手开发/修改代码前必须先确认用户开发规则（首次调用被拦截，规则确认后下一轮放行）
@@ -378,16 +378,9 @@ class AgentEngine:
     # ---------- 工具 ----------
     def _all_tools(self) -> list:
         tools = list(agent_tools.tool_schemas())
-        # 电脑操控工具只归「电脑操控专用子 Agent」所有：主 Agent 不直接摸键鼠/截图，
-        # 只能通过 control_ui 派发目标（强约束：避免主 Agent 绕开子 Agent 裸调工具乱移鼠标）
-        tools = [t for t in tools
-                 if t["function"]["name"] not in agent_tools.UI_CONTROL_TOOLS]
         if self.auto_vd:
             # 自动虚拟桌面接管时，不再暴露 virtual_desktop 工具（避免 AI 重复切桌面）
             tools = [t for t in tools if t["function"]["name"] != "virtual_desktop"]
-        if self.text_only:
-            # 纯文本模型：看不到截图，GUI 操控无意义 → 隐藏 control_ui 派发工具
-            tools = [t for t in tools if t["function"]["name"] != "control_ui"]
         if not self.memory_enabled:
             # 记忆关闭：不暴露 save_memory/load_memory
             tools = [t for t in tools
@@ -426,32 +419,6 @@ class AgentEngine:
                            str(args.get("path") or args.get("file") or ""))
             if mp:
                 self._skills_read.add(mp.group(1))
-        if name == "control_ui":
-            # 电脑操控：交给「电脑操控专用子 Agent」完成 GUI 操作（主 Agent 不直接摸键鼠/截图）
-            try:
-                goal = str(args.get("goal", "")).strip()
-                if not goal:
-                    return {"text": "[control_ui] 缺少 goal（要完成的 GUI 操作目标）", "images": []}
-                tw = str(args.get("target_window", "")).strip()
-                if tw:
-                    wins = agent_screen.list_windows()
-                    hit = next((w for w in wins
-                                if tw.lower() in w["title"].lower()), None)
-                    if hit:
-                        agent_locator.set_target_window(hit["hwnd"], hit["title"])
-                if self.on_status:
-                    self.on_status("正在派发电脑操控专用子 Agent…")
-                text = _call_with_stop(
-                    lambda: agent_subagent.run_ui_agent(
-                        self.llm, goal,
-                        stop=lambda: self._stop.is_set(),
-                        on_status=self.on_status),
-                    self._stop, timeout=None)
-                if text is None:
-                    return {"text": "[已停止等待] 电脑操控子 Agent 仍在后台执行，本轮已跳过", "images": []}
-                return {"text": text, "images": []}
-            except Exception as e:
-                return {"text": f"[电脑操控错误] {e}", "images": []}
         if name in agent_tools.SUB_AGENT_TOOLS:
             # 子 Agent 工具：并发派发子任务（可读写项目文件）；不做轮数与时间上限，
             # 长任务持续到完成或被用户停止（stop），与主 Agent 无轮数上限一致

@@ -965,8 +965,10 @@ def _tts_play_start() -> bool:
             try:
                 import pygame
                 # 统一请求双声道：SDL 常把单声道请求强制回退为 stereo，
-                # 主动用 stereo 可保证 mixer.get_init() 声道数稳定，播放端按该声道扩展 PCM
-                pygame.mixer.pre_init(24000, -16, 2, 4096)
+                # 主动用 stereo 可保证 mixer.get_init() 声道数稳定，播放端按该声道扩展 PCM。
+                # buffer 用 16384 而非默认 4096：大缓冲降低 SDL 音频回调 underrun
+                # 概率（合成线程在跑网络/解码时 CPU 忙，过小缓冲会产生 click/爆音）
+                pygame.mixer.pre_init(24000, -16, 2, 16384)
                 pygame.mixer.init()
                 _TTS_MIXER_OK = True
             except Exception:
@@ -1053,6 +1055,14 @@ def _tts_player_loop():
                 for i in range(fade):
                     a[i] = int(a[i] * i / fade)
                 blk = a.tobytes()
+            # 句尾淡出：pygame 播到 Sound 末尾是硬截断，若句尾波形非零会突然
+            # 停止产生"咚"的 pop 爆音；末尾线性衰减到 0 消除截断爆音
+            a = array.array("h", blk)
+            n_s = len(a)
+            fade = min(_TTS_FADE, n_s)
+            for i in range(fade):
+                a[n_s - 1 - i] = int(a[n_s - 1 - i] * (fade - i) / fade)
+            blk = a.tobytes()
             wav = struct.pack("<4sI4s4sIHHIIHH4sI",
                               b"RIFF", 36 + len(blk), b"WAVE", b"fmt ", 16,
                               1, out_ch, 24000, 24000 * out_ch * 2, out_ch * 2, 16,

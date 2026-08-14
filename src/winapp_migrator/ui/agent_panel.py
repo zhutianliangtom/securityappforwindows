@@ -1031,8 +1031,39 @@ class _AgentSettingsDialog(QDialog):
         self.auto_read_check.setChecked(bool(cfg.get("auto_read", True)))
         self.auto_read_check.setStyleSheet(f"color: {self._TEXT}; font-size: 13px; spacing: 8px;")
         lay.addWidget(self.auto_read_check)
+        # 语速调节：对齐参考音频节奏（0.5x~1.5x，默认 1.0 = 与参考一致）
+        spd_row = QHBoxLayout()
+        spd_row.setSpacing(10)
+        spd_lbl = QLabel("语速")
+        spd_lbl.setStyleSheet(f"color: {self._TEXT}; font-size: 13px;")
+        spd_lbl.setFixedWidth(70)
+        spd_row.addWidget(spd_lbl)
+        self.speed_slider = QSlider(Qt.Orientation.Horizontal)
+        self.speed_slider.setRange(50, 150)
+        self.speed_slider.setValue(int(float(cfg.get("speech_rate") or 1.0) * 100))
+        self.speed_slider.setPageStep(5)
+        self.speed_slider.setToolTip("拖动调节语速（100% = 与参考音频一致）")
+        self.speed_slider.setStyleSheet(
+            f"QSlider::groove:horizontal {{ height: 4px; background: {self._BORDER};"
+            "border-radius: 2px; }"
+            f"QSlider::sub-page:horizontal {{ background: {self._ACCENT}; border-radius: 2px; }}"
+            f"QSlider::handle:horizontal {{ width: 14px; height: 14px; margin: -5px 0;"
+            f"background: {self._ACCENT}; border-radius: 7px; }}"
+            f"QSlider::handle:horizontal:hover {{ background: {self._ACCENT_HOVER}; }}")
+        self.speed_slider.valueChanged.connect(self._on_speed_changed)
+        spd_row.addWidget(self.speed_slider, 1)
+        self.speed_label = QLabel(f"{self.speed_slider.value()}%")
+        self.speed_label.setStyleSheet(f"color: {self._TEXT}; font-size: 13px;")
+        self.speed_label.setFixedWidth(48)
+        spd_row.addWidget(self.speed_label)
+        lay.addLayout(spd_row)
         lay.addStretch(1)
         return w
+
+    def _on_speed_changed(self, v: int):
+        """语速滑块变更：立即持久化到 tts.json，下次合成生效"""
+        self.speed_label.setText(f"{v}%")
+        agent_tts.save_config(speech_rate=round(v / 100.0, 2))
 
     def _build_skill_page(self) -> QWidget:
         w = self._page("技能")
@@ -1353,6 +1384,8 @@ class _AgentSettingsDialog(QDialog):
                 QMessageBox.warning(self, "提示", "MCP 配置保存失败（无写入权限），其余设置已保存")
             # 音色与自动朗读：独立写入 tts.json，避免被 settings.json 覆写
             agent_tts.save_config(auto_read=self.auto_read_check.isChecked(),
+                                  speech_rate=round(self.speed_slider.value() / 100.0, 2)
+                                  if hasattr(self, "speed_slider") else 1.0,
                                   preferred_name=agent_tts.VOICE_DISPLAY_NAME)
             self.accept()
         else:

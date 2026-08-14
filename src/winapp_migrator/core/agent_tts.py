@@ -48,7 +48,8 @@ def load_api_key() -> str:
 
 
 def save_config(api_key: str = "", target_model: str = DEFAULT_TARGET_MODEL,
-                voice_id: str = "", preferred_name: str = "", auto_read: bool = True) -> bool:
+                voice_id: str = "", preferred_name: str = "", auto_read: bool = True,
+                speech_rate: float = 1.0) -> bool:
     """保存 TTS 配置到独立文件 tts.json（设置面板写入，避免被 settings.json 覆写）"""
     try:
         data = {}
@@ -59,6 +60,7 @@ def save_config(api_key: str = "", target_model: str = DEFAULT_TARGET_MODEL,
         data["voice_id"] = voice_id or data.get("voice_id", "")
         data["preferred_name"] = preferred_name or data.get("preferred_name", "")
         data["auto_read"] = bool(auto_read)
+        data["speech_rate"] = float(speech_rate or 1.0)
         CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
         CONFIG_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
         return True
@@ -69,7 +71,7 @@ def save_config(api_key: str = "", target_model: str = DEFAULT_TARGET_MODEL,
 def load_config() -> dict:
     """读取 TTS 配置（不含敏感 Key 之外的全部字段）"""
     data = {"target_model": DEFAULT_TARGET_MODEL, "voice_id": "", "preferred_name": "",
-            "auto_read": True}
+            "auto_read": True, "speech_rate": 1.0}
     try:
         if CONFIG_FILE.exists():
             data.update(json.loads(CONFIG_FILE.read_text(encoding="utf-8")))
@@ -193,6 +195,16 @@ def _strip_wav_header(chunk: bytes) -> bytes:
     return chunk
 
 
+def _detect_language(text: str) -> str:
+    """根据文本内容判断语言类型（DashScope language_type 参数）：
+    含中文按中文合成（发音/语调更接近参考音频），否则用英文。"""
+    t = text or ""
+    # 中日韩统一表意文字区间
+    if any("\u4e00" <= ch <= "\u9fff" for ch in t):
+        return "Chinese"
+    return "English"
+
+
 def _pcm_to_wav(pcm: bytes, rate: int = 24000, channels: int = 1, bits: int = 16) -> bytes:
     """PCM -> 完整 WAV 内存字节（流式合成落盘用）"""
     import struct
@@ -225,6 +237,14 @@ def synthesize_stream(text: str, voice_id: str, model: str = DEFAULT_TARGET_MODE
         "input": {"text": text, "voice": voice_id},
         "parameters": {"stream": True},
     }
+    # 语言类型 + 语速：对齐参考音频的发音/语调/节奏，还原原生音色
+    cfg = load_config()
+    lang = _detect_language(text)
+    if lang:
+        payload["input"]["language_type"] = lang
+    speed = float(cfg.get("speech_rate") or 1.0)
+    if 0.5 <= speed <= 2.0:
+        payload["parameters"]["speech_rate"] = speed
     req = urllib.request.Request(
         TTS_URL,
         data=json.dumps(payload).encode("utf-8"),
@@ -283,6 +303,13 @@ def synthesize(text: str, voice_id: str, model: str = DEFAULT_TARGET_MODEL,
         "model": model,
         "input": {"text": text, "voice": voice_id},
     }
+    # 语言类型 + 语速：对齐参考音频的发音/语调/节奏，还原原生音色
+    lang = _detect_language(text)
+    if lang:
+        payload["input"]["language_type"] = lang
+    speed = float((load_config().get("speech_rate") or 1.0))
+    if 0.5 <= speed <= 2.0:
+        payload["parameters"] = {"speech_rate": speed}
     d = _request(TTS_URL, payload, timeout=timeout)
     audio_url = ((d.get("output") or {}).get("audio") or {}).get("url", "")
     if not audio_url:

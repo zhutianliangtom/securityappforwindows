@@ -910,24 +910,95 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "tts_speak",
-            "description": "用指定音色把文本合成为语音并下载到本地，返回音频文件路径。"
-                           "适合朗读回复、生成语音文件；output_path 留空自动保存到工作目录 tts_output/。",
+            "description": "用指定音色把文本合成为语音，流式边生成边自动播放，并下载保存到本地，返回音频文件路径。"
+                           "适合朗读回复、生成语音文件；voice_id 留空使用设置面板选中的音色；"
+                           "output_path 留空自动保存到工作目录 tts_output/；play=false 可关闭自动播放。",
             "parameters": {"type": "object",
                            "properties": {
                                "text": {"type": "string", "description": "要合成的文本"},
                                "voice_id": {"type": "string",
-                                            "description": "音色 ID（可用 tts_create_voice 创建或复用已有）"},
+                                            "description": "音色 ID（留空使用设置面板选中音色）"},
                                "model": {"type": "string",
                                          "description": "合成模型（默认 qwen3-tts-vc-2026-01-22）"},
                                "output_path": {"type": "string",
-                                               "description": "输出音频文件路径（可选，留空自动生成）"}},
-                           "required": ["text", "voice_id"]},
+                                               "description": "输出音频文件路径（可选，留空自动生成）"},
+                               "play": {"type": "boolean",
+                                        "description": "是否边生成边自动播放（默认 true）"}},
+                           "required": ["text"]},
         },
     },
 ]
 
 # 子 Agent 工具名（由 agent_engine 拦截调度，携带 LLM 客户端执行；不在此直接实现）
 SUB_AGENT_TOOLS = ("dispatch_sub_agents", "explore_project", "search_large")
+
+
+# ------------------------------------------------------------
+# TTS 流式播放器（pygame.mixer 逐片排队，边生成边播放）
+# ------------------------------------------------------------
+_TTS_PLAYER_LOCK = threading.Lock()
+_TTS_MIXER_OK = False
+_TTS_CHANNEL = None
+_TTS_QUEUED = 0
+
+
+def _tts_play_start():
+    """开始一段流式播放：初始化 mixer（幂等）并清空上一段未播完的队列"""
+    global _TTS_MIXER_OK, _TTS_CHANNEL, _TTS_QUEUED
+    with _TTS_PLAYER_LOCK:
+        if not _TTS_MIXER_OK:
+            try:
+                import pygame
+                pygame.mixer.pre_init(24000, -16, 1, 4096)
+                pygame.mixer.init()
+                _TTS_MIXER_OK = True
+            except Exception:
+                _TTS_MIXER_OK = False
+                return
+        try:
+            import pygame
+            if _TTS_CHANNEL is None:
+                _TTS_CHANNEL = pygame.mixer.Channel(0)
+            _TTS_CHANNEL.stop()
+            _TTS_QUEUED = 0
+        except Exception:
+            pass
+
+
+def _tts_play_chunk(pcm: bytes):
+    """把一个 PCM 分片构造为内存 WAV 并排队播放（每片 0.3s，天然帧对齐）"""
+    global _TTS_QUEUED
+    if not pcm or not _TTS_MIXER_OK:
+        return
+    try:
+        import pygame, struct
+        wav = struct.pack("<4sI4s4sIHHIIHH4sI",
+                          b"RIFF", 36 + len(pcm), b"WAVE", b"fmt ", 16,
+                          1, 1, 24000, 48000, 2, 16, b"data", len(pcm)) + pcm
+        snd = pygame.mixer.Sound(buffer=wav)
+        with _TTS_PLAYER_LOCK:
+            if _TTS_CHANNEL is None:
+                return
+            if _TTS_QUEUED == 0:
+                _TTS_CHANNEL.play(snd)
+            else:
+                _TTS_CHANNEL.queue(snd)
+            _TTS_QUEUED += 1
+    except Exception:
+        pass
+
+
+def _tts_play_stop():
+    """停止并清理播放（合成失败时调用）"""
+    global _TTS_QUEUED
+    with _TTS_PLAYER_LOCK:
+        try:
+            if _TTS_CHANNEL is not None:
+                _TTS_CHANNEL.stop()
+        except Exception:
+            pass
+        _TTS_QUEUED = 0
+
 
 # 沙盒拒绝返回（无截图）
 def _blocked(text: str) -> dict:
@@ -1175,13 +1246,22 @@ def execute_tool(name: str, args: dict, allow_dangerous: bool = False,
                 return _blocked(f"[tts_delete_voice] {e}")
         if name == "tts_speak":
             try:
-                out = agent_tts.synthesize(
+                play = bool(args.get("play", True))
+                if play:
+                    _tts_play_start()
+                def _on_chunk(pcm):
+                    if play:
+                        _tts_play_chunk(pcm)
+                out = agent_tts.synthesize_stream(
                     str(args.get("text", "")),
                     str(args.get("voice_id", "")),
                     str(args.get("model", agent_tts.DEFAULT_TARGET_MODEL)),
-                    str(args.get("output_path", "")))
-                return {"text": f"语音合成完成：{out}", "images": []}
+                    on_chunk=_on_chunk,
+                    output_path=str(args.get("output_path", "")))
+                return {"text": f"语音合成完成，已保存：{out}" +
+                                ("（已自动播放）" if play else ""), "images": []}
             except Exception as e:
+                _tts_play_stop()
                 return _blocked(f"[tts_speak] {e}")
     except Exception as e:
         return _blocked(f"[工具执行错误] {name}: {e}")

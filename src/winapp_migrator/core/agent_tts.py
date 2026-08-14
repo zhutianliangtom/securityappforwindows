@@ -151,6 +151,93 @@ def list_voices(timeout: int = 60) -> list:
 
 
 # ---------------------------------------------------------------- 合成
+def _strip_wav_header(chunk: bytes) -> bytes:
+    """剥离首个音频分片中的 RIFF WAV 头，返回纯 PCM 数据"""
+    if chunk[:4] != b"RIFF" or chunk[8:12] != b"WAVE":
+        return chunk  # 不是 WAV 头（异常分片），原样返回
+    pos = 12
+    while pos + 8 <= len(chunk):
+        cid = chunk[pos:pos + 4]
+        csz = int.from_bytes(chunk[pos + 4:pos + 8], "little")
+        if cid == b"data":
+            return chunk[pos + 8:]
+        pos += 8 + csz + (csz % 2)
+    return chunk
+
+
+def _pcm_to_wav(pcm: bytes, rate: int = 24000, channels: int = 1, bits: int = 16) -> bytes:
+    """PCM -> 完整 WAV 内存字节（流式合成落盘用）"""
+    import struct
+    byte_rate = rate * channels * bits // 8
+    block_align = channels * bits // 8
+    return struct.pack("<4sI4s4sIHHIIHH4sI",
+                       b"RIFF", 36 + len(pcm), b"WAVE", b"fmt ", 16,
+                       1, channels, rate, byte_rate, block_align, bits, b"data", len(pcm)) + pcm
+
+
+def synthesize_stream(text: str, voice_id: str, model: str = DEFAULT_TARGET_MODEL,
+                      on_chunk=None, output_path: str = "", timeout: int = 120) -> str:
+    """流式合成语音（SSE 分片），边接收边回调，返回完整 wav 文件路径。
+
+    on_chunk(pcm_bytes)：每收到一段 PCM（已剥离 WAV 头，24kHz/16bit/单声道）回调一次，
+    可用于边生成边播放；on_chunk 为空时仅保存文件。
+    """
+    if not text.strip():
+        raise RuntimeError("合成文本为空")
+    if not voice_id.strip():
+        voice_id = str(load_config().get("voice_id", "")).strip()
+    if not voice_id.strip():
+        raise RuntimeError("未指定音色 voice_id，请先在 AI 设置中选择音色")
+    key = load_api_key()
+    if not key:
+        raise RuntimeError("未配置 DashScope API Key：请设置环境变量 DASHSCOPE_API_KEY "
+                           "或在 TTS 设置中填写")
+    payload = {
+        "model": model,
+        "input": {"text": text, "voice": voice_id},
+        "parameters": {"stream": True},
+    }
+    req = urllib.request.Request(
+        TTS_URL,
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"Authorization": "Bearer " + key, "Content-Type": "application/json",
+                 "X-DashScope-SSE": "enable", "Accept": "text/event-stream"})
+    parts = []
+    first = True
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            for raw in resp:
+                line = raw.decode("utf-8", "ignore").strip()
+                if not line.startswith("data:"):
+                    continue
+                try:
+                    d = json.loads(line[5:].strip())
+                except Exception:
+                    continue
+                b64 = ((d.get("output") or {}).get("audio") or {}).get("data") or ""
+                if not b64:
+                    continue
+                chunk = base64.b64decode(b64)
+                if first:
+                    chunk = _strip_wav_header(chunk)
+                    first = False
+                if chunk:
+                    parts.append(chunk)
+                    if on_chunk:
+                        on_chunk(chunk)
+    except urllib.error.HTTPError as e:
+        raise RuntimeError(f"DashScope HTTP {e.code}: "
+                           + e.read().decode("utf-8", "ignore")[:500])
+    if not parts:
+        raise RuntimeError("合成失败：未收到音频分片")
+    if not output_path:
+        out_dir = pathlib.Path.cwd() / "tts_output"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        output_path = str(out_dir / f"tts_{int(__import__('time').time())}.wav")
+    pathlib.Path(output_path).write_bytes(_pcm_to_wav(b"".join(parts)))
+    return output_path
+
+
 def synthesize(text: str, voice_id: str, model: str = DEFAULT_TARGET_MODEL,
                output_path: str = "", timeout: int = 120) -> str:
     """用指定音色合成语音，下载到本地，返回音频文件路径。

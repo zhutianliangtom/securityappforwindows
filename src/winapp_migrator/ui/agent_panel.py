@@ -1021,8 +1021,8 @@ class _AgentSettingsDialog(QDialog):
     def _build_tts_page(self) -> QWidget:
         w = self._page("语音合成")
         lay = self._page_body(w)
-        tip = QLabel("音色选择：AI 使用 tts_speak 直接调用 DashScope API 合成语音，"
-                     "结果保存到工作目录 tts_output/。点击刷新从云端同步已创建的音色。")
+        tip = QLabel("音色选择：AI 使用 tts_speak 调用 DashScope API 流式合成语音，"
+                     "边生成边自动播放，结果保存到工作目录 tts_output/。点击刷新从云端同步已创建的音色。")
         tip.setStyleSheet(f"color: {self._DIM}; font-size: 12px;")
         tip.setWordWrap(True)
         lay.addWidget(tip)

@@ -2751,8 +2751,25 @@ class AgentPanel(QDialog):
             except RuntimeError:
                 pass
 
+    def _ensure_taskbar_entry(self):
+        """强制任务栏缩略图：带 parent 的顶层窗口在 Windows 属于 owned window，
+        默认不显示任务栏按钮；显式追加 WS_EX_APPWINDOW 扩展样式后，
+        最小化也会保留独立任务栏缩略图，可点击定位/恢复面板。"""
+        try:
+            GWL_EXSTYLE = -20
+            WS_EX_APPWINDOW = 0x00040000
+            hwnd = int(self.winId())
+            user32 = ctypes.windll.user32
+            ex = user32.GetWindowLongPtrW(hwnd, GWL_EXSTYLE)
+            if not (ex & WS_EX_APPWINDOW):
+                user32.SetWindowLongPtrW(hwnd, GWL_EXSTYLE, ex | WS_EX_APPWINDOW)
+        except Exception:
+            pass
+
     def showEvent(self, e):
         super().showEvent(e)   # 统一补丁已为 QDialog 深色化标题栏
+        # 强制任务栏缩略图（owned window 默认不显示，需手动加 WS_EX_APPWINDOW）
+        self._ensure_taskbar_entry()
         # 面板复用（关闭再打开不销毁），滚动位置不会自动重置 → 打开时自动滚到对话底部
         QTimer.singleShot(0, self._scroll_bottom)
         QTimer.singleShot(300, self._scroll_bottom)

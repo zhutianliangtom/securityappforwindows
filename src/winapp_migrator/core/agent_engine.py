@@ -33,8 +33,13 @@ _TTS_MIN_SEG = 18
 # 无句末标点时达到该长度强制切分（保证长句也能边输出边朗读）
 _TTS_MAX_SEG = 60
 
-# 上下文自动压缩触发阈值：估算 token 超过该值（约常见模型窗口的 70%）触发摘要压缩
-_COMPRESS_TOKEN_LIMIT = 70000
+# 上下文自动压缩触发阈值：估算 token 超过该值（约 128k 窗口的 80%，给
+# 响应留足空间）触发摘要压缩。中文模型实际 token 密度约 0.5-0.7/字，
+# 阈值设高避免频繁压缩打断缓存前缀。
+_COMPRESS_TOKEN_LIMIT = 100000
+
+# 压缩冷却：上次压缩后至少间隔 N 轮，避免连续压缩破坏上下文缓存
+_COMPRESS_COOLDOWN = 5
 
 # 任务清单消息标记：todo 以独立 user 消息注入对话末尾并原位替换，
 # 不写入 system prompt —— 服务端上下文缓存按消息前缀匹配，system 一旦变化
@@ -145,7 +150,7 @@ class AgentEngine:
         self.memory_enabled = memory_enabled
         self.direct = direct
         self._messages: list = []
-        self.tokens = {"prompt": 0, "completion": 0}
+        self.tokens = {"prompt": 0, "completion": 0, "cache_hit": 0, "cache_miss": 0}
         self.last_estimate = 0       # 最近一次请求前的预计算（输入 tokens）
         self.end_state = ""          # 本轮结束状态: done|stopped|error
         self._stop = threading.Event()
@@ -155,6 +160,7 @@ class AgentEngine:
         self._skills_read = set()       # 已注入/已读取规范流程的技能名
         self._skill_consulted = set()   # 已做技能规范化拦截的工具名（每工具最多注入一次）
         self._auto_skills = []          # 按用户提示词自动匹配并注入的技能名
+        self._compress_cooldown = 0     # 压缩冷却计数器（>0 时跳过压缩）
         # 自动朗读（用户要求"朗读/语音回复"时，AI 流式输出边生成边合成播放）
         self._tts_auto = False          # 本任务是否需要自动朗读
         self._tts_buf = ""              # 流式文本累积游标（未切分部分）
@@ -774,12 +780,16 @@ class AgentEngine:
                     send_msgs = self._messages
                 # tokens 预计算（含数组文本，供 token 感知压缩）
                 self.last_estimate = self._estimate_tokens()
-                # 自动压缩：token 估算超阈值（约 70% 窗口）或条数兜底（>200 条）。
-                # 压缩时让当前模型自主摘要（失败回退启发式），保留最近 60 条完整消息。
-                if self.last_estimate > _COMPRESS_TOKEN_LIMIT or len(self._messages) > 200:
+                # 自动压缩：token 估算超阈值（约 128k 窗口的 80%）且冷却期满才触发。
+                # 冷却机制避免频繁压缩打断服务端前缀缓存，保持上下文连续可缓存。
+                if self._compress_cooldown > 0:
+                    self._compress_cooldown -= 1
+                elif self.last_estimate > _COMPRESS_TOKEN_LIMIT or len(self._messages) > 200:
                     n = self._auto_compress(keep_recent=60)
-                    if n and self.on_status:
-                        self.on_status(f"上下文较长，已由模型自动摘要压缩 {n} 条旧消息")
+                    if n:
+                        self._compress_cooldown = _COMPRESS_COOLDOWN
+                        if self.on_status:
+                            self.on_status(f"上下文较长，已由模型自动摘要压缩 {n} 条旧消息")
                 result = self.llm.chat_stream(
                     send_msgs, tools=self._all_tools(), tool_choice="auto",
                     on_delta=self._on_stream_delta,

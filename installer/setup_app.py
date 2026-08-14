@@ -262,27 +262,52 @@ class InstallWorker(QThread):
 
 
 # ------------------------------------------------------------
-# 卸载工作线程
+# 卸载工作线程（实时进度 + 百分比）
 # ------------------------------------------------------------
+# 各步骤权重（总计 100%）
+_UNINSTALL_STEPS = [
+    (5,  "正在结束主程序进程"),        # 0-5%
+    (5,  "正在删除快捷方式"),          # 5-10%
+    (5,  "正在清理卸载注册表"),        # 10-15%
+    (15, "正在删除用户数据"),          # 15-30%
+    (10, "正在准备最终清理"),          # 30-40%
+    (55, "正在删除安装目录"),          # 40-95%
+    (5,  "清理完成"),                 # 95-100%
+]
+
+
 class UninstallWorker(QThread):
-    progress = pyqtSignal(str)
+    progress = pyqtSignal(int, str)   # 百分比, 状态文本
     done = pyqtSignal(bool, str)
 
     def __init__(self, install_dir: Path, parent=None):
         super().__init__(parent)
         self.install_dir = install_dir
 
+    def _emit(self, pct: int, msg: str):
+        self.progress.emit(pct, msg)
+        time.sleep(0.05)
+
     def run(self):
         try:
-            self.progress.emit("正在结束主程序进程 …")
+            base = 0
+            self._emit(base, _UNINSTALL_STEPS[0][1])
             _kill_main_app()
-            self.progress.emit("正在删除快捷方式 …")
+            base += _UNINSTALL_STEPS[0][0]
+
+            self._emit(base, _UNINSTALL_STEPS[1][1])
             remove_shortcuts()
-            self.progress.emit("正在清理卸载注册表 …")
+            base += _UNINSTALL_STEPS[1][0]
+
+            self._emit(base, _UNINSTALL_STEPS[2][1])
             remove_uninstall_reg()
-            self.progress.emit("正在删除用户数据（技能/对话/配置）…")
+            base += _UNINSTALL_STEPS[2][0]
+
+            self._emit(base, _UNINSTALL_STEPS[3][1])
             remove_user_data()
-            self.progress.emit("正在把卸载器搬运到临时目录 …")
+            base += _UNINSTALL_STEPS[3][0]
+
+            self._emit(base, _UNINSTALL_STEPS[4][1])
             temp_copy = Path(tempfile.gettempdir()) / f"uninstall_{APP_NAME}_{os.getpid()}.exe"
             shutil.copy2(sys.executable, temp_copy)
             subprocess.Popen(
@@ -290,17 +315,37 @@ class UninstallWorker(QThread):
                 creationflags=subprocess.CREATE_NO_WINDOW,
                 close_fds=True,
             )
-            self.progress.emit("正在删除安装目录 …")
-            # 必须等 resume 进程彻底删完安装目录才算完成（轮询最长 90 秒），
-            # 目录消失后窗口才允许关闭 → 卸载无残留
+            base += _UNINSTALL_STEPS[4][0]
+
+            self._emit(base, _UNINSTALL_STEPS[5][1])
+            step_pct = _UNINSTALL_STEPS[5][0]
             deadline = time.time() + 90
+            start = time.time()
             while time.time() < deadline and self.install_dir.exists():
-                time.sleep(1)
+                elapsed = time.time() - start
+                sub_pct = min(elapsed / 30.0, 1.0) * 0.8
+                self._emit(int(base + step_pct * sub_pct),
+                           f"正在删除安装目录… ({int(elapsed)}s)")
+                time.sleep(0.5)
             if self.install_dir.exists():
-                raise RuntimeError("安装目录删除超时，请手动删除残留目录")
-            self.progress.emit("清理完成")
+                self._emit(int(base + step_pct * 0.9), "强制清理残留目录…")
+                try:
+                    subprocess.Popen(
+                        f'ping -n 4 127.0.0.1 > nul & rd /s /q "{self.install_dir}"',
+                        shell=True, creationflags=subprocess.CREATE_NO_WINDOW, close_fds=True,
+                    )
+                except OSError:
+                    pass
+                for _ in range(10):
+                    time.sleep(1)
+                    if not self.install_dir.exists():
+                        break
+                if self.install_dir.exists():
+                    raise RuntimeError("安装目录删除超时，请手动删除残留目录")
+
+            self._emit(100, _UNINSTALL_STEPS[6][1])
             self.done.emit(True, str(temp_copy))
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             self.done.emit(False, str(e))
 
 

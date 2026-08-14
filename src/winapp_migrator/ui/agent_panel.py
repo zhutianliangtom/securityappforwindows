@@ -37,7 +37,7 @@ from PyQt6.QtWidgets import (
     QApplication, QStyle, QListWidget, QGraphicsOpacityEffect,
     QRadioButton, QCheckBox, QListWidgetItem,
     QStackedWidget, QMenu, QFileDialog, QPlainTextEdit, QSlider,
-    QLayout, QWidgetItem, QInputDialog,
+    QLayout, QWidgetItem, QInputDialog, QFrame,
 )
 
 from winapp_migrator.core import agent_llm, agent_engine, agent_skills, agent_sandbox, agent_tools, agent_screen, agent_tts
@@ -2285,6 +2285,101 @@ class _POINT(ctypes.Structure):
     _fields_ = [("x", ctypes.c_long), ("y", ctypes.c_long)]
 
 
+class TodosPanel(QWidget):
+    """左侧 TODOS 可视化面板：AI 使用 update_todo / list_todo 工具时显示任务进度。
+    内嵌于 AgentPanel 布局（非独立窗口 → 天然无最小化/最大化/关闭按钮）。
+    纯黑+淡灰+白+深蓝四色极简风格，无 emoji，状态用几何标记区分。"""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setObjectName("todosPanel")
+        self.setFixedWidth(248)
+        self.setStyleSheet(
+            f"QWidget#todosPanel {{ background: {PANEL};"
+            f"border: 1px solid {ACCENT}; border-radius: 10px; }}")
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(12, 12, 12, 10)
+        lay.setSpacing(8)
+
+        header = QHBoxLayout()
+        header.setSpacing(8)
+        title = QLabel("任务清单")
+        title.setStyleSheet(f"color: {TEXT}; font-size: 13px; font-weight: 800;")
+        header.addWidget(title)
+        self._count = QLabel("")
+        self._count.setStyleSheet(f"color: {TEXT_DIM}; font-size: 11px;")
+        header.addWidget(self._count)
+        header.addStretch(1)
+        lay.addLayout(header)
+
+        self._scroll = QScrollArea()
+        self._scroll.setWidgetResizable(True)
+        self._scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self._scroll.setStyleSheet(
+            "QScrollArea { background: transparent; border: none; }"
+            "QScrollBar:vertical { background: #000000; width: 6px; }"
+            "QScrollBar::handle:vertical { background: #000000;"
+            "border-radius: 3px; min-height: 24px; }"
+            "QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical"
+            "{ background: #000000; width: 0px; height: 0px; }"
+            "QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical"
+            "{ background: #000000; }")
+        self._list = QWidget()
+        self._list.setStyleSheet("background: transparent;")
+        self._list_lay = QVBoxLayout(self._list)
+        self._list_lay.setContentsMargins(2, 0, 2, 0)
+        self._list_lay.setSpacing(6)
+        self._list_lay.addStretch(1)
+        self._scroll.setWidget(self._list)
+        lay.addWidget(self._scroll, 1)
+        self.update_todos([])
+
+    def update_todos(self, todos: list):
+        """全量刷新任务列表；无任务时自动隐藏面板"""
+        while self._list_lay.count() > 1:
+            item = self._list_lay.takeAt(0)
+            w = item.widget()
+            if w is not None:
+                w.deleteLater()
+        todos = [t for t in todos if isinstance(t, dict) and str(t.get("title") or "").strip()]
+        if todos:
+            for t in todos:
+                self._list_lay.insertWidget(self._list_lay.count() - 1, self._row(t))
+        else:
+            empty = QLabel("暂无任务")
+            empty.setStyleSheet(f"color: {TEXT_DIM}; font-size: 12px;")
+            empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            self._list_lay.insertWidget(0, empty)
+        done = sum(1 for t in todos if t.get("status") == "completed")
+        self._count.setText(f"{done}/{len(todos)}" if todos else "")
+        self.setVisible(bool(todos))
+
+    def _row(self, t: dict) -> QWidget:
+        title = str(t.get("title") or "")
+        st = str(t.get("status") or "pending")
+        row = QWidget()
+        row.setStyleSheet("background: transparent;")
+        rl = QHBoxLayout(row)
+        rl.setContentsMargins(4, 2, 4, 2)
+        rl.setSpacing(8)
+        mark = QLabel("●")
+        mark.setFixedWidth(14)
+        if st == "completed":
+            mark.setText("✓")
+            mark.setStyleSheet(f"color: {TEXT_DIM}; font-size: 12px;")
+        elif st == "in_progress":
+            mark.setStyleSheet(f"color: {ACCENT_HOVER}; font-size: 12px;")
+        else:
+            mark.setStyleSheet(f"color: {TEXT_DIM}; font-size: 12px;")
+        rl.addWidget(mark, 0, Qt.AlignmentFlag.AlignTop)
+        lbl = QLabel(_esc(title))
+        lbl.setWordWrap(True)
+        color = TEXT_DIM if st == "completed" else TEXT
+        lbl.setStyleSheet(f"color: {color}; font-size: 12px;")
+        rl.addWidget(lbl, 1)
+        return row
+
+
 class AgentPanel(QDialog):
     delta_signal = pyqtSignal(str)
     status_signal = pyqtSignal(str)
@@ -2498,6 +2593,17 @@ class AgentPanel(QDialog):
 
         root.addLayout(top)
 
+        # 主体：左侧 TODOS 可视化面板 + 右侧聊天区。
+        # TODOS 内嵌于布局（非独立窗口 → 无最小化/最大化/关闭按钮），
+        # 默认隐藏，AI 使用 update_todo / list_todo 工具时自动显示。
+        body = QHBoxLayout()
+        body.setSpacing(10)
+        self.todos_panel = TodosPanel(self)
+        self.todos_panel.hide()
+        body.addWidget(self.todos_panel, 0)
+        right = QVBoxLayout()
+        right.setSpacing(10)
+
         # 聊天区（气泡）与欢迎页（无对话时居中介绍 AI 功能）用堆叠切换
         self.msg_area = QScrollArea()
         self.msg_area.setWidgetResizable(True)
@@ -2542,7 +2648,7 @@ class AgentPanel(QDialog):
         self._attach_bar.setStyleSheet("background: transparent;")
         self._attach_lay = FlowLayout(self._attach_bar, margin=0, spacing=8)
         self._attach_bar.setVisible(False)
-        root.addWidget(self._attach_bar)
+        right.addWidget(self._attach_bar)
 
         # 输入栏
         bottom = QHBoxLayout()
@@ -2599,7 +2705,9 @@ class AgentPanel(QDialog):
         self.action_btn.setToolTip("发送")
         self.action_btn.clicked.connect(self._on_action_clicked)
         bottom.addWidget(self.action_btn)
-        root.addLayout(bottom)
+        right.addLayout(bottom)
+        body.addLayout(right, 1)
+        root.addLayout(body, 1)
         add_brand_footer(self)
 
     def _connect_signals(self):
@@ -3218,7 +3326,8 @@ class AgentPanel(QDialog):
             return (f'<div style="color:{ACCENT};font-size:{f_op}px;'
                     f'font-family:Consolas;margin-top:16px;">{seg["html"]}</div>')
         if t == "result":
-            # 执行结果输出完成即默认折叠，点击展开/收起（带段索引，支持同气泡多条命令结果独立折叠）
+            # 命令执行结果先输出（默认展开，用户可直接看到），完成后可手动收起/展开
+            #（带段索引，支持同气泡多条命令结果独立折叠）
             if seg.get("collapsed"):
                 return (
                     f'<div style="color:{TEXT_DIM};font-size:{f_sm}px;margin-top:2px;">'
@@ -4670,11 +4779,14 @@ class AgentPanel(QDialog):
         self._stop_send_spin()
         self._last_activity = time.time()
         self._ensure_ai_bubble()
+        # AI 使用任务清单工具时，同步左侧 TODOS 可视化面板（无任务自动隐藏）
+        if name in ("update_todo", "list_todo"):
+            self.todos_panel.update_todos(agent_tools.load_todos())
         shown = (text or "").strip()
         if len(shown) > 20000:
             shown = shown[:20000] + " …（输出过长已截断显示，完整内容已返回模型）"
         shown = _esc(shown).replace("\n", "<br/>")
-        self._segments.append({"type": "result", "html": shown, "collapsed": True})
+        self._segments.append({"type": "result", "html": shown, "collapsed": False})
         # 截图段（AI 主动截图：browser_snapshot 等工具返回的页面截图）渲染进主对话气泡
         for u in images or []:
             self._segments.append({"type": "image", "url": u, "caption": "已截屏"})

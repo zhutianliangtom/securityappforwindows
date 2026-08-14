@@ -463,6 +463,7 @@ class AgentEngine:
         self._stop.clear()
         self._skills_read.clear()      # 每轮任务重置技能读取/注入状态
         self._skill_consulted.clear()
+        self._check_cmd_count = 0      # 每轮重置 check_command 轮询计数（防止无限轮询）
         self._thread = threading.Thread(target=self.run,
                                         args=(user_input, agent_name, images, skills),
                                         daemon=True)
@@ -512,6 +513,14 @@ class AgentEngine:
 
     def _execute(self, name: str, args: dict, allow_dangerous: bool = False) -> dict:
         """执行内置或 MCP 工具，返回 {"text", "images"}"""
+        if name == "check_command":
+            # 防止 AI 在等待长命令/检查卸载残留时无限轮询 check_command 陷入死循环：
+            # 单轮任务最多轮询 5 次，之后强制要求停止轮询并直接收尾
+            self._check_cmd_count = getattr(self, "_check_cmd_count", 0) + 1
+            if self._check_cmd_count > 5:
+                return {"text": "[轮询限制] 已连续检查命令状态 5 次仍未结束。"
+                                "请停止轮询 check_command，按命令超时处理并直接给出结论或执行下一步，"
+                                "不要再次调用 check_command。", "images": []}
         if name == "tts_speak":
             # AI 主动调用朗读工具：停掉引擎的自动分段朗读，避免与 tts_speak 双重播放
             self._tts_stop_read()

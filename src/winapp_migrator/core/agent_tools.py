@@ -1215,6 +1215,44 @@ def _ask_user(args: dict, ask_user_cb) -> dict:
         return _blocked(f"[ask_user] 提问失败: {e}")
 
 
+def _missing_required(name: str, args: dict) -> list:
+    """按工具 schema 的 required 字段校验必填参数（缺失/空值视为缺）。
+    缺参直接拦截返回提示，避免空参误调用导致返工/失败。"""
+    for t in TOOLS:
+        fn = t.get("function") or {}
+        if fn.get("name") != name:
+            continue
+        req = ((fn.get("parameters") or {}).get("required")) or []
+        return [str(r) for r in req if not args.get(r)]
+    return []
+
+
+def _browser_retry_call(fn):
+    """浏览器操作加固：fn 抛出「断开/崩溃」类异常时，重建浏览器实例后重试一次。
+    页面崩溃/标签被关/连接断开等通常靠一次重建即可恢复，避免任务中断。
+    返回 (ok, value)：ok=True 时 value 为 fn() 结果；ok=False 时 value 为错误文本。"""
+    import re as _re
+
+    def _run():
+        try:
+            return True, fn()
+        except Exception as e:   # noqa: BLE001
+            return False, str(e)
+
+    ok, val = _run()
+    if ok:
+        return ok, val
+    if not _re.search(r"(disconnect|closed|crash|Target closed|Cannot find context|connection)",
+                      val, _re.I):
+        return ok, val   # 非断开类错误（如元素找不到/业务失败）：不重试，交由模型换方案
+    try:
+        agent_browser.controller().stop()   # 释放旧实例后重建
+    except Exception:
+        pass
+    time.sleep(0.6)
+    return _run()
+
+
 def execute_tool(name: str, args: dict, allow_dangerous: bool = False,
                  ask_user_cb=None) -> dict:
     """执行工具，返回 {"text", "images"}。
@@ -1224,6 +1262,10 @@ def execute_tool(name: str, args: dict, allow_dangerous: bool = False,
     ask_user_cb: Callable[[dict], str] 提问回调（阻塞式，返回用户回答文本）。
     """
     args = args or {}
+    missing = _missing_required(name, args)
+    if missing:
+        return _blocked(f"[工具参数缺失] {name} 缺少必填参数："
+                        f"{', '.join(missing)}，请补充后重新调用")
     if name == "ask_user":
         return _ask_user(args, ask_user_cb)
     if name in SUB_AGENT_TOOLS:
@@ -1315,65 +1357,83 @@ def execute_tool(name: str, args: dict, allow_dangerous: bool = False,
                 str(args.get("engine", "")), bool(args.get("headless", False)))
             return {"text": msg, "images": []}
         if name == "browser_navigate":
-            ok, msg = agent_browser.controller().navigate(str(args.get("url", "")))
-            if not ok:
-                return {"text": f"[browser_navigate] {msg}", "images": []}
-            try:
-                shot = agent_browser.controller().screenshot()
-                return {"text": msg, "images": [shot]}
-            except Exception:
-                return {"text": msg, "images": []}
+            def _nav():
+                ok, msg = agent_browser.controller().navigate(str(args.get("url", "")))
+                if not ok:
+                    return {"text": f"[browser_navigate] {msg}", "images": []}
+                try:
+                    shot = agent_browser.controller().screenshot()
+                    return {"text": msg, "images": [shot]}
+                except Exception:
+                    return {"text": msg, "images": []}
+            ok, val = _browser_retry_call(_nav)
+            return val if ok else {"text": f"[browser_navigate] {val}", "images": []}
         if name == "browser_snapshot":
-            ctl = agent_browser.controller()
-            try:
-                shot = ctl.screenshot()
-                elems = ctl.summarize()
-            except Exception as e:
-                return {"text": f"[browser_snapshot] {e}", "images": []}
-            return {"text": "页面元素清单（按 [编号] 或文字引用操作）：\n" + elems,
-                    "images": [shot]}
+            def _snap():
+                ctl = agent_browser.controller()
+                return {"text": "页面元素清单（按 [编号] 或文字引用操作）：\n" + ctl.summarize(),
+                        "images": [ctl.screenshot()]}
+            ok, val = _browser_retry_call(_snap)
+            if not ok:
+                return {"text": f"[browser_snapshot] {val}", "images": []}
+            return val
         if name == "browser_click":
-            ctl = agent_browser.controller()
             eid = args.get("id")
             text = str(args.get("text", "")).strip()
-            ok, msg, shot = ctl.click(
-                eid=agent_sandbox.to_int(eid) if eid is not None else None,
-                text=text or None,
-                button=str(args.get("button", "left")))
+            def _clk():
+                ctl = agent_browser.controller()
+                return ctl.click(eid=agent_sandbox.to_int(eid) if eid is not None else None,
+                                 text=text or None,
+                                 button=str(args.get("button", "left")))
+            ok, val = _browser_retry_call(_clk)
             if not ok:
+                return {"text": f"[browser_click] {val}", "images": []}
+            ok2, msg, shot = val
+            if not ok2:
                 return {"text": f"[browser_click] {msg}", "images": []}
             return {"text": msg, "images": [shot] if shot else []}
         if name == "browser_type":
-            ctl = agent_browser.controller()
             eid = args.get("id")
-            ok, msg, shot = ctl.type_text(
-                str(args.get("text", "")),
-                eid=agent_sandbox.to_int(eid) if eid is not None else None,
-                target=str(args.get("target", "")).strip() or None)
+            def _typ():
+                ctl = agent_browser.controller()
+                return ctl.type_text(
+                    str(args.get("text", "")),
+                    eid=agent_sandbox.to_int(eid) if eid is not None else None,
+                    target=str(args.get("target", "")).strip() or None)
+            ok, val = _browser_retry_call(_typ)
             if not ok:
+                return {"text": f"[browser_type] {val}", "images": []}
+            ok2, msg, shot = val
+            if not ok2:
                 return {"text": f"[browser_type] {msg}", "images": []}
             return {"text": msg, "images": [shot] if shot else []}
         if name == "browser_eval":
-            try:
-                res = agent_browser.controller().eval(str(args.get("js", "")))
-            except Exception as e:
-                return {"text": f"[browser_eval] {e}", "images": []}
-            return {"text": res.get("text", ""), "images": []}
-        if name == "browser_html":
-            try:
-                res = agent_browser.controller().html(str(args.get("selector", "")))
-            except Exception as e:
-                return {"text": f"[browser_html] {e}", "images": []}
-            return {"text": res.get("text", ""), "images": []}
-        if name == "browser_scroll":
-            ctl = agent_browser.controller()
-            eid = args.get("id")
-            ok, msg, shot = ctl.scroll(
-                str(args.get("direction", "down")),
-                agent_sandbox.to_int(args.get("amount", 0)) or None,
-                eid=agent_sandbox.to_int(eid) if eid is not None else None,
-                selector=str(args.get("selector", "")).strip() or None)
+            def _evl():
+                return agent_browser.controller().eval(str(args.get("js", ""))).get("text", "")
+            ok, val = _browser_retry_call(_evl)
             if not ok:
+                return {"text": f"[browser_eval] {val}", "images": []}
+            return {"text": val, "images": []}
+        if name == "browser_html":
+            def _html():
+                return agent_browser.controller().html(str(args.get("selector", ""))).get("text", "")
+            ok, val = _browser_retry_call(_html)
+            if not ok:
+                return {"text": f"[browser_html] {val}", "images": []}
+            return {"text": val, "images": []}
+        if name == "browser_scroll":
+            eid = args.get("id")
+            def _scr():
+                ctl = agent_browser.controller()
+                return ctl.scroll(str(args.get("direction", "down")),
+                                  agent_sandbox.to_int(args.get("amount", 0)) or None,
+                                  eid=agent_sandbox.to_int(eid) if eid is not None else None,
+                                  selector=str(args.get("selector", "")).strip() or None)
+            ok, val = _browser_retry_call(_scr)
+            if not ok:
+                return {"text": f"[browser_scroll] {val}", "images": []}
+            ok2, msg, shot = val
+            if not ok2:
                 return {"text": f"[browser_scroll] {msg}", "images": []}
             return {"text": msg, "images": [shot] if shot else []}
         if name == "browser_close":
@@ -2052,17 +2112,32 @@ def _http_request(url: str, timeout: int = 15, max_bytes: int = 512 * 1024,
         data = body.encode("utf-8")
         hdrs.setdefault("Content-Type", "application/json")
     req = urllib.request.Request(url, data=data, headers=hdrs, method=method)
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
-        raw = resp.read(max_bytes + 1)
-        # 编码探测 1：响应头 Content-Type charset
-        charset = None
+    # 网络抖动 / 5xx / 429 自动指数退避重试（最多 2 次），提升联网任务成功率；
+    # 4xx（403/404 等）与业务性错误不重试，避免无意义重复请求
+    import time as _time
+    raw, charset = None, None
+    for _attempt in range(3):
         try:
-            m = _re.search(r"charset=([\w-]+)",
-                           resp.headers.get("Content-Type", ""), _re.I)
-            if m:
-                charset = m.group(1)
-        except Exception:
-            pass
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                raw = resp.read(max_bytes + 1)
+                # 编码探测 1：响应头 Content-Type charset
+                charset = None
+                try:
+                    m = _re.search(r"charset=([\w-]+)",
+                                   resp.headers.get("Content-Type", ""), _re.I)
+                    if m:
+                        charset = m.group(1)
+                except Exception:
+                    pass
+            break
+        except (urllib.error.URLError, urllib.error.HTTPError, OSError) as e:
+            code = getattr(e, "code", None)
+            retryable = code in (429, 500, 502, 503, 504) or code is None
+            if _attempt >= 2 or not retryable:
+                raise
+            _time.sleep(0.8 * (2 ** _attempt))
+    if raw is None:
+        raise urllib.error.URLError("请求失败")
     if len(raw) > max_bytes:
         raw = raw[:max_bytes]
     # 少数服务器无视 Accept-Encoding 仍返回 gzip：按魔数判断解压

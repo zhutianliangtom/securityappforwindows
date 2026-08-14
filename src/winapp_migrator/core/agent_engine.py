@@ -50,6 +50,63 @@ _TODO_MARK = "【当前任务清单】"
 # user 消息注入并原位替换，system 保持稳定 → 前缀缓存持续命中（与 _TODO_MARK 同理）
 _SKILL_MARK = "【任务技能规范】"
 
+# ---- 按任务裁剪工具集（P0）----
+# 核心常备工具：几乎任何任务都可能用到，永远保留
+_CORE_TOOLS = frozenset({
+    "read_file", "write_file", "edit_file", "search_replace", "undo_file",
+    "delete_file", "list_directory", "run_command", "check_command",
+    "find_app", "search_files", "web_search", "web_fetch", "fast_download",
+    "system_info", "get_time", "env_var", "ask_user", "clipboard",
+    "save_memory", "load_memory", "update_todo", "list_todo", "git_info",
+    "explore_project",
+})
+# 任务类别 → (触发词, 额外暴露的工具)。触发词命中即裁剪到「核心+该类」，
+# 减小 schema token、降低选错工具概率；未命中任何类别则保留全部（保守）。
+_TASK_GROUPS = [
+    ("browser",
+     ("打开浏览器", "打开网页", "打开网站", "浏览网页", "网页操作", "网页",
+      "登录", "点赞", "点视频", "看视频", "刷视频", "刷网页", "抓取网页",
+      "上网站", "进网站", "填表", "打卡", "点一下", "帮我打开", "帮我点"),
+     frozenset({"browser_open", "browser_navigate", "browser_snapshot", "browser_click",
+                "browser_type", "browser_scroll", "browser_eval", "browser_html",
+                "browser_close", "browser_tabs", "browser_switch_tab"})),
+    ("doc",
+     ("ppt", "pptx", "powerpoint", "演示文稿", "word", "docx", "文档", "excel",
+      "xlsx", "表格", "报告", "简历", "计划书", "感言", "总结", "方案",
+      "毕业论文", "宣传单", "邀请函", "收款记录", "清单", "三件套"),
+     frozenset({"create_docx", "create_pptx", "create_xlsx", "extract_text",
+                "generate_image"})),
+    ("image",
+     ("图片", "配图", "插图", "生成图", "海报图", "logo", "图像"),
+     frozenset({"generate_image"})),
+    ("sys",
+     ("迁移", "卸载", "内存优化", "优化内存", "安装软件", "系统信息", "开机自启"),
+     frozenset({"migrate_app", "uninstall_app", "optimize_memory", "new_project"})),
+    ("subagent",
+     ("并行", "并发", "大规模搜索", "分布式", "同时处理", "多任务"),
+     frozenset({"dispatch_sub_agents", "search_large"})),
+    ("skill",
+     ("创建技能", "新技能", "自定义技能", "下载技能", "安装技能"),
+     frozenset({"create_skill"})),
+    ("tts",
+     ("朗读", "语音回复", "读出来", "听一下", "配音"),
+     frozenset({"tts_speak"})),
+]
+_TASK_GROUP_TOOLS = {g: tools for g, _kw, tools in _TASK_GROUPS}
+
+# 显式规划提示：拼到每条任务的用户消息末尾，强化「先规划再动手、结束后自检完成度」
+_PLAN_HINT = ("\n\n【执行要求】请先输出简要执行计划（编号步骤）再开始调用工具；"
+              "每步执行后检查结果，最后对照计划确认任务已全部完成，未完成继续补做。")
+
+
+def _detect_task_groups(text: str):
+    """按用户输入匹配任务类别，返回命中的组名列表；未命中任何类别返回 None（不裁剪）。"""
+    t = (text or "").lower()
+    if not t:
+        return None
+    hit = [g for g, kws, _tools in _TASK_GROUPS if any(k in t for k in kws)]
+    return hit or None
+
 # 对话上下文持久化路径
 CONTEXT_FILE = agent_skills.CONFIG_DIR / "context.json"
 
@@ -164,6 +221,7 @@ class AgentEngine:
         self._skills_read = set()       # 已注入/已读取规范流程的技能名
         self._skill_consulted = set()   # 已做技能规范化拦截的工具名（每工具最多注入一次）
         self._auto_skills = []          # 按用户提示词自动匹配并注入的技能名
+        self._task_groups = None        # 按任务裁剪的工具类别（run 时按 user_input 计算；None=不裁剪）
         self._compress_cooldown = 0     # 压缩冷却计数器（>0 时跳过压缩）
         # 自动朗读（用户要求"朗读/语音回复"时，AI 流式输出边生成边合成播放）
         self._tts_auto = False          # 本任务是否需要自动朗读
@@ -417,6 +475,20 @@ class AgentEngine:
     # ---------- 工具 ----------
     def _all_tools(self) -> list:
         tools = list(agent_tools.tool_schemas())
+        # 任务裁剪：user_input 明确命中某任务类别时，只暴露「核心 + 命中类别」工具，
+        # 显著减小 schema token（首包更小）并降低模型选错工具概率；
+        # 未命中任何类别则保留全部（保守，避免误裁影响能力）。
+        if self._task_groups:
+            keep = set(_CORE_TOOLS)
+            for g in self._task_groups:
+                keep |= _TASK_GROUP_TOOLS.get(g, frozenset())
+            # 命中技能时保留其覆盖的底层工具（技能路由硬拦截依赖这些工具可用）
+            if self._auto_skills:
+                names = [t["function"]["name"] for t in tools]
+                for tool, skills in agent_skills.skills_covering_tools(names).items():
+                    if any(s in self._auto_skills for s in skills):
+                        keep.add(tool)
+            tools = [t for t in tools if t["function"]["name"] in keep]
         if self.auto_vd:
             # 自动虚拟桌面接管时，不再暴露 virtual_desktop 工具（避免 AI 重复切桌面）
             tools = [t for t in tools if t["function"]["name"] != "virtual_desktop"]
@@ -750,6 +822,7 @@ class AgentEngine:
         self._rules_confirmed = False   # 每个新任务重新强制规则确认
         # 按用户提示词自动匹配技能并注入：简单提示词（如"生成一个毕业感言PPT"）也先走 skill 流程
         self._auto_skills = agent_skills.auto_skill_names(user_input)
+        self._task_groups = _detect_task_groups(user_input)
         if self._auto_skills and self.on_status:
             self.on_status(f"正在调用技能: {', '.join(self._auto_skills)}")
             self.on_status(f"技能已调用: {', '.join(self._auto_skills)}")
@@ -776,7 +849,8 @@ class AgentEngine:
         else:
             self._messages[0]["content"] = self._system_prompt(agent_name)
         self._messages.append({"role": "user",
-                               "content": agent_llm.build_content(user_input, images)})
+                               "content": agent_llm.build_content(user_input + _PLAN_HINT,
+                                                                  images)})
         # 静默虚拟桌面：任务开始切到独立桌面，结束自动返回主桌面（finally 兜底所有结束路径）
         switched = False
         if self.auto_vd:

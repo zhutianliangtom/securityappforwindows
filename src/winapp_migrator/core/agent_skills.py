@@ -1205,4 +1205,9 @@ def build_system_prompt(agent_name: str = "", extra_skills: list = None,
     extra_prompt = (settings.get("custom_system_prompt") or "").strip()
     if extra_prompt:
         prompt += "\n\n用户自定义系统提示词补充：\n" + extra_prompt
+    # 显式规划阶段：先规划再动手、执行后对照计划自检完成度，提升多步任务完成质量
+    prompt += ("\n\n任务执行规范：动手前先规划——复杂/多步骤任务先输出简要执行计划"
+               "（编号列出步骤）再逐步调用工具完成；执行过程中每步检查结果，"
+               "结束后对照计划确认目标是否全部达成，未完成则继续补做；"
+               "简单任务先概述一句计划再直接执行，不要只停留在计划上。")
     return prompt

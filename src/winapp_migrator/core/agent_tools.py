@@ -934,63 +934,46 @@ SUB_AGENT_TOOLS = ("dispatch_sub_agents", "explore_project", "search_large")
 
 
 # ------------------------------------------------------------
-# TTS 播放器（整句累积 + 后台播放线程）
+# TTS 播放器（整句累积 + 后台播放线程，Windows 系统原生 winsound 播放）
 #
 # 实现说明：
-# 1. pygame 的 Channel.queue() 多段排队实测不可靠（只播第一段即停）；
-# 2. 固定时长切块 + 块尾淡出会产生周期性"音量坑"（每 0.5s 一次噗/咚声）。
-# 因此采用最干净的方案：合成线程把整句 PCM 累积进缓冲，句合成完成后
-# 通过 _tts_play_flush() 通知播放线程一次性 play 整句；句与句之间是
-# 合成自然停顿，句内无任何切块 → 无爆音、无咚咚声。
+# 1. 合成线程把整句 mono PCM(24k/16bit) 累积进缓冲，句合成完成后
+#    flush 通知播放线程一次性播放整句（句内无切块，无爆音）；
+# 2. 播放线程把整句 PCM 做句首淡入+句尾淡出后写临时 WAV 文件，
+#    用 winsound.PlaySound 系统原生解码播放（WASAPI）。
+#    不用 pygame/SDL：其 mixer 初始化与 24kHz 重采样在 Windows 上
+#    反复产生设备打开爆音/周期性咚咚声，系统原生播放最干净。
 # ------------------------------------------------------------
 _TTS_PLAYER_LOCK = threading.Lock()
-_TTS_MIXER_OK = False
-_TTS_CHANNEL = None
 _TTS_BUF = bytearray()          # 当前句 mono PCM 累积（24kHz/16bit）
 _TTS_STOP_EVT = threading.Event()  # 播放线程停止（用户停止/合成失败）
 _TTS_DONE_EVT = threading.Event()  # 合成方声明无更多数据（播完缓冲后退出）
 _TTS_FLUSH_EVT = threading.Event()  # 合成方提示"有整句可播"
-_TTS_SEG_START = True           # 即将从静默恢复播放（句首淡入防爆音）
+_TTS_SEG_START = True           # 保留兼容：每句播放统一做淡入淡出
 _TTS_PLAYER_THREAD = None
-_TTS_FADE = 240                 # 句首淡入 10ms @24kHz（240 样本）
 
 
 def _tts_play_start() -> bool:
-    """开始流式播放：初始化 mixer（幂等）、清空缓冲并启动播放线程。
-    返回是否可播放（True=播放可用；False=pygame 不可用/初始化失败）。"""
-    global _TTS_MIXER_OK, _TTS_CHANNEL, _TTS_BUF, _TTS_SEG_START
-    global _TTS_STOP_EVT, _TTS_DONE_EVT, _TTS_FLUSH_EVT, _TTS_PLAYER_THREAD
+    """开始播放（winsound 系统原生，无需初始化）：停掉上次残音并启动播放线程。
+    返回 True 表示播放可用。"""
+    global _TTS_BUF, _TTS_SEG_START, _TTS_STOP_EVT, _TTS_DONE_EVT, _TTS_FLUSH_EVT
+    global _TTS_PLAYER_THREAD
     with _TTS_PLAYER_LOCK:
-        if not _TTS_MIXER_OK:
-            try:
-                import pygame
-                # 统一请求双声道：SDL 常把单声道请求强制回退为 stereo，
-                # 主动用 stereo 可保证 mixer.get_init() 声道数稳定，播放端按该声道扩展 PCM。
-                # buffer 用 16384 而非默认 4096：大缓冲降低 SDL 音频回调 underrun
-                # 概率（合成线程在跑网络/解码时 CPU 忙，过小缓冲会产生 click/爆音）
-                pygame.mixer.pre_init(24000, -16, 2, 16384)
-                pygame.mixer.init()
-                _TTS_MIXER_OK = True
-            except Exception:
-                _TTS_MIXER_OK = False
-                return False
+        _TTS_BUF.clear()
+        _TTS_SEG_START = True
+        _TTS_STOP_EVT.clear()
+        _TTS_DONE_EVT.clear()
+        _TTS_FLUSH_EVT.clear()
         try:
-            import pygame
-            if _TTS_CHANNEL is None:
-                _TTS_CHANNEL = pygame.mixer.Channel(0)
-            _TTS_CHANNEL.stop()
-            _TTS_BUF.clear()
-            _TTS_SEG_START = True
-            _TTS_STOP_EVT.clear()
-            _TTS_DONE_EVT.clear()
-            _TTS_FLUSH_EVT.clear()
-            if _TTS_PLAYER_THREAD is None or not _TTS_PLAYER_THREAD.is_alive():
-                _TTS_PLAYER_THREAD = threading.Thread(
-                    target=_tts_player_loop, daemon=True)
-                _TTS_PLAYER_THREAD.start()
+            import winsound
+            winsound.PlaySound(None, winsound.SND_PURGE)   # 停掉上次未播完的残音
         except Exception:
-            return False
-        return True
+            pass
+        if _TTS_PLAYER_THREAD is None or not _TTS_PLAYER_THREAD.is_alive():
+            _TTS_PLAYER_THREAD = threading.Thread(
+                target=_tts_player_loop, daemon=True)
+            _TTS_PLAYER_THREAD.start()
+    return True
 
 
 def _tts_play_segment_start():
@@ -1002,7 +985,7 @@ def _tts_play_segment_start():
 
 def _tts_play_chunk(pcm: bytes):
     """把合成返回的 PCM 分片（mono 24kHz/16bit，已剥 WAV 头）追加进当前句缓冲"""
-    if not pcm or not _TTS_MIXER_OK:
+    if not pcm:
         return
     with _TTS_PLAYER_LOCK:
         if _TTS_STOP_EVT.is_set():
@@ -1020,10 +1003,15 @@ def _tts_play_flush():
 
 def _tts_player_loop():
     """后台播放线程：只在合成方 flush 提示"整句就绪"时取缓冲整句播放；
-    否则空等。绝不能仅因缓冲非空就取走——合成是流式的，chunk 逐个到达，
-    若不等 flush 会把一句切成多个小段播放，段间爆音形成周期性"咚咚"声。"""
-    global _TTS_SEG_START
+    否则空等。合成是流式的，chunk 逐个到达，若不等 flush 会把一句切成
+    多个小段播放，段间爆音形成周期性"咚咚"声。
+    播放方式：整句 PCM 做句首淡入+句尾淡出后写临时 WAV，用 winsound
+    系统原生同步播放（WASAPI 解码，无 SDL 重采样/设备初始化爆音）。"""
+    import os as _os
+    import tempfile as _tmp
     import time as _time
+    import winsound
+    seq = 0
     while not _TTS_STOP_EVT.is_set():
         _TTS_FLUSH_EVT.wait(timeout=0.1)
         if _TTS_STOP_EVT.is_set():
@@ -1042,49 +1030,20 @@ def _tts_player_loop():
             blk = bytes(_TTS_BUF)
             _TTS_BUF.clear()
             _TTS_FLUSH_EVT.clear()
-            seg_start = _TTS_SEG_START
-            _TTS_SEG_START = False
         try:
-            import pygame, struct, array
-            init = pygame.mixer.get_init()
-            out_ch = init[2] if init and len(init) >= 3 else 1
-            if out_ch > 1:
-                a = array.array("h", blk)
-                out = array.array("h")
-                for x in a:
-                    for _ in range(out_ch):
-                        out.append(x)
-                blk = out.tobytes()
-            if seg_start:
-                # 句首淡入：消除从静默开始播放的 click/爆音
-                a = array.array("h", blk)
-                fade = min(_TTS_FADE, len(a))
-                for i in range(fade):
-                    a[i] = int(a[i] * i / fade)
-                blk = a.tobytes()
-            # 句尾淡出：pygame 播到 Sound 末尾是硬截断，若句尾波形非零会突然
-            # 停止产生"咚"的 pop 爆音；末尾线性衰减到 0 消除截断爆音。
-            # 注意乘数必须使最后一个样本为 0（i=0 → 0）：此前写成 (fade-i)/fade
-            # 把末尾样本留在满幅、开头反而压到近 0，等于做成了淡入，
-            # 硬截断爆音始终存在（每句结尾一声"咚"）。
-            a = array.array("h", blk)
-            n_s = len(a)
-            fade = min(_TTS_FADE, n_s)
-            for i in range(fade):
-                a[n_s - 1 - i] = int(a[n_s - 1 - i] * i / fade)
-            blk = a.tobytes()
-            wav = struct.pack("<4sI4s4sIHHIIHH4sI",
-                              b"RIFF", 36 + len(blk), b"WAVE", b"fmt ", 16,
-                              1, out_ch, 24000, 24000 * out_ch * 2, out_ch * 2, 16,
-                              b"data", len(blk)) + blk
-            snd = pygame.mixer.Sound(buffer=wav)
-            with _TTS_PLAYER_LOCK:
-                if _TTS_CHANNEL is None:
-                    continue
-                _TTS_CHANNEL.play(snd)
-            # 等整句播完（或用户停止），期间合成线程可累积下一句缓冲
-            while not _TTS_STOP_EVT.is_set() and _TTS_CHANNEL.get_busy():
-                _time.sleep(0.02)
+            seq += 1
+            # 句首淡入+句尾淡出：合成端音频开头/结尾直接是非零波形，
+            # 不处理则系统播放器从静音突变到语音会爆"咚"
+            pcm = agent_tts._fade_edges(blk)
+            wav = agent_tts._pcm_to_wav(pcm)             # 24k mono 16bit WAV
+            path = _os.path.join(_tmp.gettempdir(), f"tts_play_{seq}.wav")
+            with open(path, "wb") as f:
+                f.write(wav)
+            winsound.PlaySound(path, winsound.SND_FILENAME)   # 同步播放（系统解码）
+            try:
+                _os.remove(path)
+            except OSError:
+                pass
         except Exception:
             _time.sleep(0.03)
 
@@ -1098,12 +1057,13 @@ def _tts_play_finish():
 
 
 def _tts_play_stop():
-    """立即停止播放：通知播放线程退出并清空缓冲（用户停止/合成失败时调用）"""
+    """立即停止播放：PURGE 停掉当前系统播放、清空缓冲并通知播放线程退出
+    （用户停止/合成失败时调用）。SND_PURGE 会中断播放线程中阻塞的 PlaySound。"""
     global _TTS_BUF, _TTS_SEG_START
     with _TTS_PLAYER_LOCK:
         try:
-            if _TTS_CHANNEL is not None:
-                _TTS_CHANNEL.stop()
+            import winsound
+            winsound.PlaySound(None, winsound.SND_PURGE)
         except Exception:
             pass
         _TTS_BUF.clear()

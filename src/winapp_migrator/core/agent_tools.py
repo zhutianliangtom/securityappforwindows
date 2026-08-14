@@ -19,6 +19,7 @@ from pathlib import Path
 from winapp_migrator.core import agent_sandbox
 from winapp_migrator.core import agent_find
 from winapp_migrator.core import agent_browser
+from winapp_migrator.core import agent_tts
 
 # 本地记忆文件（AI 长期记忆，markdown 格式）
 MEMORY_FILE = Path.home() / ".winapp_migrator" / "agent" / "memory.md"
@@ -862,6 +863,67 @@ TOOLS = [
                            "required": ["query"]},
         },
     },
+    # ---------- TTS 语音合成（Qwen-TTS 声音复刻，DashScope 真实 API） ----------
+    {
+        "type": "function",
+        "function": {
+            "name": "tts_create_voice",
+            "description": "上传参考音频创建自定义音色（声音复刻）：支持 wav 等音频（推荐 10~20s、"
+                           "≥24kHz 单声道、≤10MB），返回 voice_id 供 tts_speak 使用。"
+                           "创建后音色长期有效，同一 target_model 可反复创建。",
+            "parameters": {"type": "object",
+                           "properties": {
+                               "audio_path": {"type": "string",
+                                              "description": "参考音频文件路径（绝对路径或基于工作目录的相对路径）"},
+                               "preferred_name": {"type": "string",
+                                                  "description": "音色名称（字母/数字/下划线，默认 diede）"},
+                               "target_model": {"type": "string",
+                                                "description": "绑定模型（默认 qwen3-tts-vc-2026-01-22）"}},
+                           "required": ["audio_path"]},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "tts_query_voice",
+            "description": "查询音色详情（创建时间/语言/绑定模型）。需传入已有 voice_id。",
+            "parameters": {"type": "object",
+                           "properties": {
+                               "voice_id": {"type": "string", "description": "音色 ID"},
+                               "target_model": {"type": "string",
+                                                "description": "绑定模型（默认 qwen3-tts-vc-2026-01-22）"}},
+                           "required": ["voice_id"]},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "tts_delete_voice",
+            "description": "删除指定音色（不可恢复）。需传入已有 voice_id。",
+            "parameters": {"type": "object",
+                           "properties": {
+                               "voice_id": {"type": "string", "description": "要删除的音色 ID"}},
+                           "required": ["voice_id"]},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "tts_speak",
+            "description": "用指定音色把文本合成为语音并下载到本地，返回音频文件路径。"
+                           "适合朗读回复、生成语音文件；output_path 留空自动保存到工作目录 tts_output/。",
+            "parameters": {"type": "object",
+                           "properties": {
+                               "text": {"type": "string", "description": "要合成的文本"},
+                               "voice_id": {"type": "string",
+                                            "description": "音色 ID（可用 tts_create_voice 创建或复用已有）"},
+                               "model": {"type": "string",
+                                         "description": "合成模型（默认 qwen3-tts-vc-2026-01-22）"},
+                               "output_path": {"type": "string",
+                                               "description": "输出音频文件路径（可选，留空自动生成）"}},
+                           "required": ["text", "voice_id"]},
+        },
+    },
 ]
 
 # 子 Agent 工具名（由 agent_engine 拦截调度，携带 LLM 客户端执行；不在此直接实现）
@@ -1087,6 +1149,40 @@ def execute_tool(name: str, args: dict, allow_dangerous: bool = False,
             return _create_skill(str(args.get("name", "")),
                                  str(args.get("description", "")),
                                  str(args.get("instruction", "")))
+        # ---- TTS 语音合成（Qwen-TTS 声音复刻，DashScope 真实 API） ----
+        if name == "tts_create_voice":
+            try:
+                vid = agent_tts.create_voice(
+                    str(args.get("audio_path", "")),
+                    str(args.get("target_model", agent_tts.DEFAULT_TARGET_MODEL)),
+                    str(args.get("preferred_name", "diede")))
+                return {"text": f"音色创建成功：{vid}", "images": []}
+            except Exception as e:
+                return _blocked(f"[tts_create_voice] {e}")
+        if name == "tts_query_voice":
+            try:
+                d = agent_tts.query_voice(
+                    str(args.get("voice_id", "")),
+                    str(args.get("target_model", agent_tts.DEFAULT_TARGET_MODEL)))
+                return {"text": json.dumps(d, ensure_ascii=False, indent=2), "images": []}
+            except Exception as e:
+                return _blocked(f"[tts_query_voice] {e}")
+        if name == "tts_delete_voice":
+            try:
+                agent_tts.delete_voice(str(args.get("voice_id", "")))
+                return {"text": f"音色已删除：{args.get('voice_id', '')}", "images": []}
+            except Exception as e:
+                return _blocked(f"[tts_delete_voice] {e}")
+        if name == "tts_speak":
+            try:
+                out = agent_tts.synthesize(
+                    str(args.get("text", "")),
+                    str(args.get("voice_id", "")),
+                    str(args.get("model", agent_tts.DEFAULT_TARGET_MODEL)),
+                    str(args.get("output_path", "")))
+                return {"text": f"语音合成完成：{out}", "images": []}
+            except Exception as e:
+                return _blocked(f"[tts_speak] {e}")
     except Exception as e:
         return _blocked(f"[工具执行错误] {name}: {e}")
     return _blocked(f"[未知工具] {name}")

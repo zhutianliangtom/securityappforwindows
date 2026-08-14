@@ -818,3 +818,68 @@ class LLMClient:
         if resp is None:
             raise AgentLLMError(last_err or "请求失败")
         return _parse_responses_stream(resp, on_delta, on_reasoning, stop)
+
+
+# ============================================================
+# 模型配置加密存储（本地 JSON 文件加密）
+# ============================================================
+# 密钥派生：Windows MachineGuid（每台机器唯一，注册表 HKLM\SOFTWARE\Microsoft\Cryptography）
+# XOR + base64 混淆，防止 settings.json 明文暴露用户的 API Key 和模型配置
+
+def _machine_key() -> bytes:
+    """从 Windows MachineGuid 派生 32 字节加密密钥（机器唯一，重装系统会变）"""
+    try:
+        import winreg
+        with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE,
+                            r"SOFTWARE\Microsoft\Cryptography") as k:
+            guid, _ = winreg.QueryValueEx(k, "MachineGuid")
+        # 用 MachineGuid 的 SHA-256 作为密钥
+        import hashlib
+        return hashlib.sha256(guid.encode()).digest()
+    except OSError:
+        # 兜底：用用户名 + 主机名（跨机器不通用但至少不裸露）
+        import hashlib
+        seed = f"{os.environ.get('USERNAME','')}{os.environ.get('COMPUTERNAME','')}zhuzhu_copilot"
+        return hashlib.sha256(seed.encode()).digest()
+
+
+def _xor_crypt(data: str) -> str:
+    """XOR + base64 加密/解密（对称操作，第二次调用即解密）"""
+    if not data:
+        return data
+    key = _machine_key()
+    raw = data.encode("utf-8")
+    result = bytes(b ^ key[i % len(key)] for i, b in enumerate(raw))
+    import base64
+    return base64.urlsafe_b64encode(result).decode("ascii")
+
+
+def encrypt_model_config(model_section: dict) -> dict:
+    """将 model 配置节加密后存入 settings.json。
+    
+    返回一个新 dict，其中 model 字段替换为加密后的 {"_encrypted": true, "data": "<cipher>"}。
+    外部调用方用此返回值安全存储。
+    """
+    if not model_section or not isinstance(model_section, dict):
+        return model_section
+    raw = json.dumps(model_section, ensure_ascii=False, separators=(",", ":"))
+    return {"_encrypted": True, "data": _xor_crypt(raw)}
+
+
+def decrypt_model_config(model_section: dict) -> dict:
+    """解密 settings.json 中的 model 配置节。
+    
+    若 model_section 包含 _encrypted 标记则解密还原；否则原样返回（兼容旧版明文配置）。
+    """
+    if not isinstance(model_section, dict):
+        return model_section
+    if not model_section.get("_encrypted"):
+        return model_section  # 旧版明文，直接返回
+    cipher = model_section.get("data")
+    if not cipher:
+        return model_section
+    try:
+        plain = _xor_crypt(cipher)
+        return json.loads(plain)
+    except Exception:
+        return model_section  # 解密失败（如换机器），回退旧数据

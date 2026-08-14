@@ -718,7 +718,8 @@ class UninstallWizard(QMainWindow):
         layout.addStretch(1)
 
         self.progress = QProgressBar()
-        self.progress.setRange(0, 0)  # busy 模式
+        self.progress.setRange(0, 100)
+        self.progress.setValue(0)
         self.progress.setVisible(False)
         layout.addWidget(self.progress)
         self.status = QLabel("")
@@ -740,11 +741,16 @@ class UninstallWizard(QMainWindow):
         self.btn_cancel.setEnabled(False)
         self.btn_confirm.setEnabled(False)
         self.progress.setVisible(True)
+        self.progress.setValue(0)
         self.working = True
         self.worker = UninstallWorker(self.install_dir, self)
-        self.worker.progress.connect(self.status.setText)
+        self.worker.progress.connect(self._on_progress)
         self.worker.done.connect(self._on_done)
         self.worker.start()
+
+    def _on_progress(self, pct: int, msg: str):
+        self.progress.setValue(pct)
+        self.status.setText(f"{msg} ({pct}%)")
 
     def _on_done(self, ok: bool, msg: str):
         self.working = False
@@ -773,9 +779,16 @@ class UninstallWizard(QMainWindow):
 # 卸载器 temp 副本：静默删除目录并自毁
 # ------------------------------------------------------------
 def resume_uninstall(target_dir: Path):
+    """静默删除安装目录 + 自毁（resume 进程）。
+    
+    分三轮确保 zhuzhu Copilot 文件夹彻底删除：
+    1. 等待主进程退出 (1.5s) → 直接 rmtree (12 次重试/1s)
+    2. 仍存在 → cmd rd /s /q 延迟执行 (4s 后)
+    3. 最终兜底 → 再等 10s 轮询，若仍存在则标记为「下次重启删除」
+    """
     time.sleep(1.5)  # 等待原卸载器进程退出
-    # 若主程序仍在运行会锁住目录，先强制结束
     _kill_main_app()
+    # 第一轮：直接 rmtree
     for _ in range(12):
         try:
             if target_dir.exists():
@@ -783,12 +796,27 @@ def resume_uninstall(target_dir: Path):
             break
         except OSError:
             time.sleep(1)
-    # 兜底：目录仍存在（文件被短暂占用）时，用 cmd 延迟强制清除
+    # 第二轮：cmd 延迟强制删除
     if target_dir.exists():
         try:
             subprocess.Popen(
-                f'ping -n 3 127.0.0.1 > nul & rd /s /q "{target_dir}"',
+                f'ping -n 4 127.0.0.1 > nul & rd /s /q "{target_dir}"',
                 shell=True, creationflags=subprocess.CREATE_NO_WINDOW, close_fds=True,
+            )
+        except OSError:
+            pass
+        # 等待 cmd 执行
+        for _ in range(10):
+            time.sleep(1)
+            if not target_dir.exists():
+                break
+    # 第三轮：Win32 MoveFileEx 标记「重启后删除」（终极兜底）
+    if target_dir.exists():
+        try:
+            import ctypes
+            MOVEFILE_DELAY_UNTIL_REBOOT = 0x4
+            ctypes.windll.kernel32.MoveFileExW(
+                str(target_dir), None, MOVEFILE_DELAY_UNTIL_REBOOT,
             )
         except OSError:
             pass

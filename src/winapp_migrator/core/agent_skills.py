@@ -18,6 +18,8 @@ import sys
 import time
 from pathlib import Path
 
+from winapp_migrator.core import agent_llm
+
 CONFIG_DIR = Path.home() / ".winapp_migrator" / "agent"
 
 # 技能体系统一为市场标准 md 格式（SKILL.md），JSON 技能已废弃：
@@ -982,23 +984,31 @@ def load_settings() -> dict:
     """加载用户设置 settings.json：
     custom_rules(规则数组) / custom_system_prompt(提示词补充) /
     custom_safe_commands(bash 白名单) / memory_enabled(记忆开关) /
-    model({base_url, api_key, model})
+    model({base_url, api_key, model}) — 模型配置自动解密
+
+    兼容旧版明文 model 配置：若未加密则原样返回。
     """
     path = CONFIG_DIR / "settings.json"
     try:
         with open(path, "r", encoding="utf-8") as f:
             data = json.load(f)
-        return data if isinstance(data, dict) else {}
+        data = data if isinstance(data, dict) else {}
+        if "model" in data:
+            data["model"] = agent_llm.decrypt_model_config(data["model"])
+        return data
     except Exception:
         return {}
 
 
 def save_settings(s: dict) -> bool:
-    """写入用户设置 settings.json"""
+    """写入用户设置 settings.json，model 配置自动加密存储"""
     try:
         CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+        data = dict(s)
+        if "model" in data:
+            data["model"] = agent_llm.encrypt_model_config(data["model"])
         with open(CONFIG_DIR / "settings.json", "w", encoding="utf-8") as f:
-            json.dump(s, f, ensure_ascii=False, indent=2)
+            json.dump(data, f, ensure_ascii=False, indent=2)
         return True
     except OSError:
         return False

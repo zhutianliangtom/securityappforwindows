@@ -126,13 +126,21 @@ def _audio_data_url(path: str) -> str:
 # ---------------------------------------------------------------- 音色管理
 def create_voice(audio_path: str, target_model: str = DEFAULT_TARGET_MODEL,
                  preferred_name: str = "diede", timeout: int = 120) -> str:
-    """上传参考音频创建自定义音色，返回 voice_id"""
+    """上传参考音频创建自定义音色，返回 voice_id。
+
+    preferred_name 仅允许字母/数字/下划线（中文等非法字符会导致 API 400），
+    传入中文显示名时自动清洗为合法 ASCII 名。
+    """
+    import re as _re
+    safe = _re.sub(r"[^0-9A-Za-z_]", "_", preferred_name or "").strip("_")
+    if not safe:
+        safe = "diede"
     payload = {
         "model": ENROLL_MODEL,
         "input": {
             "action": "create",
             "target_model": target_model,
-            "preferred_name": preferred_name,
+            "preferred_name": safe,
             "audio": {"data": _audio_data_url(audio_path)},
         },
     }

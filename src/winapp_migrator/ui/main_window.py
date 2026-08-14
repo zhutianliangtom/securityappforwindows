@@ -23,7 +23,6 @@ from winapp_migrator.ui.widgets import (
 )
 from winapp_migrator.ui.download_dialog import DownloadDialog
 from winapp_migrator.ui.agent_panel import AgentPanel
-from winapp_migrator.ui.tts_panel import TtsPanel
 from winapp_migrator.update_check import UpdateChecker, APP_VERSION
 from winapp_migrator.core.app_scanner import AppScanner, AppInfo
 from winapp_migrator.core.data_dirs import detect_data_dirs
@@ -549,16 +548,6 @@ class MainWindow(QMainWindow):
         )
         self.agent_btn.clicked.connect(self._open_agent_panel)
         layout.addWidget(self.agent_btn)
-
-        self.tts_btn = QPushButton("🔊 TTS 语音合成")
-        self.tts_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.tts_btn.setMinimumHeight(40)
-        self.tts_btn.setStyleSheet(
-            f"background-color: {PALETTE['primary_hover']}; color: white; font-weight: 700; "
-            "border: none; border-radius: 10px; padding: 10px 24px;"
-        )
-        self.tts_btn.clicked.connect(self._open_tts_panel)
-        layout.addWidget(self.tts_btn)
 
         self.security_btn = QPushButton("🛡 开启静默防护")
         self.security_btn.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -1120,14 +1109,6 @@ class MainWindow(QMainWindow):
         self._agent_panel.show()
         self._agent_panel.raise_()
         self._agent_panel.activateWindow()
-
-    def _open_tts_panel(self, *_):
-        """打开 Qwen-TTS 声音复刻面板（单例）"""
-        if not hasattr(self, "_tts_panel") or self._tts_panel is None:
-            self._tts_panel = TtsPanel(self)
-        self._tts_panel.show()
-        self._tts_panel.raise_()
-        self._tts_panel.activateWindow()
 
     def _show_about(self, *_):
         """关于我们弹窗"""

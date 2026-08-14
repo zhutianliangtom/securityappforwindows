@@ -563,6 +563,7 @@ class AgentEngine:
             if self.on_status:
                 self.on_status("自动朗读不可用：pygame 未安装或音频初始化失败，已跳过语音播放")
             return   # 播放器不可用：不合成（避免白耗 API）
+        err_shown = False   # 只上报首次合成失败，避免刷屏
         while True:
             if self._tts_stop.is_set():
                 break
@@ -577,8 +578,11 @@ class AgentEngine:
             try:
                 agent_tts.synthesize_stream(
                     seg, voice_id="", on_chunk=agent_tools._tts_play_chunk)
-            except Exception:
-                pass   # 单句合成失败不中断后续
+            except Exception as e:
+                if not err_shown:
+                    err_shown = True
+                    if self.on_status:
+                        self.on_status(f"自动朗读合成失败（已跳过本句）：{e}")
         agent_tools._tts_play_stop()
 
     def _tts_finish_read(self):
@@ -634,13 +638,14 @@ class AgentEngine:
         if self._auto_skills and self.on_status:
             self.on_status(f"正在调用技能: {', '.join(self._auto_skills)}")
             self.on_status(f"技能已调用: {', '.join(self._auto_skills)}")
-        # 自动朗读：用户明确要求"朗读/语音回复"时开启，AI 流式输出边生成边合成播放。
-        # 未配置音色或 API Key 时给出提示并自动关闭（避免无声假象）。
+        # 自动朗读：设置中「自动朗读」开关默认开启，或用户明确要求"朗读/语音回复"时开启。
+        # AI 流式输出边生成边合成播放；未配置音色或 API Key 时给出提示并自动关闭（避免无声假象）。
         self._tts_finish = False
         self._tts_stop.clear()
-        self._tts_auto = agent_tts.has_read_intent(user_input)
+        tts_cfg = agent_tts.load_config()
+        self._tts_auto = bool(tts_cfg.get("auto_read", True)) or \
+            agent_tts.has_read_intent(user_input)
         if self._tts_auto:
-            tts_cfg = agent_tts.load_config()
             if not tts_cfg.get("voice_id") or not agent_tts.load_api_key():
                 self._tts_auto = False
                 if self.on_status:

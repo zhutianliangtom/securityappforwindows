@@ -1021,70 +1021,18 @@ class _AgentSettingsDialog(QDialog):
     def _build_tts_page(self) -> QWidget:
         w = self._page("语音合成")
         lay = self._page_body(w)
-        tip = QLabel("音色选择：AI 使用 tts_speak 调用 DashScope API 流式合成语音，"
-                     "边生成边自动播放，结果保存到工作目录 tts_output/。点击刷新从云端同步已创建的音色。")
-        tip.setStyleSheet(f"color: {self._DIM}; font-size: 12px;")
+        cfg = agent_tts.load_config()
+        tip = QLabel(f"当前音色：{agent_tts.VOICE_DISPLAY_NAME}（AI 回复时自动流式合成语音，"
+                     "边生成边播放，无需手动选择音色）")
+        tip.setStyleSheet(f"color: {self._TEXT}; font-size: 13px;")
         tip.setWordWrap(True)
         lay.addWidget(tip)
-        row = QHBoxLayout()
-        row.setSpacing(10)
-        lbl = QLabel("音色")
-        lbl.setStyleSheet(f"color: {self._TEXT}; font-size: 13px;")
-        lbl.setFixedWidth(70)
-        row.addWidget(lbl)
-        self.voice_combo = QComboBox()
-        self.voice_combo.currentIndexChanged.connect(self._on_voice_changed)
-        row.addWidget(self.voice_combo, 1)
-        refresh = QPushButton(_line_icon("net", 16), "刷新")
-        refresh.setStyleSheet(f"background: {self._PANEL}; color: {self._TEXT};"
-                             f"border: 1px solid {self._BORDER}; border-radius: 8px;"
-                             "padding: 6px 14px; font-weight: 600;")
-        refresh.setAutoDefault(False)
-        refresh.clicked.connect(self._reload_voices)
-        row.addWidget(refresh)
-        lay.addLayout(row)
-        self.voice_status = QLabel("")
-        self.voice_status.setStyleSheet(f"color: {self._DIM}; font-size: 12px;")
-        self.voice_status.setWordWrap(True)
-        lay.addWidget(self.voice_status)
+        self.auto_read_check = QCheckBox("AI 回复自动朗读（开关默认开启，关闭后仅显式要求朗读时播放）")
+        self.auto_read_check.setChecked(bool(cfg.get("auto_read", True)))
+        self.auto_read_check.setStyleSheet(f"color: {self._TEXT}; font-size: 13px; spacing: 8px;")
+        lay.addWidget(self.auto_read_check)
         lay.addStretch(1)
-        self._reload_voices()
         return w
-
-    def _reload_voices(self):
-        """从 tts.json 与云端（list_voices）加载音色列表并选中当前音色"""
-        cfg = agent_tts.load_config()
-        current = str(cfg.get("voice_id", "")).strip()
-        known = {}
-        try:
-            for v in agent_tts.list_voices():
-                vid = str(v.get("voice", "")).strip()
-                if vid:
-                    known[vid] = str(v.get("gmt_create", ""))[:10]
-            self.voice_status.setText(f"云端音色 {len(known)} 个")
-        except Exception as e:
-            self.voice_status.setText(f"云端刷新失败（使用本地记录）：{e}")
-        if current not in known and current:
-            known[current] = "本地记录"
-        self.voice_combo.blockSignals(True)
-        self.voice_combo.clear()
-        for vid, date in known.items():
-            label = (str(cfg.get("preferred_name", "")) + " ") if vid == current else ""
-            self.voice_combo.addItem(f"{label}{vid[-12:]}（{date}）", vid)
-        if current:
-            idx = self.voice_combo.findData(current)
-            self.voice_combo.setCurrentIndex(idx if idx >= 0 else 0)
-        self.voice_combo.blockSignals(False)
-
-    def _on_voice_changed(self, _idx):
-        """选择音色立即写入 tts.json，AI 后续 tts_speak 无需再带 voice_id"""
-        vid = str(self.voice_combo.currentData() or "").strip()
-        if not vid:
-            return
-        if agent_tts.save_config(voice_id=vid):
-            self.voice_status.setText(f"已选用音色：{vid}")
-        else:
-            self.voice_status.setText("音色保存失败（无写入权限）")
 
     def _build_skill_page(self) -> QWidget:
         w = self._page("技能")
@@ -1403,10 +1351,9 @@ class _AgentSettingsDialog(QDialog):
             q.setValue("agent_workdir", self.workdir_edit.text().strip())
             if not mcp_ok:
                 QMessageBox.warning(self, "提示", "MCP 配置保存失败（无写入权限），其余设置已保存")
-            # 音色选择：独立写入 tts.json，避免被 settings.json 覆写
-            vid = str(getattr(self, "voice_combo", None).currentData() or "").strip() if hasattr(self, "voice_combo") else ""
-            if vid:
-                agent_tts.save_config(voice_id=vid)
+            # 音色与自动朗读：独立写入 tts.json，避免被 settings.json 覆写
+            agent_tts.save_config(auto_read=self.auto_read_check.isChecked(),
+                                  preferred_name=agent_tts.VOICE_DISPLAY_NAME)
             self.accept()
         else:
             QMessageBox.warning(self, "错误", "保存设置失败（无写入权限）")
@@ -4354,6 +4301,10 @@ class AgentPanel(QDialog):
             self._scroll_bottom()
         elif s == "已停止" or "已停止" in s:
             self._hide_spinner()   # 用户手动停止/包含“已停止”字样的状态均不输出小字
+        else:
+            # 其余状态（如"已开启自动朗读"/自动朗读失败/虚拟桌面等）以普通小字输出，
+            # 避免朗读相关的提示被静默丢弃导致用户误以为没有生效
+            self._add_status(s, TEXT_DIM)
 
     # ---------- 每步确认（engine 线程调用 → 信号 → 主线程弹窗） ----------
     def _confirm_tool(self, name: str, args: dict) -> bool:

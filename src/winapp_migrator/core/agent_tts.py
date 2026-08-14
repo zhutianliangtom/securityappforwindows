@@ -29,6 +29,9 @@ DEFAULT_TARGET_MODEL = "qwen3-tts-vc-2026-01-22"
 
 CONFIG_FILE = Path.home() / ".winapp_migrator" / "agent" / "tts.json"
 
+# 音色显示名（设置面板与状态提示使用友好名称，而非一长串 voice_id）
+VOICE_DISPLAY_NAME = "蝶-三角洲行动"
+
 
 # ---------------------------------------------------------------- 配置
 def load_api_key() -> str:
@@ -45,7 +48,7 @@ def load_api_key() -> str:
 
 
 def save_config(api_key: str = "", target_model: str = DEFAULT_TARGET_MODEL,
-                voice_id: str = "", preferred_name: str = "") -> bool:
+                voice_id: str = "", preferred_name: str = "", auto_read: bool = True) -> bool:
     """保存 TTS 配置到独立文件 tts.json（设置面板写入，避免被 settings.json 覆写）"""
     try:
         data = {}
@@ -55,6 +58,7 @@ def save_config(api_key: str = "", target_model: str = DEFAULT_TARGET_MODEL,
         data["target_model"] = target_model or data.get("target_model", DEFAULT_TARGET_MODEL)
         data["voice_id"] = voice_id or data.get("voice_id", "")
         data["preferred_name"] = preferred_name or data.get("preferred_name", "")
+        data["auto_read"] = bool(auto_read)
         CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
         CONFIG_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
         return True
@@ -64,7 +68,8 @@ def save_config(api_key: str = "", target_model: str = DEFAULT_TARGET_MODEL,
 
 def load_config() -> dict:
     """读取 TTS 配置（不含敏感 Key 之外的全部字段）"""
-    data = {"target_model": DEFAULT_TARGET_MODEL, "voice_id": "", "preferred_name": ""}
+    data = {"target_model": DEFAULT_TARGET_MODEL, "voice_id": "", "preferred_name": "",
+            "auto_read": True}
     try:
         if CONFIG_FILE.exists():
             data.update(json.loads(CONFIG_FILE.read_text(encoding="utf-8")))

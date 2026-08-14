@@ -618,7 +618,7 @@ class MainWindow(QMainWindow):
         self.tray.activated.connect(self._on_tray_activated)
         self.tray.hide()
 
-    def _toggle_security(self):
+    def _toggle_security(self, *_):
         """开启/关闭静默防护，并记忆用户选择"""
         if self._security_on:
             self._stop_security()
@@ -717,7 +717,7 @@ class MainWindow(QMainWindow):
         if reason == QSystemTrayIcon.ActivationReason.Trigger:
             self._restore_from_tray()
 
-    def _restore_from_tray(self):
+    def _restore_from_tray(self, *_):
         self.showNormal()
         self.raise_()
         self.activateWindow()
@@ -753,7 +753,7 @@ class MainWindow(QMainWindow):
                 "本工具需要管理员权限才能创建目录联接和修改系统目录。\n请右键以管理员身份运行。",
             )
 
-    def _start_scan(self):
+    def _start_scan(self, *_):
         self.app_list.clear()
         self.status_label.setText("正在扫描已安装应用...")
         self.scan_progress.show()
@@ -800,7 +800,7 @@ class MainWindow(QMainWindow):
         self.scan_progress.hide()
         self.refresh_btn.setEnabled(True)
 
-    def _filter_apps(self):
+    def _filter_apps(self, *_):
         text = self.search_edit.text().lower()
         # 关闭更新避免逐项插入各自触发重绘
         self.app_list.setUpdatesEnabled(False)
@@ -829,7 +829,7 @@ class MainWindow(QMainWindow):
         self.open_dir_btn.setEnabled(True)
         self._refresh_target_path()
 
-    def _open_app_dir(self):
+    def _open_app_dir(self, *_):
         """在资源管理器中打开所选应用的安装目录"""
         if not self.selected_app:
             return
@@ -843,7 +843,7 @@ class MainWindow(QMainWindow):
         else:
             QMessageBox.warning(self, "无法打开", f"目录不存在：{loc}")
 
-    def _refresh_target_path(self):
+    def _refresh_target_path(self, *_):
         """按选中 app 与目标盘生成默认目标路径（用户手动编辑过则不覆盖）"""
         if not self.selected_app or not hasattr(self, "target_path_edit"):
             return
@@ -853,7 +853,7 @@ class MainWindow(QMainWindow):
         self.target_path_edit.setText(
             f"{drive}\\WinAppMigrator\\{self.selected_app.app_type}\\{self.selected_app.name}")
 
-    def _browse_target(self):
+    def _browse_target(self, *_):
         """通过文件夹对话框选择/新建目标位置（支持同盘迁移，选择后在所选目录下创建 app 目录）"""
         app = self.selected_app
         if not app:
@@ -893,7 +893,7 @@ class MainWindow(QMainWindow):
         if app:
             self._select_app(app)
 
-    def _start_migration(self):
+    def _start_migration(self, *_):
         if not self.selected_app:
             return
         if not is_admin():
@@ -1020,7 +1020,7 @@ class MainWindow(QMainWindow):
             self.progress.setValue(0)
             QMessageBox.critical(self, "迁移失败", result.get("message", "未知错误"))
 
-    def _start_uninstall(self):
+    def _start_uninstall(self, *_):
         if not self.selected_app:
             return
         if not is_admin():
@@ -1086,7 +1086,7 @@ class MainWindow(QMainWindow):
             self.progress.setValue(0)
             QMessageBox.critical(self, "卸载失败", result.get("message", "未知错误"))
 
-    def _migrate_custom_folder(self):
+    def _migrate_custom_folder(self, *_):
         if not is_admin():
             QMessageBox.warning(self, "权限不足", "请以管理员身份运行本工具。")
             return
@@ -1105,7 +1105,7 @@ class MainWindow(QMainWindow):
         self.selected_app = app
         self._start_migration()
 
-    def _open_download_dialog(self):
+    def _open_download_dialog(self, *_):
         """打开高速下载窗口（独立窗口，可同时管理多个任务）"""
         if not hasattr(self, "_download_dialog") or self._download_dialog is None:
             self._download_dialog = DownloadDialog(self)
@@ -1113,7 +1113,7 @@ class MainWindow(QMainWindow):
         self._download_dialog.raise_()
         self._download_dialog.activateWindow()
 
-    def _open_agent_panel(self):
+    def _open_agent_panel(self, *_):
         """打开 zhuzhu Copilot 面板（单例，可同时保持打开）"""
         if not hasattr(self, "_agent_panel") or self._agent_panel is None:
             self._agent_panel = AgentPanel(self)
@@ -1121,7 +1121,7 @@ class MainWindow(QMainWindow):
         self._agent_panel.raise_()
         self._agent_panel.activateWindow()
 
-    def _open_tts_panel(self):
+    def _open_tts_panel(self, *_):
         """打开 Qwen-TTS 声音复刻面板（单例）"""
         if not hasattr(self, "_tts_panel") or self._tts_panel is None:
             self._tts_panel = TtsPanel(self)
@@ -1129,7 +1129,7 @@ class MainWindow(QMainWindow):
         self._tts_panel.raise_()
         self._tts_panel.activateWindow()
 
-    def _show_about(self):
+    def _show_about(self, *_):
         """关于我们弹窗"""
         QMessageBox.information(
             self, "关于我们",
@@ -1142,7 +1142,7 @@ class MainWindow(QMainWindow):
         self._update_checker.manual_result.connect(self._on_manual_check_result)
         self._update_checker.start()
 
-    def _on_check_update_clicked(self):
+    def _on_check_update_clicked(self, *_):
         """手动检查更新：调用服务器 API 并反馈结果"""
         self.update_btn.setText("检查中…")
         self.update_btn.setEnabled(False)
@@ -1198,7 +1198,7 @@ class MainWindow(QMainWindow):
             pass
         os._exit(0)
 
-    def _start_memory_optimize(self):
+    def _start_memory_optimize(self, *_):
         """一键优化内存"""
         reply = QMessageBox.question(
             self,

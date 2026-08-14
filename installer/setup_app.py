@@ -175,6 +175,41 @@ def remove_uninstall_reg():
         pass
 
 
+def remove_user_data():
+    """彻底删除应用全部用户数据（~/.winapp_migrator）：
+    用户技能（skills/、skills.json）、对话记录（sessions/、context.json）、
+    全部配置（settings.json/tts.json/todos.json/memory.md/mcp_servers.json 等）、
+    浏览器登录态（browser_profile）。重试处理文件占用，最后用 rd /s /q 兜底。"""
+    root = Path.home() / ".winapp_migrator"
+    if not root.exists():
+        return
+    for _ in range(10):   # 被占用文件重试（0.5s 间隔）
+        try:
+            shutil.rmtree(root)
+            return
+        except OSError:
+            time.sleep(0.5)
+    # 仍失败：cmd 延迟强制清除（文件释放后自动清理）
+    try:
+        subprocess.Popen(
+            f'ping -n 4 127.0.0.1 > nul & rd /s /q "{root}"',
+            shell=True, creationflags=subprocess.CREATE_NO_WINDOW, close_fds=True,
+        )
+    except OSError:
+        pass
+
+
+def _kill_main_app():
+    """强制结束主程序进程（否则会锁住用户数据/安装目录）"""
+    try:
+        subprocess.run(
+            ["taskkill", "/F", "/IM", f"{APP_NAME}.exe"],
+            capture_output=True, creationflags=subprocess.CREATE_NO_WINDOW, timeout=10,
+        )
+    except OSError:
+        pass
+
+
 def read_install_location() -> Path | None:
     try:
         with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, UNINSTALL_REG_PATH) as key:
@@ -239,10 +274,14 @@ class UninstallWorker(QThread):
 
     def run(self):
         try:
+            self.progress.emit("正在结束主程序进程 …")
+            _kill_main_app()
             self.progress.emit("正在删除快捷方式 …")
             remove_shortcuts()
             self.progress.emit("正在清理卸载注册表 …")
             remove_uninstall_reg()
+            self.progress.emit("正在删除用户数据（技能/对话/配置）…")
+            remove_user_data()
             self.progress.emit("正在把卸载器搬运到临时目录 …")
             temp_copy = Path(tempfile.gettempdir()) / f"uninstall_{APP_NAME}_{os.getpid()}.exe"
             shutil.copy2(sys.executable, temp_copy)
@@ -251,6 +290,15 @@ class UninstallWorker(QThread):
                 creationflags=subprocess.CREATE_NO_WINDOW,
                 close_fds=True,
             )
+            self.progress.emit("正在删除安装目录 …")
+            # 必须等 resume 进程彻底删完安装目录才算完成（轮询最长 90 秒），
+            # 目录消失后窗口才允许关闭 → 卸载无残留
+            deadline = time.time() + 90
+            while time.time() < deadline and self.install_dir.exists():
+                time.sleep(1)
+            if self.install_dir.exists():
+                raise RuntimeError("安装目录删除超时，请手动删除残留目录")
+            self.progress.emit("清理完成")
             self.done.emit(True, str(temp_copy))
         except Exception as e:  # noqa: BLE001
             self.done.emit(False, str(e))
@@ -703,7 +751,8 @@ class UninstallWizard(QMainWindow):
         if ok:
             QMessageBox.information(
                 self, "卸载完成",
-                "🧹 卸载完成，原目录正在后台清除。\n\n感谢你曾经让它存在过。",
+                "🧹 已彻底删除应用、用户技能、对话记录与全部配置，安装目录也已清除。\n\n"
+                "感谢你曾经让它存在过。",
             )
             self.close()
         else:
@@ -726,20 +775,23 @@ class UninstallWizard(QMainWindow):
 def resume_uninstall(target_dir: Path):
     time.sleep(1.5)  # 等待原卸载器进程退出
     # 若主程序仍在运行会锁住目录，先强制结束
-    try:
-        subprocess.run(
-            ["taskkill", "/F", "/IM", f"{APP_NAME}.exe"],
-            capture_output=True, creationflags=subprocess.CREATE_NO_WINDOW, timeout=10,
-        )
-    except OSError:
-        pass
-    for _ in range(6):
+    _kill_main_app()
+    for _ in range(12):
         try:
             if target_dir.exists():
                 shutil.rmtree(target_dir)
             break
         except OSError:
             time.sleep(1)
+    # 兜底：目录仍存在（文件被短暂占用）时，用 cmd 延迟强制清除
+    if target_dir.exists():
+        try:
+            subprocess.Popen(
+                f'ping -n 3 127.0.0.1 > nul & rd /s /q "{target_dir}"',
+                shell=True, creationflags=subprocess.CREATE_NO_WINDOW, close_fds=True,
+            )
+        except OSError:
+            pass
     # 延迟删除自身（cmd 原生 del）
     try:
         subprocess.Popen(

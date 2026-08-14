@@ -66,8 +66,13 @@ def _sub_system_prompt() -> str:
               f"原样逐条如实回答；严禁凭记忆、猜测或编造规则内容。")
 
 
-def run_sub_agent(llm, goal, allowed=None, stop=None, on_status=None) -> str:
+def run_sub_agent(llm, goal, allowed=None, stop=None, on_status=None,
+                  on_sub_event=None) -> str:
     """运行一个子 Agent，返回其最终文本总结。
+
+    on_sub_event: Callable[[str, str], None] 子 Agent 事件回调（kind, text）：
+        delta=流式输出增量。由 dispatch 层包装为带任务索引/标题的事件，
+        供 UI 在共享聊天气泡中实时显示子 Agent 输出。
 
     不做轮数限制：任务持续到完成或被用户停止（stop），与主 Agent 一致；
     上下文过长由 _compress 自动压缩并保留任务目标，防止长任务遗忘开头。
@@ -88,7 +93,9 @@ def run_sub_agent(llm, goal, allowed=None, stop=None, on_status=None) -> str:
             return "（子任务已停止）"
         try:
             res = llm.chat_stream(messages, tools=tools, tool_choice="auto",
-                                  stop=stop)
+                                  stop=stop,
+                                  on_delta=(lambda s: on_sub_event("delta", s))
+                                  if on_sub_event else None)
         except agent_llm.AgentLLMError as e:
             return f"子 Agent 调用失败: {e}"
         calls = res["tool_calls"]
@@ -142,8 +149,14 @@ def run_sub_agent(llm, goal, allowed=None, stop=None, on_status=None) -> str:
             rules_confirmed = True   # 本轮已确认规则，下轮开发工具正常放行
 
 
-def dispatch_sub_agents(llm, tasks, stop=None, on_status=None, max_workers=4) -> str:
-    """并发派发多个子 Agent 并汇总（按任务原始顺序输出）"""
+def dispatch_sub_agents(llm, tasks, stop=None, on_status=None,
+                        on_sub_event=None, max_workers=4) -> str:
+    """并发派发多个子 Agent 并汇总（按任务原始顺序输出）。
+
+    on_sub_event: Callable[[str, int, str, str], None] 事件（kind, task_idx, title, text）：
+        start=子任务开始；delta=该子 Agent 流式输出增量。UI 据此在共享聊天气泡中
+        按子任务创建子块并实时追加输出。
+    """
     tasks = [t for t in (tasks or [])
              if isinstance(t, dict) and str(t.get("goal") or "").strip()]
     if not tasks:
@@ -151,10 +164,17 @@ def dispatch_sub_agents(llm, tasks, stop=None, on_status=None, max_workers=4) ->
     n = min(max(int(max_workers or 4), 1), len(tasks))
 
     def _one(i, t):
+        title = str(t.get("title") or f"子任务 {i + 1}")
+        # 包装回调：绑定任务索引与标题，让 UI 能定位并持续追加对应子块
+        ev = (lambda kind, text: on_sub_event(kind, i, title, text)) \
+            if on_sub_event else None
+        if ev:
+            ev("start", "")
         try:
             return i, t, run_sub_agent(llm, t.get("goal", ""),
                                        allowed=t.get("allowed"),
-                                       stop=stop, on_status=on_status)
+                                       stop=stop, on_status=on_status,
+                                       on_sub_event=ev)
         except Exception as e:
             return i, t, f"子 Agent 异常: {e}"
 

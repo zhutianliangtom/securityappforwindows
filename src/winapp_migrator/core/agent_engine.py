@@ -36,6 +36,11 @@ _TTS_MAX_SEG = 60
 # 上下文自动压缩触发阈值：估算 token 超过该值（约常见模型窗口的 70%）触发摘要压缩
 _COMPRESS_TOKEN_LIMIT = 70000
 
+# 任务清单消息标记：todo 以独立 user 消息注入对话末尾并原位替换，
+# 不写入 system prompt —— 服务端上下文缓存按消息前缀匹配，system 一旦变化
+# 整段历史全部 miss；todo 每轮更新，放 system 会让每次请求都全量重计费
+_TODO_MARK = "【当前任务清单】"
+
 # 对话上下文持久化路径
 CONTEXT_FILE = agent_skills.CONFIG_DIR / "context.json"
 
@@ -107,7 +112,7 @@ class AgentEngine:
                  on_delta=None, on_status=None, on_result=None, confirm=None,
                  ask_user=None, on_reasoning=None, auto_vd: bool = False,
                  text_only: bool = False, memory_enabled: bool = True,
-                 direct: bool = False):
+                 direct: bool = False, on_sub_event=None):
         """
         on_delta: Callable[[str], None]      流式文本增量
         on_status: Callable[[str], None]     步骤状态（如"正在思考/执行工具 click"）
@@ -115,6 +120,10 @@ class AgentEngine:
         confirm: Callable[[str, dict], bool] 工具执行前确认；None 表示自动放行（测试用）
         ask_user: Callable[[dict], str]      ask_user 提问回调（阻塞式，返回用户回答）
         on_reasoning: Callable[[str], None]  流式思考过程增量
+        on_sub_event: Callable[[str, int, str, str], None]
+                 子 Agent 事件（kind, task_idx, title, text）：
+                 start=子任务开始；delta=子 Agent 流式输出增量。
+                 与主 Agent 共用同一个聊天气泡，子任务实时输出以子块形式显示。
         auto_vd: bool 任务自动在独立虚拟桌面执行（开始新建并切入，结束自动返回主桌面），
                  实现"完全静默无感"：AI 操作不打扰用户主桌面
         text_only: bool 纯文本模型（无图像输入），过滤截图/视觉工具
@@ -130,6 +139,7 @@ class AgentEngine:
         self.confirm = confirm
         self.ask_user = ask_user
         self.on_reasoning = on_reasoning
+        self.on_sub_event = on_sub_event
         self.auto_vd = auto_vd
         self.text_only = text_only
         self.memory_enabled = memory_enabled
@@ -513,7 +523,8 @@ class AgentEngine:
             self.on_status(f"正在派发 {len(tasks)} 个子 Agent 并发执行…")
         text = agent_subagent.dispatch_sub_agents(
             self.llm, tasks, stop=lambda: self._stop.is_set(),
-            on_status=self.on_status)
+            on_status=self.on_status,
+            on_sub_event=self.on_sub_event)
         return {"text": text, "images": []}
 
     @staticmethod
@@ -634,7 +645,8 @@ class AgentEngine:
         """构建系统提示词：每次都重新读取 settings.json，
         用户中途新增/修改的自定义规则在下一轮立即生效。
         自动匹配到的技能（_auto_skills）与手动指定技能合并注入，让 AI 先按技能流程执行。
-        存在未完成的任务清单时附加注入，保证多步任务进度可见（上下文压缩后不丢失）。"""
+        注意：任务清单不在此注入（见 _sync_todo_msg），保证 system 前缀稳定，
+        服务端上下文缓存持续命中，最大限度节省 token。"""
         merged = list(skills or [])
         for s in (self._auto_skills or []):
             if s not in merged:
@@ -643,16 +655,44 @@ class AgentEngine:
                                                   text_only=self.text_only,
                                                   memory_enabled=self.memory_enabled,
                                                   direct=self.direct)
+        return prompt
+
+    def _todo_text(self) -> str:
+        """读取未完成任务清单，格式化为对话消息文本（无任务时返回空串）"""
         try:
             active = [t for t in agent_tools.load_todos() if t.get("status") != "completed"]
-            if active:
-                lines = ["\n\n【当前任务清单】用 update_todo 跟踪进度（全量提交含已完成项）："]
-                for i, t in enumerate(active, 1):
-                    lines.append(f"{i}. [{t.get('status', 'pending')}] {t.get('title', '')}")
-                prompt += "\n".join(lines)
         except Exception:
-            pass
-        return prompt
+            return ""
+        if not active:
+            return ""
+        lines = [f"{_TODO_MARK}用 update_todo 跟踪进度（全量提交含已完成项）："]
+        for i, t in enumerate(active, 1):
+            lines.append(f"{i}. [{t.get('status', 'pending')}] {t.get('title', '')}")
+        return "\n".join(lines)
+
+    def _sync_todo_msg(self):
+        """把最新任务清单同步为对话末尾的独立 user 消息（原位替换，不累积）。
+
+        历史中唯一 todo 消息位于末尾 → system + 早期历史保持字节级不变，
+        服务端前缀缓存（DeepSeek prompt_cache_hit / OpenAI cached_tokens）持续命中；
+        todo 变化只 miss 这几十 token 的短消息。"""
+        text = self._todo_text()
+        idx = None
+        for i in range(len(self._messages) - 1, 0, -1):   # 从末尾向前找（最新一条）
+            m = self._messages[i]
+            if (isinstance(m, dict) and m.get("role") == "user"
+                    and isinstance(m.get("content"), str)
+                    and m["content"].startswith(_TODO_MARK)):
+                idx = i
+                break
+        if not text:
+            if idx is not None:
+                del self._messages[idx]
+            return
+        if idx is not None:
+            self._messages[idx]["content"] = text
+        else:
+            self._messages.append({"role": "user", "content": text})
 
     @staticmethod
     def _rules_text() -> str:
@@ -721,6 +761,8 @@ class AgentEngine:
                 new_prompt = self._system_prompt(agent_name, skills)
                 if self._messages[0].get("content") != new_prompt:
                     self._messages[0]["content"] = new_prompt
+                # 任务清单同步为末尾独立消息（原位替换，不污染 system 前缀缓存）
+                self._sync_todo_msg()
                 if self.on_status:
                     self.on_status("正在思考…")
                 if self.text_only:
@@ -743,7 +785,7 @@ class AgentEngine:
                     on_delta=self._on_stream_delta,
                     on_reasoning=self.on_reasoning,
                     stop=lambda: self._stop.is_set())
-                self._accum_usage(result["usage"])
+                self._accum_usage(result["usage"], result.get("cache"))
 
                 calls = result["tool_calls"]
                 if not calls:
@@ -870,10 +912,19 @@ class AgentEngine:
                               if not last_failed else
                               "上一步工具调用失败，请结合截图分析原因（目标不在屏幕/坐标偏移/"
                               "弹窗未展开/参数错误），换方案重试（最多 2 次），仍失败则 ask_user 求助。")
-                    self._messages.append({
-                        "role": "user",
-                        "content": agent_llm.build_content(prompt, last_images),
-                    })
+                    new_content = agent_llm.build_content(prompt, last_images)
+                    # 截图消息原位替换：历史中始终只有末尾一条视觉消息，
+                    # 中间历史永不因截图变化 → 前缀缓存持续命中（无需 _prune_images 剥离）
+                    for i in range(len(self._messages) - 1, 0, -1):
+                        m = self._messages[i]
+                        c = m.get("content")
+                        if (isinstance(m, dict) and m.get("role") == "user"
+                                and isinstance(c, list)
+                                and any(isinstance(x, dict) and x.get("type") == "image_url"
+                                        for x in c)):
+                            del self._messages[i]
+                            break
+                    self._messages.append({"role": "user", "content": new_content})
         except agent_llm.AgentLLMError as e:
             # 用户主动停止（含 LLM 层"已停止"）优先识别为 stopped，而不是 error
             stopped = self._stop.is_set()

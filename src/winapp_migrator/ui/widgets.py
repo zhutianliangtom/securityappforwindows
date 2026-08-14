@@ -683,7 +683,7 @@ class ToastNotification(QWidget):
         self._anim_out.setEndValue(QPoint(screen.right() + 8, self.pos().y()))
         self._out_group.start()
 
-    def _close_now(self):
+    def _close_now(self, *_):
         self._stay.stop()
         self._anim_in.stop()
         self.hide()

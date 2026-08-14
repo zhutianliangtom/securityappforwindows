@@ -84,7 +84,7 @@ class _TaskRow(QWidget):
         lay.addWidget(self.progress)
         lay.addWidget(self.info_label)
 
-    def _click_pause(self):
+    def _click_pause(self, *_):
         """点击暂停/继续：立即给出反馈，等待线程状态同步"""
         if self.task.snapshot()["status"] == "paused":
             self._on_pause(self.task)  # 实际是 resume
@@ -95,7 +95,7 @@ class _TaskRow(QWidget):
         self.pause_btn.setEnabled(False)
         self.pause_btn.setText("暂停中")
 
-    def _click_cancel(self):
+    def _click_cancel(self, *_):
         """点击取消：立即反馈，等待线程退出"""
         self._on_cancel(self.task)
         self.pause_btn.setEnabled(False)
@@ -254,7 +254,7 @@ class DownloadDialog(QDialog):
             self._settings.setValue("download_dir", dest)
         return dest or None
 
-    def _add_task(self):
+    def _add_task(self, *_):
         url = "".join(self.url_edit.text().split())  # 清理所有空白/换行
         if not url.lower().startswith(("http://", "https://")):
             QMessageBox.warning(self, "提示", "请输入以 http:// 或 https:// 开头的下载地址")

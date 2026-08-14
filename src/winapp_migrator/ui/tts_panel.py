@@ -202,7 +202,7 @@ class TtsPanel(QDialog):
         self.model_combo.setCurrentIndex(idx if idx >= 0 else 0)
         self.voice_edit.setText(self._cfg.get("voice_id", ""))
 
-    def _on_save_cfg(self):
+    def _on_save_cfg(self, *_):
         ok = agent_tts.save_config(
             api_key=self.key_edit.text().strip(),
             target_model=self.model_combo.currentText().strip() or agent_tts.DEFAULT_TARGET_MODEL,
@@ -219,18 +219,18 @@ class TtsPanel(QDialog):
     def _current_voice(self) -> str:
         return self.voice_edit.text().strip() or self._cfg.get("voice_id", "")
 
-    def _on_pick_audio(self):
+    def _on_pick_audio(self, *_):
         path, _ = QFileDialog.getOpenFileName(
             self, "选择参考音频", "", "音频文件 (*.wav *.mp3 *.m4a *.flac *.ogg *.aac);;所有文件 (*)")
         if path:
             self.audio_path_edit.setText(path)
 
-    def _on_pick_outdir(self):
+    def _on_pick_outdir(self, *_):
         path = QFileDialog.getExistingDirectory(self, "选择输出目录")
         if path:
             self.outdir_edit.setText(path)
 
-    def _on_create_voice(self):
+    def _on_create_voice(self, *_):
         audio = self.audio_path_edit.text().strip()
         if not audio:
             QMessageBox.warning(self, "提示", "请先选择参考音频文件")
@@ -240,7 +240,7 @@ class TtsPanel(QDialog):
         self._spawn("create", agent_tts.create_voice, audio,
                     self._current_model(), self._cfg.get("preferred_name", "diede"))
 
-    def _on_query_voice(self):
+    def _on_query_voice(self, *_):
         vid = self._current_voice()
         if not vid:
             QMessageBox.warning(self, "提示", "请先填写音色 ID")
@@ -248,7 +248,7 @@ class TtsPanel(QDialog):
         self._log(f"查询音色：{vid}")
         self._spawn("query", agent_tts.query_voice, vid, self._current_model())
 
-    def _on_delete_voice(self):
+    def _on_delete_voice(self, *_):
         vid = self._current_voice()
         if not vid:
             QMessageBox.warning(self, "提示", "请先填写音色 ID")
@@ -259,7 +259,7 @@ class TtsPanel(QDialog):
         self._spawn("delete", agent_tts.delete_voice, vid)
 
     # ------------------------------------------------------------ 合成
-    def _on_speak(self):
+    def _on_speak(self, *_):
         text = self.text_edit.toPlainText().strip()
         vid = self._current_voice()
         if not text:
@@ -275,7 +275,7 @@ class TtsPanel(QDialog):
         self._log("开始合成语音 …")
         self._spawn("speak", agent_tts.synthesize, text, vid, self._current_model(), out_path)
 
-    def _on_stop(self):
+    def _on_stop(self, *_):
         self._stop_player()
         self._log("已停止播放")
 

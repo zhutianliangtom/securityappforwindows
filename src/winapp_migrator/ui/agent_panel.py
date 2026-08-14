@@ -42,7 +42,6 @@ from PyQt6.QtWidgets import (
 
 from winapp_migrator.core import agent_llm, agent_engine, agent_skills, agent_sandbox, agent_tools, agent_screen, agent_tts
 from winapp_migrator.core.agent_mcp import McpManager
-from winapp_migrator.core.agent_screen import capture_screen_data_url
 from winapp_migrator.ui.widgets import add_brand_footer
 from winapp_migrator.utils.helpers import is_admin
 
@@ -526,6 +525,30 @@ def _render_text(raw: str) -> str:
     return _md_to_html(raw)
 
 
+def _seg_sig(seg: dict) -> tuple:
+    """段内容签名（用于渲染缓存命中判断）：只取能影响渲染结果的字段，
+    流式追加只改尾部 -> O(1) 签名，避免每 tick 对全段做昂贵重渲染"""
+    t = seg["type"]
+    if t == "text":
+        raw = seg["raw"]
+        return (t, len(raw), raw[-64:])
+    if t == "think":
+        h = seg.get("html", "")
+        return (t, bool(seg.get("collapsed")), len(h), h[-64:])
+    if t == "result":
+        return (t, bool(seg.get("collapsed")), seg["html"])
+    if t == "progress":
+        return (t, seg.get("pct"), seg.get("text"))
+    if t == "image":
+        return (t, seg.get("url"))
+    if t == "sub":
+        raw = seg.get("raw", "")
+        return (t, seg.get("title"), len(raw), raw[-64:])
+    if t in ("op", "mark"):
+        return (t, seg["html"])
+    return (t,)
+
+
 class _TypingDots(QWidget):
     """任务执行中 AI 气泡下方的打字指示器动画（iMessage 风格：三点依次弹起，
     相位错开 1/3 循环，随消息流滚动，无 emoji）"""
@@ -616,14 +639,13 @@ class _ConfirmDialog(QDialog):
                                 f"border: 1px solid {BORDER}; border-radius: 8px;")
         lay.addWidget(pic_label, 2)
         try:
-            from PyQt6.QtGui import QPixmap
-            import base64
-            raw = base64.b64decode(capture_screen_data_url().split(",", 1)[1])
-            pix = QPixmap()
-            pix.loadFromData(raw)
-            pix = pix.scaledToWidth(500, Qt.TransformationMode.SmoothTransformation)
-            pic_label.setPixmap(pix)
-            pic_label.setText("")
+            from PyQt6.QtGui import QApplication, QPixmap
+            # 轻量截屏：直接 grabWindow 取位图再缩放显示。
+            # 不走 capture_screen_data_url()（PrintWindow/全屏 PNG 编码 + base64
+            # + 坐标网格叠加，高分辨率屏在 UI 线程耗时可达数百毫秒，确认弹窗卡顿）
+            pix = QApplication.primaryScreen().grabWindow(0)
+            pic_label.setPixmap(
+                pix.scaledToWidth(500, Qt.TransformationMode.SmoothTransformation))
         except Exception:
             pic_label.setText("截图不可用")
 
@@ -641,11 +663,11 @@ class _ConfirmDialog(QDialog):
         lay.addLayout(btns)
         add_brand_footer(self)
 
-    def _allow(self):
+    def _allow(self, *_):
         self.result_ok = True
         self.accept()
 
-    def _deny(self):
+    def _deny(self, *_):
         self.result_ok = False
         self.accept()
 
@@ -1011,7 +1033,7 @@ class _AgentSettingsDialog(QDialog):
         self.effort_slider.blockSignals(False)
         tip = QLabel("工作强度会自动按模型映射：DeepSeek V4 思考模式（high/max）、"
                      "GLM-4.5+ 深度思考、OpenAI o 系列 reasoning_effort，无需手动开启")
-        tip.setStyleSheet(f"color: {self._TEXT_DIM}; font-size: 12px;")
+        tip.setStyleSheet(f"color: {self._DIM}; font-size: 12px;")
         tip.setWordWrap(True)
         lay.addWidget(tip)
         lay.addStretch(1)
@@ -1226,7 +1248,7 @@ class _AgentSettingsDialog(QDialog):
                 w._url_lbl.setStyleSheet(f"color: {self._DIM}; font-size: 11px;")
                 w._models_lbl.setStyleSheet(f"color: {self._DIM}; font-size: 12px;")
 
-    def _on_provider_add(self):
+    def _on_provider_add(self, *_):
         dlg = _ProviderDialog(parent=self)
         if dlg.exec() == QDialog.DialogCode.Accepted:
             p = dlg.provider_data()
@@ -1250,7 +1272,7 @@ class _AgentSettingsDialog(QDialog):
         self._reload_provider_list()
         self._update_provider_ui()
 
-    def _on_provider_delete(self):
+    def _on_provider_delete(self, *_):
         item = self.provider_list.currentItem()
         if item is None:
             QMessageBox.information(self, "提示", "请先选中一个服务商")
@@ -1283,13 +1305,13 @@ class _AgentSettingsDialog(QDialog):
             return self._mcp_servers[row]
         return None
 
-    def _on_mcp_add(self):
+    def _on_mcp_add(self, *_):
         dlg = _McpServerDialog(parent=self)
         if dlg.exec() == QDialog.DialogCode.Accepted:
             self._mcp_servers.append(dlg.server_data())
             self._reload_mcp_list()
 
-    def _on_mcp_edit(self):
+    def _on_mcp_edit(self, *_):
         if self._current_mcp() is None:
             QMessageBox.information(self, "提示", "请先选择一个服务器")
             return
@@ -1298,7 +1320,7 @@ class _AgentSettingsDialog(QDialog):
             self._mcp_servers[self.mcp_list.currentRow()] = dlg.server_data()
             self._reload_mcp_list()
 
-    def _on_mcp_delete(self):
+    def _on_mcp_delete(self, *_):
         row = self.mcp_list.currentRow()
         if 0 <= row < len(self._mcp_servers):
             self._mcp_servers.pop(row)
@@ -1329,7 +1351,7 @@ class _AgentSettingsDialog(QDialog):
         if self._engine is not None:
             self._engine.direct = (self._mode == "yolo")
 
-    def _browse_workdir(self):
+    def _browse_workdir(self, *_):
         """弹出目录选择框，写入工作目录输入框（保存时持久化）"""
         start = self.workdir_edit.text().strip() or str(Path.home())
         d = QFileDialog.getExistingDirectory(self, "选择 AI 工作目录", start)
@@ -1341,7 +1363,7 @@ class _AgentSettingsDialog(QDialog):
         self._effort = agent_llm.EFFORTS[self.effort_slider.value()]
         self.effort_label.setText(self._effort)
 
-    def _save(self):
+    def _save(self, *_):
         # 多服务商：基于卡片列表持久化，全部服务商统一参与路由
         providers = [dict(p) for p in getattr(self, "_providers", [])]
         if not providers:
@@ -1389,7 +1411,7 @@ class _AgentSettingsDialog(QDialog):
         else:
             QMessageBox.warning(self, "错误", "保存设置失败（无写入权限）")
 
-    def _import_skill(self):
+    def _import_skill(self, *_):
         """导入市场标准技能文件：SKILL.md 单文件或含 SKILL.md 的 zip 包"""
         path, _ = QFileDialog.getOpenFileName(
             self, "选择市场标准技能文件", "",
@@ -1402,7 +1424,7 @@ class _AgentSettingsDialog(QDialog):
         else:
             QMessageBox.warning(self, "导入失败", msg)
 
-    def _delete_skill(self):
+    def _delete_skill(self, *_):
         """删除用户技能：下拉选择（排除内置 JSON/md 技能），确认后删除并即时生效"""
         builtin = ({s.get("name") for s in agent_skills.DEFAULT_SKILLS}
                    | set(agent_skills._BUILTIN_MD_SKILLS))
@@ -1500,7 +1522,7 @@ class _McpServerDialog(QDialog):
         if server and server.get("type") == "sse":
             self.template_combo.setCurrentIndex(0)
 
-    def _sync_type(self):
+    def _sync_type(self, *_):
         sse = self.type_combo.currentData() == "sse"
         self.command_edit.setEnabled(not sse)
         self.args_edit.setEnabled(not sse)
@@ -1516,7 +1538,7 @@ class _McpServerDialog(QDialog):
             self.type_combo.setCurrentIndex(0)
             self.url_edit.clear()
 
-    def _accept_check(self):
+    def _accept_check(self, *_):
         name = self.name_edit.text().strip()
         if not name:
             QMessageBox.warning(self, "提示", "请输入服务器名称")
@@ -1702,7 +1724,7 @@ class _AskUserDialog(QDialog):
         lay.addLayout(btns)
         add_brand_footer(self)
 
-    def _accept_clicked(self):
+    def _accept_clicked(self, *_):
         sel = [b.text() for b in self._choice_btns if b.isChecked()]
         custom = self._free_input.text().strip() if self._free_input.isVisible() else ""
         # 自定义输入内容替换"其他…"选项；未填写的"其他…"直接忽略
@@ -2069,6 +2091,7 @@ class AgentPanel(QDialog):
     status_signal = pyqtSignal(str)
     result_signal = pyqtSignal(str, str, object)   # 工具名, 执行输出, 截图缩略图列表
     reasoning_signal = pyqtSignal(str)     # 流式思考过程增量
+    sub_signal = pyqtSignal(str, int, str, str)  # 子Agent事件: kind, task_idx, title, text
     confirm_signal = pyqtSignal(str, str, str)  # name, args_json, risk
     eval_signal = pyqtSignal(str)          # agnes-2.5-flash 任务难度评估结果（后台线程 → 主线程）
     switch_ready = pyqtSignal(object)      # 会话切换：后台线程读取完成后回主线程渲染
@@ -2081,8 +2104,11 @@ class AgentPanel(QDialog):
         self.setWindowTitle("zhuzhu Copilot")
         self.setWindowIcon(QIcon(_app_icon_path()))
         self.setAcceptDrops(True)   # 支持把图片/文件拖入对话框
-        # 窗口可自由调整大小，标题栏带最小化/最大化按钮
+        # 窗口可自由调整大小，标题栏带最小化/最大化按钮。
+        # Window 标志使其成为独立顶层窗口：任务栏显示独立缩略图，点击任务栏
+        # 可定位并恢复/打开 AI 面板（否则作为父窗口子窗口，任务栏无独立入口）
         self.setWindowFlags(self.windowFlags()
+                            | Qt.WindowType.Window
                             | Qt.WindowType.WindowMinMaxButtonsHint
                             | Qt.WindowType.WindowMaximizeButtonHint
                             | Qt.WindowType.WindowMinimizeButtonHint)
@@ -2147,6 +2173,7 @@ class AgentPanel(QDialog):
         # 当前 AI 气泡段落序列（交织渲染：思考 → 操作 → 正文 → 操作 → 正文…）
         self._ai_bubble = None
         self._segments = []   # [{"type": "think|op|result|text|mark", "html"/"raw": ...}]
+        self._seg_cache = {}  # id(seg) -> (签名, 渲染HTML)：流式刷新只重算增长的段
 
         # 任务进行中的转圈动画行（显示在消息流顶部）
         self._spinner_row = None
@@ -2381,6 +2408,7 @@ class AgentPanel(QDialog):
         self.status_signal.connect(self._on_status)
         self.result_signal.connect(self._on_result)
         self.reasoning_signal.connect(self._on_reasoning)
+        self.sub_signal.connect(self._on_sub_event)
         self.confirm_signal.connect(self._on_confirm)
         self.ask_signal.connect(self._on_ask)
         self.eval_signal.connect(self._on_assess_done)
@@ -2540,6 +2568,7 @@ class AgentPanel(QDialog):
         self._ai_bubble = None
         self._segments = []
         self._history_segments = []
+        self._sub_segs = {}
         self._user_msgs = []
         self._rows = []
         self._hide_spinner()
@@ -2591,7 +2620,7 @@ class AgentPanel(QDialog):
         self._update_welcome()
         self._scroll_bottom()
 
-    def _new_session(self):
+    def _new_session(self, *_):
         """新开对话：保存当前 → 创建空会话（上下文与旧对话隔离）"""
         if self._engine and self._engine._thread and self._engine._thread.is_alive():
             self._engine.stop()
@@ -2604,6 +2633,7 @@ class AgentPanel(QDialog):
         self._ai_bubble = None
         self._segments = []
         self._history_segments = []
+        self._sub_segs = {}
         self._user_msgs = []
         self._rows = []
         self._hide_spinner()
@@ -2838,7 +2868,7 @@ class AgentPanel(QDialog):
         self.action_btn.setEnabled(True)
         self.action_btn.setToolTip("发送")
 
-    def _sync_action_style(self):
+    def _sync_action_style(self, *_):
         """输入框内容变化：空闲时刷新发送按钮配色（空→灰蓝，有内容→深蓝）"""
         if not self._task_active and self._eval_pending is None:
             self._set_action_idle()
@@ -2867,7 +2897,7 @@ class AgentPanel(QDialog):
         """任务结束：停止动画并恢复空闲发送状态"""
         self._set_action_idle()
 
-    def _on_action_clicked(self):
+    def _on_action_clicked(self, *_):
         """融合按钮点击：空闲→发送；运行中→停止"""
         if self._task_active or self._eval_pending is not None:
             self._stop()
@@ -2916,80 +2946,110 @@ class AgentPanel(QDialog):
                   .replace('width="200"', f'width="{int(200 * s)}"')
 
     def _build_ai_html(self, segs: list) -> str:
-        """把一组 AI 段渲染为富文本（思考/操作/结果/截图/正文/标记）"""
+        """把一组 AI 段渲染为富文本（思考/操作/结果/截图/正文/标记）。
+
+        性能：每段按内容签名缓存渲染结果（_seg_cache），流式刷新时只重算
+        正在增长的段，其余段直接复用，避免整泡每 60ms 全量 markdown 重渲染
+        （长回复时 O(n²) 导致输出明显卡顿）。"""
         s = self._font_scale()
-        f_main, f_dim, f_sm, f_op = int(14 * s), int(12 * s), int(11 * s), int(13 * s)
+        f_main, f_sm, f_op = int(14 * s), int(11 * s), int(13 * s)
         img_w = max(200, int(self._bubble_max_width() * 0.4))   # 截图缩略图随气泡宽度放大（约占内容区半宽）
         parts = []
         for i, seg in enumerate(segs):
             t = seg["type"]
-            if t == "think":
-                body = seg.get("html", "") or ""
-                if len(body) > 1500:      # 思考全文过长时显示截断
-                    body = "…" + body[-1500:]
-                if seg.get("collapsed"):
-                    # 折叠态：一行提示，点击展开
-                    parts.append(
-                        f'<div style="color:{TEXT_DIM};font-size:{f_sm}px;margin-top:2px;">'
-                        f'<a href="think:toggle" style="color:{ACCENT};text-decoration:none;">'
-                        f'思考过程（已折叠 · 点击展开）</a></div>')
-                else:
-                    # 展开态：标题在上，思考内容在下，末尾可收起
-                    parts.append(
-                        f'<div style="color:{TEXT_DIM};font-size:{f_sm}px;margin:2px 0;">'
-                        f'思考过程&nbsp;'
-                        f'<a href="think:toggle" style="color:{TEXT_DIM};font-size:{f_sm}px;'
-                        f'text-decoration:none;">收起 ▲</a></div>'
-                        f'<div style="color:{TEXT_DIM};font-size:{f_sm}px;font-style:italic;'
-                        f'border-left:2px solid {BORDER};padding:2px 10px;'
-                        f'margin:0 0 8px 6px;">{body}</div>')
-            elif t == "op":
-                parts.append(f'<div style="color:{ACCENT};font-size:{f_op}px;'
-                             f'font-family:Consolas;margin-top:16px;">{seg["html"]}</div>')
-            elif t == "result":
-                # 执行结果输出完成即默认折叠，点击展开/收起（带段索引，支持同气泡多条命令结果独立折叠）
-                if seg.get("collapsed"):
-                    parts.append(
-                        f'<div style="color:{TEXT_DIM};font-size:{f_sm}px;margin-top:2px;">'
-                        f'<a href="result:toggle:{i}" style="color:{ACCENT};text-decoration:none;">'
-                        f'执行结果（已折叠 · 点击展开）</a></div>')
-                else:
-                    parts.append(
-                        f'<div style="color:{TEXT_DIM};font-size:{f_sm}px;margin:2px 0;">'
-                        f'执行结果&nbsp;'
-                        f'<a href="result:toggle:{i}" style="color:{TEXT_DIM};font-size:{f_sm}px;'
-                        f'text-decoration:none;">收起 ▲</a></div>'
-                        f'<div style="color:{TEXT_DIM};font-size:{f_op}px;font-family:Consolas;'
-                        f'border-left:3px solid {BORDER};padding:2px 10px;'
-                        f'margin:0 0 4px 14px;">'
-                        f'{_linkify(seg["html"])}</div>')
-            elif t == "progress":
-                # 下载进度条：AI 气泡内实时渲染（面板轮询快照更新）
-                pct = max(0, min(100, int(seg.get("pct") or 0)))
-                bw = 220
-                fill = int(bw * pct / 100)
-                parts.append(
-                    f'<div style="margin:12px 0 6px;">'
-                    f'<div style="background:{BG};border:1px solid {BORDER};border-radius:6px;'
-                    f'height:10px;width:{bw}px;">'
-                    f'<div style="background:{ACCENT};height:10px;width:{fill}px;'
-                    'border-radius:6px;"></div></div>'
-                    f'<div style="color:{TEXT_DIM};font-size:11px;margin-top:3px;">'
-                    f'{_esc(seg.get("text") or "下载中…")}</div></div>')
-            elif t == "image":
-                # 截图融入主对话气泡：圆角缩略图 + 细边框，不显示“已截屏”等提示小字
-                url = seg.get("url", "")
-                parts.append(
-                    f'<div style="padding-left:30px;">'
-                    f'<img src="{url}" width="{img_w}" style="border-radius:10px;'
-                    'border:1px solid #000000;display:block;margin:12px 0 12px 0;"></div>')
-            elif t == "text":
-                parts.append(f'<div style="color:{TEXT};font-size:{f_main}px;">'
-                             f'{_render_text(seg["raw"])}</div>')
-            elif t == "mark":
-                parts.append(f'<div style="color:{TEXT_DIM};font-size:{f_sm}px;">'
-                             f'{_linkify(seg["html"])}</div>')
+            if t == "split":
+                continue
+            sig = (i, img_w) + _seg_sig(seg)
+            cached = self._seg_cache.get(id(seg))
+            if cached is not None and cached[0] == sig:
+                parts.append(cached[1])
+                continue
+            html = self._render_seg_html(seg, i, t, f_main, f_sm, f_op, img_w)
+            if html is None:
+                continue
+            self._seg_cache[id(seg)] = (sig, html)
+            parts.append(html)
         return "".join(parts)
+
+    def _render_seg_html(self, seg: dict, i: int, t: str,
+                         f_main: int, f_sm: int, f_op: int, img_w: int):
+        """渲染单个段为富文本（_build_ai_html 的逐段实现，内容不变时被缓存跳过）"""
+        if t == "think":
+            body = seg.get("html", "") or ""
+            if len(body) > 1500:      # 思考全文过长时显示截断
+                body = "…" + body[-1500:]
+            if seg.get("collapsed"):
+                # 折叠态：一行提示，点击展开
+                return (
+                    f'<div style="color:{TEXT_DIM};font-size:{f_sm}px;margin-top:2px;">'
+                    f'<a href="think:toggle" style="color:{ACCENT};text-decoration:none;">'
+                    f'思考过程（已折叠 · 点击展开）</a></div>')
+            # 展开态：标题在上，思考内容在下，末尾可收起
+            return (
+                f'<div style="color:{TEXT_DIM};font-size:{f_sm}px;margin:2px 0;">'
+                f'思考过程&nbsp;'
+                f'<a href="think:toggle" style="color:{TEXT_DIM};font-size:{f_sm}px;'
+                f'text-decoration:none;">收起 ▲</a></div>'
+                f'<div style="color:{TEXT_DIM};font-size:{f_sm}px;font-style:italic;'
+                f'border-left:2px solid {BORDER};padding:2px 10px;'
+                f'margin:0 0 8px 6px;">{body}</div>')
+        if t == "op":
+            return (f'<div style="color:{ACCENT};font-size:{f_op}px;'
+                    f'font-family:Consolas;margin-top:16px;">{seg["html"]}</div>')
+        if t == "result":
+            # 执行结果输出完成即默认折叠，点击展开/收起（带段索引，支持同气泡多条命令结果独立折叠）
+            if seg.get("collapsed"):
+                return (
+                    f'<div style="color:{TEXT_DIM};font-size:{f_sm}px;margin-top:2px;">'
+                    f'<a href="result:toggle:{i}" style="color:{ACCENT};text-decoration:none;">'
+                    f'执行结果（已折叠 · 点击展开）</a></div>')
+            return (
+                f'<div style="color:{TEXT_DIM};font-size:{f_sm}px;margin:2px 0;">'
+                f'执行结果&nbsp;'
+                f'<a href="result:toggle:{i}" style="color:{TEXT_DIM};font-size:{f_sm}px;'
+                f'text-decoration:none;">收起 ▲</a></div>'
+                f'<div style="color:{TEXT_DIM};font-size:{f_op}px;font-family:Consolas;'
+                f'border-left:3px solid {BORDER};padding:2px 10px;'
+                f'margin:0 0 4px 14px;">'
+                f'{_linkify(seg["html"])}</div>')
+        if t == "progress":
+            # 下载进度条：AI 气泡内实时渲染（面板轮询快照更新）
+            pct = max(0, min(100, int(seg.get("pct") or 0)))
+            bw = 220
+            fill = int(bw * pct / 100)
+            return (
+                f'<div style="margin:12px 0 6px;">'
+                f'<div style="background:{BG};border:1px solid {BORDER};border-radius:6px;'
+                f'height:10px;width:{bw}px;">'
+                f'<div style="background:{ACCENT};height:10px;width:{fill}px;'
+                'border-radius:6px;"></div></div>'
+                f'<div style="color:{TEXT_DIM};font-size:11px;margin-top:3px;">'
+                f'{_esc(seg.get("text") or "下载中…")}</div></div>')
+        if t == "image":
+            # 截图融入主对话气泡：圆角缩略图 + 细边框，不显示“已截屏”等提示小字
+            url = seg.get("url", "")
+            return (
+                f'<div style="padding-left:30px;">'
+                f'<img src="{url}" width="{img_w}" style="border-radius:10px;'
+                'border:1px solid #000000;display:block;margin:12px 0 12px 0;"></div>')
+        if t == "text":
+            return (f'<div style="color:{TEXT};font-size:{f_main}px;">'
+                    f'{_render_text(seg["raw"])}</div>')
+        if t == "mark":
+            return (f'<div style="color:{TEXT_DIM};font-size:{f_sm}px;">'
+                    f'{_linkify(seg["html"])}</div>')
+        if t == "sub":
+            # 子 Agent 输出块：与主 Agent 共用同一气泡，深蓝标签 + 缩进内容区分来源
+            stitle = _esc(seg.get("title", "子Agent"))
+            body = _esc(seg.get("raw", "")).replace("\n", "<br/>")
+            return (
+                f'<div style="margin:6px 0 2px;">'
+                f'<div style="color:{ACCENT};font-size:{f_op}px;">'
+                f'子Agent · {stitle}</div>'
+                f'<div style="color:{TEXT_DIM};font-size:{f_sm}px;font-family:Consolas;'
+                f'border-left:2px solid {ACCENT};padding:2px 10px;'
+                f'margin:2px 0 4px 6px;">{body}</div></div>')
+        return None
 
     def _segments_full(self) -> list:
         """完整对话流 = 历史段（含 split 边界）+ 当前回复段"""
@@ -3166,12 +3226,18 @@ class AgentPanel(QDialog):
             print(f"[agent] 打开链接失败: {url} → {e}")
 
     def _refresh_ai_html(self):
-        """节流刷新 AI 气泡：流式 token 高频调用时合并为每 60ms 批量 setText 一次，
-        避免每个 token 全量重建 HTML + 触发整条消息区重排版导致输出卡顿"""
+        """节流刷新 AI 气泡：流式 token 高频调用时合并为批量 setText 一次，
+        避免每个 token 全量重建 HTML + 触发整条消息区重排版导致输出卡顿。
+        自适应节流：正文越长重排版越贵（Qt 富文本 setText 为全量解析），
+        逐步放宽刷新间隔，保长输出流畅。"""
         if self._ai_bubble is None or self._html_dirty:
             return
         self._html_dirty = True
-        QTimer.singleShot(60, self._apply_refresh_ai_html)
+        raw = (self._segments[-1].get("raw", "")
+               if self._segments and self._segments[-1].get("type") == "text" else "")
+        n = len(raw)
+        delay = 60 if n < 8000 else (120 if n < 24000 else 200)
+        QTimer.singleShot(delay, self._apply_refresh_ai_html)
 
     def _apply_refresh_ai_html(self):
         self._html_dirty = False
@@ -3304,14 +3370,15 @@ class AgentPanel(QDialog):
             msg = f"MCP: 初始化异常 {e}"
         self.mcp_signal.emit(msg)
 
-    def _open_settings(self):
+    def _open_settings(self, *_):
         """打开 AI 设置；保存后应用（刷新纯文本/记忆状态，空闲时重建引擎）"""
         dlg = _AgentSettingsDialog(parent=self)
         if dlg.exec():
             self._apply_agent_settings()
 
     def _apply_agent_settings(self):
-        """设置变更后：刷新模式/工作目录/多模型/力度/纯文本状态；引擎空闲则重建以应用新配置"""
+        """设置变更后：刷新模式/工作目录/多模型/力度/纯文本状态；
+        引擎单例复用，仅更新 LLM 连接参数与运行时开关（保留对话上下文）。"""
         s = agent_skills.load_settings()
         self._model_cfg = agent_llm.load_model_config()
         self._sync_model_combo()   # 模型/服务商变更后即时重建输入框右侧下拉
@@ -3328,7 +3395,18 @@ class AgentPanel(QDialog):
             if busy:
                 self._add_status("当前有任务进行中，新设置将在任务结束后生效", WARN)
                 return
-            self._engine = None   # 空闲：丢弃旧引擎，重建应用新模型/开关
+            # 复用引擎：仅更新连接参数与开关，不重建 → 对话上下文（_messages）
+            # 与 token 统计完整保留；每次发送前 _launch_task 还会按模型路由重设连接参数
+            cfg = self._llm_config()
+            eng = self._engine
+            eng.llm.base_url = (cfg.get("base_url") or agent_llm.DEFAULT_BASE_URL).rstrip("/")
+            eng.llm.api_key = cfg.get("api_key") or agent_llm.DEFAULT_API_KEY
+            eng.llm.protocol = cfg.get("protocol", "chat")
+            eng.llm.model = cfg.get("model") or agent_llm.DEFAULT_MODEL
+            eng.text_only = self._text_only
+            eng.memory_enabled = self._memory_enabled
+            eng.direct = self._mode == "yolo"
+            return
         self._ensure_engine()
 
     # ---------- 工作力度 / 模型路由 ----------
@@ -3364,8 +3442,11 @@ class AgentPanel(QDialog):
                 self.model_combo.addItem(f"{pname} - {x}", (pname, x))
         # 恢复当前选中（手动指定模型）
         if self._model_override:
-            idx = self.model_combo.findData(
-                (self._model_override_provider, self._model_override))
+            # 注意：QComboBox.findData 对 Python tuple 的 QVariant 比较不可靠
+            # （tuple 会转换后比较失败返回 -1），这里改用 Python 层逐项比较
+            target = (self._model_override_provider, self._model_override)
+            idx = next((i for i in range(self.model_combo.count())
+                        if self.model_combo.itemData(i) == target), -1)
             if idx < 0:      # 手动指定模型已不在列表：清除覆盖回到自动路由
                 self._model_override = None
                 self._model_override_provider = ""
@@ -3545,6 +3626,7 @@ class AgentPanel(QDialog):
                 on_status=lambda s: self.status_signal.emit(s),
                 on_result=lambda n, t, im: self.result_signal.emit(n, t, im),
                 on_reasoning=lambda s: self.reasoning_signal.emit(s),
+                on_sub_event=lambda k, i, t, s: self.sub_signal.emit(k, i, t, s),
                 confirm=self._confirm_tool,
                 ask_user=self._ask_user_tool,
                 text_only=self._text_only,
@@ -3892,7 +3974,7 @@ class AgentPanel(QDialog):
         box.exec()
         return box.clickedButton() is yes
 
-    def _clear_chat(self):
+    def _clear_chat(self, *_):
         """清空上下文并永久删除当前对话（二次弹窗确认，删除不可恢复）"""
         if not self._session_id:
             return
@@ -3914,6 +3996,8 @@ class AgentPanel(QDialog):
         self._ai_bubble = None
         self._segments = []
         self._history_segments = []
+        self._seg_cache.clear()
+        self._sub_segs.clear()
         self._user_msgs = []
         self._rows = []
         self._hide_spinner()
@@ -4125,7 +4209,7 @@ class AgentPanel(QDialog):
                 return True
         return super().eventFilter(obj, event)
 
-    def _pick_attachments(self):
+    def _pick_attachments(self, *_):
         """「+」上传按钮：文件选择器多选，图片/文件均可（纯文本模型自动过滤图片）"""
         paths, _ = QFileDialog.getOpenFileNames(self, "选择文件/图片发送给 AI")
         for p in paths or []:
@@ -4355,6 +4439,38 @@ class AgentPanel(QDialog):
             self._segments.append({"type": "image", "url": u, "caption": "已截屏"})
         self._refresh_ai_html()
         self._scroll_bottom()
+
+    def _on_sub_event(self, kind: str, idx: int, title: str, text: str):
+        """子 Agent 事件（与主 Agent 共用同一聊天气泡）：
+        start=创建子块；delta=流式输出追加到对应子块。
+        多个子任务并发时按 task_idx 定位各自子块，互不覆盖。"""
+        self._stop_send_spin()
+        self._last_activity = time.time()
+        if kind == "start":
+            self._ensure_ai_bubble()
+            seg = {"type": "sub", "title": title, "raw": ""}
+            self._sub_segs[idx] = seg
+            self._segments.append(seg)
+            self._refresh_ai_html()
+            self._scroll_bottom()
+            return
+        if kind == "delta":
+            seg = self._sub_segs.get(idx)
+            if seg is None:
+                # 兜底：段列表被重建（历史加载/会话重置）导致索引失效时，
+                # 定位最后一个同标题 sub 段；仍找不到则新建
+                for s in reversed(self._segments):
+                    if s.get("type") == "sub" and s.get("title") == title:
+                        seg = s
+                        break
+                if seg is None:
+                    self._ensure_ai_bubble()
+                    seg = {"type": "sub", "title": title, "raw": ""}
+                    self._segments.append(seg)
+                self._sub_segs[idx] = seg
+            seg["raw"] += text
+            self._refresh_ai_html()
+            self._scroll_bottom()
 
     def _on_status(self, s: str):
         self._stop_send_spin()

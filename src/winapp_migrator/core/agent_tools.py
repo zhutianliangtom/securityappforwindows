@@ -179,7 +179,13 @@ TOOLS = [
                                         "description": "等待秒数，默认 5。长任务可调大以等待更多输出"},
                                "force_quit": {"type": "boolean",
                                               "description": "是否开启超时强制退出：wait 秒内未完成则强制结束进程树。"
-                                                             "默认 false（转入后台运行，可轮询）。预计会长时间挂起/无输出的命令建议开启"}},
+                                                             "默认 false（转入后台运行，可轮询）。预计会长时间挂起/无输出的命令建议开启"},
+                               "cwd": {"type": "string",
+                                       "description": "命令执行的工作目录（可选，默认工作目录）"},
+                               "stdin": {"type": "string",
+                                         "description": "要写入命令标准输入的文本（可选，交互式命令用）"},
+                               "max_output": {"type": "integer",
+                                              "description": "返回输出最大字符数（可选，默认不限）"}},
                            "required": ["command"]},
         },
     },
@@ -201,9 +207,12 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "read_file",
-            "description": "读取文本文件内容（最大 200KB）。",
+            "description": "读取文本文件内容（最大 200KB）。支持 offset/limit 按行分段读取大文件："
+                           "offset 起始行号（从 1 开始）、limit 返回行数。",
             "parameters": {"type": "object",
-                           "properties": {"path": {"type": "string"}},
+                           "properties": {"path": {"type": "string"},
+                                          "offset": {"type": "integer", "description": "起始行号（1-based，可选）"},
+                                          "limit": {"type": "integer", "description": "最多返回行数（可选）"}},
                            "required": ["path"]},
         },
     },
@@ -211,10 +220,13 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "write_file",
-            "description": "创建或覆盖写入文本文件（目录不存在自动创建，最大 500KB）。",
+            "description": "创建或覆盖写入文本文件（目录不存在自动创建，最大 500KB）；"
+                           "append=true 时追加到文件末尾。",
             "parameters": {"type": "object",
                            "properties": {"path": {"type": "string"},
-                                          "content": {"type": "string"}},
+                                          "content": {"type": "string"},
+                                          "append": {"type": "boolean",
+                                                     "description": "true 追加写入，默认 false 覆盖"}},
                            "required": ["path", "content"]},
         },
     },
@@ -222,12 +234,42 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "edit_file",
-            "description": "编辑文件：把文件中的 old_text 精确替换为 new_text（仅替换第一处，最大 200KB）。",
+            "description": "编辑文件：把文件中的 old_text 精确替换为 new_text（多行匹配亦可）。"
+                           "目标内容在文件中出现多处时会拒绝并提示出现次数，防止误替换；"
+                           "多行或上下文匹配请用 search_replace。每次编辑前自动备份，可用 undo_file 回滚。",
             "parameters": {"type": "object",
                            "properties": {"path": {"type": "string"},
                                           "old_text": {"type": "string"},
                                           "new_text": {"type": "string"}},
                            "required": ["path", "old_text", "new_text"]},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "search_replace",
+            "description": "多行精确替换文件内容：把 old_text（可含换行）替换为 new_text。"
+                           "默认要求唯一匹配（出现多处拒绝并返回次数）；count=all 时替换全部出现。"
+                           "自动备份，可用 undo_file 回滚。",
+            "parameters": {"type": "object",
+                           "properties": {"path": {"type": "string"},
+                                          "old_text": {"type": "string"},
+                                          "new_text": {"type": "string"},
+                                          "count": {"type": "string",
+                                                    "enum": ["once", "all"],
+                                                    "description": "once 仅限唯一匹配（默认）；all 替换全部出现"}},
+                           "required": ["path", "old_text", "new_text"]},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "undo_file",
+            "description": "回滚文件到最近一次写操作（write_file/edit_file/search_replace）之前的状态。"
+                           "误改文件时使用，返回回滚前的内容摘要。",
+            "parameters": {"type": "object",
+                           "properties": {"path": {"type": "string"}},
+                           "required": ["path"]},
         },
     },
     {
@@ -270,6 +312,54 @@ TOOLS = [
             "description": "读取本地记忆文件 memory.md 的完整内容。开始新任务或需要回忆过往信息时，"
                            "由你自行决定是否调用。",
             "parameters": {"type": "object", "properties": {}, "required": []},
+        },
+    },
+    # ---------- 任务清单（TODO） ----------
+    {
+        "type": "function",
+        "function": {
+            "name": "update_todo",
+            "description": "创建/更新任务清单（多步任务的进度管理）：每次全量提交所有任务（含已完成）。"
+                           "持久化到本地，引擎每轮会把未完成任务摘要注入上下文，上下文压缩后进度不丢失。"
+                           "开始多步任务时先创建清单，每完成一步更新对应状态。"
+                           "status: pending/in_progress/completed。",
+            "parameters": {"type": "object",
+                           "properties": {
+                               "todos": {"type": "array",
+                                         "description": "全部任务列表（每次全量提交，缺项即视为已移除）",
+                                         "items": {"type": "object",
+                                                   "properties": {
+                                                       "title": {"type": "string", "description": "任务描述"},
+                                                       "status": {"type": "string",
+                                                                  "enum": ["pending", "in_progress", "completed"],
+                                                                  "description": "状态，默认 pending"}},
+                                                   "required": ["title"]}}},
+                           "required": ["todos"]},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_todo",
+            "description": "查看当前任务清单及每项状态（多步任务进度）。",
+            "parameters": {"type": "object", "properties": {}, "required": []},
+        },
+    },
+    # ---------- 项目脚手架 ----------
+    {
+        "type": "function",
+        "function": {
+            "name": "new_project",
+            "description": "创建项目脚手架：在指定目录生成基础结构（README.md、.gitignore、src/ 等），"
+                           "kind=python/node/web 时附带对应模板文件。开始新项目/新任务目录时使用。",
+            "parameters": {"type": "object",
+                           "properties": {
+                               "path": {"type": "string", "description": "项目目录（绝对路径或基于工作目录）"},
+                               "kind": {"type": "string",
+                                        "enum": ["generic", "python", "node", "web"],
+                                        "description": "项目类型，默认 generic"},
+                               "name": {"type": "string", "description": "项目名称（默认取目录名）"}},
+                           "required": ["path"]},
         },
     },
     # ---------- 系统信息（原 MCP server 工具内置化） ----------
@@ -785,8 +875,23 @@ TOOLS = [
     {
         "type": "function",
         "function": {
+            "name": "git_info",
+            "description": "执行只读 git 查询命令（查看仓库状态/日志/差异/分支等），"
+                           "危险命令（commit/push/reset/checkout/clean/merge 等改写操作）会被拒绝。"
+                           "cwd 为 git 仓库目录（默认工作目录）。",
+            "parameters": {"type": "object",
+                           "properties": {
+                               "command": {"type": "string",
+                                           "description": "git 子命令及参数，如 status --short / log --oneline -5 / diff --stat"},
+                               "cwd": {"type": "string", "description": "git 仓库目录（可选，默认工作目录）"}},
+                           "required": ["command"]},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "web_search",
-            "description": "联网搜索：在 Bing 上搜索关键词，返回结果列表（标题/URL/摘要）。"
+            "description": "联网搜索：在 Bing 上搜索关键词（失败自动回退 DuckDuckGo），返回结果列表（标题/URL/摘要）。"
                            "需要查询实时信息、新闻、文档或知识范围外内容时使用。",
             "parameters": {"type": "object",
                            "properties": {
@@ -1142,17 +1247,38 @@ def execute_tool(name: str, args: dict, allow_dangerous: bool = False,
         if name == "run_command":
             return _run_command(str(args.get("command", "")),
                                 agent_sandbox.to_int(args.get("wait", 5)),
-                                bool(args.get("force_quit", False)))
+                                bool(args.get("force_quit", False)),
+                                str(args.get("cwd", "")),
+                                str(args.get("stdin", "")),
+                                agent_sandbox.to_int(args.get("max_output", 0)) or None)
         if name == "check_command":
             return _check_command(agent_sandbox.to_int(args.get("cmd_id", 0)) or None)
         if name == "read_file":
-            return _read_file(str(args.get("path", "")))
+            return _read_file(str(args.get("path", "")),
+                              agent_sandbox.to_int(args.get("offset", 0)) or None,
+                              agent_sandbox.to_int(args.get("limit", 0)) or None)
         if name == "write_file":
-            return _write_file(str(args.get("path", "")), str(args.get("content", "")))
+            return _write_file(str(args.get("path", "")), str(args.get("content", "")),
+                               bool(args.get("append", False)))
         if name == "edit_file":
             return _edit_file(str(args.get("path", "")),
                               str(args.get("old_text", "")),
                               str(args.get("new_text", "")))
+        if name == "search_replace":
+            return _search_replace(str(args.get("path", "")),
+                                   str(args.get("old_text", "")),
+                                   str(args.get("new_text", "")),
+                                   str(args.get("count", "once") or "once"))
+        if name == "undo_file":
+            return _undo_file(str(args.get("path", "")))
+        if name == "update_todo":
+            return _update_todo(args.get("todos") if isinstance(args.get("todos"), list) else [])
+        if name == "list_todo":
+            return _list_todo()
+        if name == "new_project":
+            return _new_project(str(args.get("path", "")),
+                                str(args.get("kind", "generic") or "generic"),
+                                str(args.get("name", "")))
         if name == "delete_file":
             return _delete_file(str(args.get("path", "")))
         if name == "list_directory":
@@ -1264,6 +1390,8 @@ def execute_tool(name: str, args: dict, allow_dangerous: bool = False,
             ok, msg = agent_browser.controller().switch_tab(
                 agent_sandbox.to_int(args.get("id", 0)))
             return {"text": f"[browser_switch_tab] {msg}", "images": []}
+        if name == "git_info":
+            return _git_info(str(args.get("command", "")), str(args.get("cwd", "")))
         if name == "web_search":
             return _web_search(str(args.get("query", "")),
                                agent_sandbox.to_int(args.get("max_results", 8)))
@@ -1347,25 +1475,39 @@ def execute_tool(name: str, args: dict, allow_dangerous: bool = False,
     return _blocked(f"[未知工具] {name}")
 
 
-def _run_command(command: str, wait: int = 5, force_quit: bool = False) -> dict:
+def _run_command(command: str, wait: int = 5, force_quit: bool = False,
+                 cwd: str = "", stdin_text: str = "", max_output: int = None) -> dict:
     """执行命令，AI 自主选择等待/强制退出策略。
 
     - wait 秒内完成：返回完整输出与退出码
     - wait 秒内未完成：
       · force_quit=True  → taskkill /T 强制结束进程树，返回已收集输出
       · force_quit=False → 转入后台注册表（可 check_command 轮询进度），返回命令 ID
+    cwd 指定工作目录（默认工作目录）；stdin_text 写入标准输入（交互命令）；
+    max_output 限制返回文本长度（默认不限）。
     reader 线程持续排空 stdout/stderr，轮询期间可拿到增量进度。
     """
     try:
         wait = max(0, int(wait))   # 不做上限：长命令可无限等待，由 stop/转后台机制兜底
+        run_cwd = str(_resolve(cwd)) if (cwd or "").strip() else (WORKDIR or None)
         # 二进制模式读取管道，统一由 _decode_robust 智能解码（UTF-8 优先，回退 OEM 代码页），
         # 兼容现代工具 UTF-8 输出与传统控制台 GBK 输出
         proc = subprocess.Popen(command, shell=True, stdout=subprocess.PIPE,
-                                stderr=subprocess.PIPE,
-                                cwd=WORKDIR or None,     # 命令默认在工作目录执行
+                                stderr=subprocess.PIPE, stdin=subprocess.PIPE,
+                                cwd=run_cwd,
                                 creationflags=_CREATE_NO_WINDOW)
     except Exception as e:
         return _blocked(f"[沙盒] 命令执行失败: {e}")
+
+    if (stdin_text or "").strip():
+        try:
+            proc.stdin.write((stdin_text + "\n").encode(_console_encoding(), "replace"))
+        except Exception:
+            pass
+    try:
+        proc.stdin.close()
+    except Exception:
+        pass
 
     out_lines, err_lines = [], []
     lock = threading.Lock()
@@ -1394,6 +1536,8 @@ def _run_command(command: str, wait: int = 5, force_quit: bool = False) -> dict:
             text += f"\n[stderr] {err}" if text else f"[stderr] {err}"
         if not text:
             text = f"（命令完成，退出码 {code}）"
+        if max_output and max_output > 0 and len(text) > max_output:
+            text = text[:max_output] + f"\n…（输出过长，已截断至 {max_output} 字符）"
         return text
 
     if code is not None:
@@ -1451,7 +1595,29 @@ def _check_command(cmd_id: int = None) -> dict:
     return {"text": f"命令 ID {cmd_id} 已结束，退出码 {code}。最终输出：\n" + _collect(rec), "images": []}
 
 
-def _read_file(path: str) -> dict:
+# 文件操作撤销备份目录：write/edit/search_replace 写前备份，undo_file 回滚
+_UNDO_DIR = Path.home() / ".winapp_migrator" / "agent" / "undo"
+
+
+def _undo_key(p: Path) -> str:
+    import hashlib
+    return hashlib.md5(str(p.resolve()).encode("utf-8", "replace")).hexdigest()[:12]
+
+
+def _backup_for_undo(p: Path):
+    """写操作前把原文件内容备份（同名文件序号递增），供 undo_file 回滚"""
+    try:
+        if p.is_file():
+            _UNDO_DIR.mkdir(parents=True, exist_ok=True)
+            key = _undo_key(p)
+            seq = len(list(_UNDO_DIR.glob(f"{key}_*.bak")))
+            (_UNDO_DIR / f"{key}_{seq}.bak").write_bytes(p.read_bytes())
+    except OSError:
+        pass
+
+
+def _read_file(path: str, offset: int = None, limit: int = None) -> dict:
+    """读取文本文件：支持 offset（起始行，1-based）/limit（行数）分段读大文件"""
     p = _resolve(path)
     level, reason = agent_sandbox.assess_path(str(p), "read")
     if level != "safe":
@@ -1459,16 +1625,22 @@ def _read_file(path: str) -> dict:
     try:
         size = os.path.getsize(p)
         if size > 200 * 1024:
-            return _blocked(f"[沙盒] 文件过大（{size} 字节 > 200KB）")
+            return _blocked(f"[沙盒] 文件过大（{size} 字节 > 200KB），"
+                            "可用 read_file 的 offset/limit 分段读取")
         with open(p, "rb") as f:
-            raw = f.read()
-        return {"text": _decode_robust(raw)[:30000], "images": []}
+            text = _decode_robust(f.read())
+        if (offset and offset > 1) or (limit and limit > 0):
+            lines = text.splitlines(keepends=True)
+            start = (offset - 1) if (offset and offset > 1) else 0
+            text = "".join(lines[start:start + limit]) if (limit and limit > 0) \
+                else "".join(lines[start:])
+        return {"text": text[:30000], "images": []}
     except Exception as e:
         return _blocked(f"[沙盒] 读取失败: {e}")
 
 
-def _write_file(path: str, content: str) -> dict:
-    """创建/覆盖写入文件（工作目录优先；系统目录也可写，删除系统目录仍被拒）"""
+def _write_file(path: str, content: str, append: bool = False) -> dict:
+    """创建/覆盖/追加写入文件（工作目录优先）；覆盖/追加前自动备份，可 undo_file 回滚"""
     p = _resolve(path)
     level, reason = agent_sandbox.assess_path(str(p), "write")
     if level != "safe":
@@ -1477,15 +1649,18 @@ def _write_file(path: str, content: str) -> dict:
         return _blocked("[沙盒] 内容过大（>500KB）")
     try:
         os.makedirs(os.path.dirname(os.path.abspath(p)), exist_ok=True)
-        with open(p, "w", encoding="utf-8") as f:
+        _backup_for_undo(p)
+        mode = "a" if append else "w"
+        with open(p, mode, encoding="utf-8") as f:
             f.write(content)
-        return {"text": f"已写入 {len(content)} 字符到 {p}", "images": []}
+        verb = "追加" if append else "写入"
+        return {"text": f"已{verb} {len(content)} 字符到 {p}", "images": []}
     except Exception as e:
         return _blocked(f"[沙盒] 写入失败: {e}")
 
 
 def _edit_file(path: str, old_text: str, new_text: str) -> dict:
-    """编辑文件：精确替换第一处 old_text"""
+    """编辑文件：精确替换唯一匹配的 old_text（多处拒绝防误替换）；写前备份"""
     p = _resolve(path)
     level, reason = agent_sandbox.assess_path(str(p), "write")
     if level != "safe":
@@ -1495,14 +1670,72 @@ def _edit_file(path: str, old_text: str, new_text: str) -> dict:
             return _blocked("[沙盒] 文件过大（>200KB）")
         with open(p, "r", encoding="utf-8", errors="replace") as f:
             data = f.read()
-        if old_text not in data:
+        n = data.count(old_text)
+        if n == 0:
             return _blocked("[沙盒] 未找到要替换的内容")
+        if n > 1:
+            return _blocked(f"[沙盒] 目标内容出现 {n} 处，为避免误替换请提供包含上下文的"
+                            "更长匹配串，或用 search_replace(count=all) 替换全部")
+        _backup_for_undo(p)
         data = data.replace(old_text, new_text, 1)
         with open(p, "w", encoding="utf-8") as f:
             f.write(data)
         return {"text": f"已替换 1 处内容到 {p}", "images": []}
     except Exception as e:
         return _blocked(f"[沙盒] 编辑失败: {e}")
+
+
+def _search_replace(path: str, old_text: str, new_text: str, count: str = "once") -> dict:
+    """多行精确替换：默认要求唯一匹配；count=all 替换全部出现。写前备份"""
+    p = _resolve(path)
+    level, reason = agent_sandbox.assess_path(str(p), "write")
+    if level != "safe":
+        return _blocked(f"[沙盒拒绝] {reason}")
+    try:
+        if os.path.getsize(p) > 200 * 1024:
+            return _blocked("[沙盒] 文件过大（>200KB）")
+        with open(p, "r", encoding="utf-8", errors="replace") as f:
+            data = f.read()
+        n = data.count(old_text)
+        if n == 0:
+            return _blocked("[沙盒] 未找到要替换的内容")
+        if count == "all":
+            _backup_for_undo(p)
+            data = data.replace(old_text, new_text)
+            with open(p, "w", encoding="utf-8") as f:
+                f.write(data)
+            return {"text": f"已替换 {n} 处内容到 {p}", "images": []}
+        if n > 1:
+            return _blocked(f"[沙盒] 目标内容出现 {n} 处，为避免误替换请包含更多上下文，"
+                            "或明确 count=all 替换全部")
+        _backup_for_undo(p)
+        data = data.replace(old_text, new_text, 1)
+        with open(p, "w", encoding="utf-8") as f:
+            f.write(data)
+        return {"text": f"已替换 1 处内容到 {p}", "images": []}
+    except Exception as e:
+        return _blocked(f"[沙盒] 替换失败: {e}")
+
+
+def _undo_file(path: str) -> dict:
+    """回滚文件到最近一次写操作（write_file/edit_file/search_replace）之前的状态"""
+    p = _resolve(path)
+    level, reason = agent_sandbox.assess_path(str(p), "write")
+    if level != "safe":
+        return _blocked(f"[沙盒拒绝] {reason}")
+    key = _undo_key(p)
+    try:
+        baks = sorted(_UNDO_DIR.glob(f"{key}_*.bak"))
+        if not baks:
+            return _blocked(f"[undo_file] 没有可回滚的备份：{p}")
+        bak = baks[-1]
+        old_bytes = bak.read_bytes()
+        _backup_for_undo(p)   # 当前版本也入备份，可再次回滚
+        p.write_bytes(old_bytes)
+        preview = _decode_robust(old_bytes)[:200]
+        return {"text": f"已回滚 {p} 到最近一次写操作前。当前内容开头：\n{preview}", "images": []}
+    except Exception as e:
+        return _blocked(f"[undo_file] 回滚失败: {e}")
 
 
 def _delete_file(path: str) -> dict:
@@ -1587,6 +1820,60 @@ def _load_memory() -> dict:
         return {"text": text, "images": []}
     except Exception as e:
         return _blocked(f"[记忆] 读取失败: {e}")
+
+
+# ---------- 任务清单（TODO，独立于对话上下文持久化，压缩后进度不丢失） ----------
+TODO_FILE = Path.home() / ".winapp_migrator" / "agent" / "todos.json"
+_TODO_STATUS = ("pending", "in_progress", "completed")
+
+
+def load_todos() -> list:
+    """读取任务清单：返回 [{title, status}]，文件缺失/损坏返回空"""
+    try:
+        if TODO_FILE.exists():
+            data = json.loads(TODO_FILE.read_text(encoding="utf-8"))
+            if isinstance(data, list):
+                return [t for t in data if isinstance(t, dict) and str(t.get("title") or "").strip()]
+    except Exception:
+        pass
+    return []
+
+
+def _update_todo(todos: list) -> dict:
+    """创建/更新任务清单：全量提交，status 限定 pending/in_progress/completed"""
+    clean = []
+    for t in todos:
+        if not isinstance(t, dict):
+            continue
+        title = str(t.get("title") or "").strip()
+        if not title:
+            continue
+        st = str(t.get("status") or "pending").strip().lower()
+        if st not in _TODO_STATUS:
+            st = "pending"
+        clean.append({"title": title, "status": st})
+    try:
+        TODO_FILE.parent.mkdir(parents=True, exist_ok=True)
+        TODO_FILE.write_text(json.dumps(clean, ensure_ascii=False, indent=2), encoding="utf-8")
+    except OSError as e:
+        return _blocked(f"[update_todo] 保存失败: {e}")
+    active = [t for t in clean if t["status"] != "completed"]
+    text = f"任务清单已更新：共 {len(clean)} 项，未完成 {len(active)} 项。"
+    if clean:
+        text += "\n" + "\n".join(f"- [{t['status']}] {t['title']}" for t in clean)
+    return {"text": text, "images": []}
+
+
+def _list_todo() -> dict:
+    """查看当前任务清单"""
+    todos = load_todos()
+    if not todos:
+        return {"text": "（当前没有任务清单。开始多步任务时可用 update_todo 创建并跟踪进度。）",
+                "images": []}
+    active = [t for t in todos if t["status"] != "completed"]
+    text = f"任务清单（共 {len(todos)} 项，未完成 {len(active)} 项）：\n"
+    text += "\n".join(f"- [{t['status']}] {t['title']}" for t in todos)
+    return {"text": text, "images": []}
 
 
 # ---------- 系统信息（原 MCP server 工具内置化，真实 API） ----------
@@ -2973,40 +3260,101 @@ def _create_xlsx(path: str, sheets: list, style: dict = None) -> dict:
     return {"text": msg, "images": []}
 
 
+# 只读 git 白名单：仅允许查询类子命令，改写/推送/回退等危险操作一律拒绝
+_GIT_SAFE = ("status", "log", "diff", "branch", "remote", "show", "tag",
+             "rev-parse", "describe", "ls-files", "ls-tree", "symbolic-ref")
+
+
+def _git_info(command: str, cwd: str = "") -> dict:
+    """执行只读 git 查询命令（status/log/diff/branch/remote 等），危险命令被拒绝"""
+    import shlex
+    import subprocess as _sp
+    cmd = (command or "").strip()
+    if not cmd:
+        return _blocked("[git_info] 缺少 command（如 status --short / log --oneline -5）")
+    try:
+        parts = shlex.split(cmd)
+    except ValueError:
+        return _blocked(f"[git_info] 命令格式错误: {cmd}")
+    head = parts[0].lower() if parts else ""
+    if not head or head not in _GIT_SAFE:
+        return _blocked(f"[git_info] 仅允许只读查询命令（{'/'.join(_GIT_SAFE)}），已拒绝: {cmd}")
+    base = str(_resolve(cwd)) if (cwd or "").strip() else (WORKDIR or os.getcwd())
+    try:
+        proc = _sp.run(["git", "-C", base] + parts, capture_output=True, timeout=20,
+                       creationflags=_CREATE_NO_WINDOW)
+    except _sp.TimeoutExpired:
+        return _blocked("[git_info] 命令超时（20 秒）")
+    except Exception as e:
+        return _blocked(f"[git_info] 执行失败: {e}")
+    out = _decode_robust(proc.stdout).strip()
+    err = _decode_robust(proc.stderr).strip()
+    text = out or err or "（无输出）"
+    if proc.returncode != 0:
+        text = f"退出码 {proc.returncode}：{err or out}"
+    return {"text": text[:8000], "images": []}
+
+
 def _web_search(query: str, max_results: int = 8) -> dict:
-    """联网搜索：Bing（cn.bing.com）关键词搜索，解析结果列表（标题/URL/摘要）"""
+    """联网搜索：Bing 优先，失败/无结果自动回退 DuckDuckGo，解析结果列表"""
     import re as _re
     import urllib.parse
     query = (query or "").strip()
     if not query:
         return _blocked("[web_search] 缺少搜索关键词 query")
     max_results = max(1, min(int(max_results or 8), 10))
-    url = f"https://cn.bing.com/search?q={urllib.parse.quote(query)}&mkt=zh-CN"
-    try:
+
+    def _bing() -> list:
+        url = f"https://cn.bing.com/search?q={urllib.parse.quote(query)}&mkt=zh-CN"
         html = _http_request(url)
-    except Exception as e:
-        return _blocked(f"[web_search] 搜索请求失败: {e}")
-    # Bing 结果条目 <li class="b_algo"> 内 <h2><a href> 标题 + <p> 摘要
-    items = []
-    for m in _re.finditer(r'<li class="b_algo"[^>]*>(.*?)</li>', html, _re.S):
-        block = m.group(1)
-        am = _re.search(r'<a[^>]+href="([^"]+)"[^>]*>(.*?)</a>', block, _re.S)
-        if not am:
-            continue
-        href = am.group(1).strip()
-        title = _re.sub(r"<[^>]+>", "", am.group(2)).strip()
-        if not title:
-            continue
-        pm = _re.search(r"<p[^>]*>(.*?)</p>", block, _re.S)
-        snippet = _re.sub(r"<[^>]+>", "", pm.group(1)).strip() if pm else ""
-        items.append((title, href, snippet))
-        if len(items) >= max_results:
-            break
+        items = []
+        for m in _re.finditer(r'<li class="b_algo"[^>]*>(.*?)</li>', html, _re.S):
+            block = m.group(1)
+            am = _re.search(r'<a[^>]+href="([^"]+)"[^>]*>(.*?)</a>', block, _re.S)
+            if not am:
+                continue
+            href = am.group(1).strip()
+            title = _re.sub(r"<[^>]+>", "", am.group(2)).strip()
+            if not title:
+                continue
+            pm = _re.search(r"<p[^>]*>(.*?)</p>", block, _re.S)
+            snippet = _re.sub(r"<[^>]+>", "", pm.group(1)).strip() if pm else ""
+            items.append((title, href, snippet))
+            if len(items) >= max_results:
+                break
+        return items
+
+    def _ddg() -> list:
+        url = f"https://html.duckduckgo.com/html/?q={urllib.parse.quote(query)}"
+        html = _http_request(url)
+        items = []
+        for m in _re.finditer(r'<a[^>]+class="result__a"[^>]+href="([^"]+)"[^>]*>(.*?)</a>', html, _re.S):
+            href = _re.sub(r"&amp;", "&", m.group(1).strip())
+            title = _re.sub(r"<[^>]+>", "", m.group(2)).strip()
+            if not title:
+                continue
+            sn = _re.search(r'<a[^>]+class="result__snippet"[^>]*>(.*?)</a>', html[m.start():], _re.S)
+            snippet = _re.sub(r"<[^>]+>", "", sn.group(1)).strip() if sn else ""
+            items.append((title, href, snippet))
+            if len(items) >= max_results:
+                break
+        return items
+
+    items, source = [], "Bing"
+    try:
+        items = _bing()
+    except Exception:
+        items = []
     if not items:
-        return {"text": f"[web_search] 未解析到结果（关键词：{query}）。"
+        try:
+            items, source = _ddg(), "DuckDuckGo"
+        except Exception:
+            items = []
+    if not items:
+        return {"text": f"[web_search] 搜索失败或未解析到结果（关键词：{query}）。"
                         "可改用 web_fetch 直接抓取搜索页分析。", "images": []}
     import html as _html_mod
-    lines = [f"搜索结果（{len(items)} 条，来源 Bing）："]
+    lines = [f"搜索结果（{len(items)} 条，来源 {source}）："]
     for i, (t, h, s) in enumerate(items, 1):
         lines.append(f"{i}. {_html_mod.unescape(t)}")
         lines.append(f"   {h}")
@@ -3043,6 +3391,53 @@ def _create_skill(name: str, description: str, instruction: str) -> dict:
     from winapp_migrator.core import agent_skills
     ok, msg = agent_skills.create_md_skill(name, description, instruction)
     return ({"text": msg, "images": []} if ok else _blocked(msg))
+
+
+def _new_project(path: str, kind: str = "generic", name: str = "") -> dict:
+    """创建项目脚手架：README.md / .gitignore / src/，kind 附带对应模板文件"""
+    p = _resolve(path)
+    try:
+        p.mkdir(parents=True, exist_ok=True)
+    except OSError as e:
+        return _blocked(f"[new_project] 创建目录失败: {e}")
+    name = (name or "").strip() or p.name
+    kind = (kind or "generic").strip().lower()
+    if kind not in ("generic", "python", "node", "web"):
+        kind = "generic"
+    created = []
+    try:
+        readme = (f"# {name}\n\n项目说明：TODO\n\n## 结构\n\n- `src/` 源码\n")
+        (p / "README.md").write_text(readme, encoding="utf-8")
+        created.append("README.md")
+        (p / ".gitignore").write_text("__pycache__/\n*.pyc\nnode_modules/\ndist/\nbuild/\n.env\n",
+                                      encoding="utf-8")
+        created.append(".gitignore")
+        src = p / "src"
+        src.mkdir(parents=True, exist_ok=True)
+        if kind == "python":
+            (src / "main.py").write_text(
+                "def main():\n    print(\"Hello from %s\")\n\n\nif __name__ == \"__main__\":\n    main()\n" % name,
+                encoding="utf-8")
+            (p / "requirements.txt").write_text("", encoding="utf-8")
+            created.extend(["src/main.py", "requirements.txt"])
+        elif kind == "node":
+            import json as _json
+            (p / "package.json").write_text(_json.dumps(
+                {"name": name, "version": "0.1.0", "main": "src/index.js",
+                 "scripts": {"start": "node src/index.js"}}, ensure_ascii=False, indent=2),
+                encoding="utf-8")
+            (src / "index.js").write_text("console.log('Hello from %s');\n" % name, encoding="utf-8")
+            created.extend(["package.json", "src/index.js"])
+        elif kind == "web":
+            (src / "index.html").write_text(
+                "<!DOCTYPE html>\n<html lang=\"zh-CN\">\n<head>\n<meta charset=\"UTF-8\">\n"
+                f"<title>{name}</title>\n</head>\n<body>\n<h1>{name}</h1>\n</body>\n</html>\n",
+                encoding="utf-8")
+            created.append("src/index.html")
+        return {"text": f"项目脚手架已创建：{p}\n" + "\n".join(f"- {c}" for c in created),
+                "images": []}
+    except OSError as e:
+        return _blocked(f"[new_project] 生成失败: {e}")
 
 
 def tool_schemas() -> list:

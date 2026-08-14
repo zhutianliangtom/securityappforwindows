@@ -526,6 +526,13 @@ def _render_text(raw: str) -> str:
     return _md_to_html(raw)
 
 
+def _render_stream_text(raw: str) -> str:
+    """流式输出期间的轻量渲染：仅转义 + 换行，不做完整 markdown 解析。
+    避免每 60ms 对累积全文重跑 _md_to_html 的 O(n²) 开销；输出结束后
+    由 _refresh_meta 收尾切回 _render_text 全量渲染一次。"""
+    return _esc(raw).replace("\n", "<br/>")
+
+
 class _TypingDots(QWidget):
     """任务执行中 AI 气泡下方的打字指示器动画（iMessage 风格：三点依次弹起，
     相位错开 1/3 循环，随消息流滚动，无 emoji）"""
@@ -2073,6 +2080,7 @@ class AgentPanel(QDialog):
     reasoning_signal = pyqtSignal(str)     # 流式思考过程增量
     confirm_signal = pyqtSignal(str, str, str)  # name, args_json, risk
     eval_signal = pyqtSignal(str)          # agnes-2.5-flash 任务难度评估结果（后台线程 → 主线程）
+    switch_ready = pyqtSignal(object)      # 会话切换：后台线程读取完成后回主线程渲染
     ask_signal = pyqtSignal(str)           # ask_user 提问（args_json）
     mcp_signal = pyqtSignal(str)
     compact_signal = pyqtSignal(int)   # /compact 压缩完成（后台线程 → 主线程，参数=合并条数）
@@ -2386,6 +2394,7 @@ class AgentPanel(QDialog):
         self.ask_signal.connect(self._on_ask)
         self.eval_signal.connect(self._on_assess_done)
         self.compact_signal.connect(self._on_compact_done)
+        self.switch_ready.connect(self._finish_switch)
 
     # ---------- 欢迎页（无对话时居中介绍 AI 功能） ----------
 
@@ -2474,13 +2483,17 @@ class AgentPanel(QDialog):
         return s
 
     def _persist_current(self):
-        """保存当前会话：模型消息 + 界面气泡（segments/用户消息）+ 更新时间"""
+        """保存当前会话：模型消息 + 界面气泡（segments/用户消息）+ 更新时间。
+        模型上下文（含图片压缩，耗时）后台线程异步落盘，UI 线程只做轻量 JSON 快存，
+        避免任务结束/切换会话时主线程阻塞。"""
         if not self._session_id:
             return
         d = self._sessions_dir()
         d.mkdir(parents=True, exist_ok=True)
         if self._engine:
-            self._engine.save_context(d / f"{self._session_id}.json")
+            eng, sid = self._engine, self._session_id
+            threading.Thread(target=lambda: eng.save_context(d / f"{sid}.json"),
+                             daemon=True).start()
         try:
             # 完整对话流 = 历史段（含 split 边界）+ 当前回复段；过滤“已停止”提示小字
             clean_segments = [
@@ -2526,7 +2539,8 @@ class AgentPanel(QDialog):
             self._switch_to(sid)
 
     def _switch_to(self, sid: str):
-        """切换会话：保存当前 → 加载目标（上下文互相隔离）"""
+        """切换会话：保存当前 → 清空当前 UI → 后台线程读取目标数据，加载完成一次性渲染
+        （文件读取/上下文恢复放后台，避免切换时主线程阻塞）"""
         self._persist_current()
         self._session_id = sid
         lst = self._load_session_list()
@@ -2542,20 +2556,35 @@ class AgentPanel(QDialog):
             item = self.msg_lay.takeAt(0)
             self._free_layout_item(item)
         self._bubble_widgets = []
+        self._bubble_segs = {}
         d = self._sessions_dir()
         eng = self._ensure_engine()
-        eng.load_context(d / f"{sid}.json")
-        segs, ums, data = [], [], {}
-        try:
-            with open(d / f"{sid}.ui.json", encoding="utf-8") as f:
-                data = json.load(f)
-            segs, ums = data.get("segments") or [], data.get("user_msgs") or []
-        except Exception:
-            pass
+
+        def _load():
+            try:
+                eng.load_context(d / f"{sid}.json")
+            except Exception:
+                pass
+            segs, ums, rows = [], [], []
+            data = {}
+            try:
+                with open(d / f"{sid}.ui.json", encoding="utf-8") as f:
+                    data = json.load(f)
+                segs, ums = data.get("segments") or [], data.get("user_msgs") or []
+            except Exception:
+                pass
+            rows = [r for r in (data.get("rows") or [])
+                    if isinstance(r, dict) and r.get("type") in ("user", "ai")]
+            return segs, ums, rows
+
+        threading.Thread(target=lambda: self.switch_ready.emit(_load()),
+                         daemon=True).start()
+
+    def _finish_switch(self, res: tuple):
+        """会话切换收尾（主线程）：用后台线程读到的数据一次性渲染"""
+        segs, ums, rows = res
         self._user_msgs = ums
-        # 交错行：新版文件直接使用持久化顺序；旧版文件（无 rows）置空，稍后按段流重建
-        self._rows = [r for r in (data.get("rows") or [])
-                      if isinstance(r, dict) and r.get("type") in ("user", "ai")]
+        self._rows = rows
         # 加载时过滤掉旧版本中持久化的“已停止”提示小字，避免重启后仍显示
         self._history_segments = [
             seg for seg in (segs or [])
@@ -2855,15 +2884,13 @@ class AgentPanel(QDialog):
             self._send()
 
     def _scroll_bottom(self):
-        # 流式输出高频调用时去重，避免 singleShot 堆积；
-        # 0ms 立即滚 + 150/400/800ms 兜底（气泡高度与布局异步稳定后确保滚到最底部）
+        # 流式高频调用时合并：100ms 定时器批量滚动一次 + 400ms 兜底
+        # （气泡高度与布局异步稳定后确保滚到最底部），避免每个 token 触发滚动重排
         if self._scroll_pending:
             return
         self._scroll_pending = True
-        QTimer.singleShot(0, self._do_scroll_bottom)
-        QTimer.singleShot(150, self._do_scroll_bottom)
+        QTimer.singleShot(100, self._do_scroll_bottom)
         QTimer.singleShot(400, self._do_scroll_bottom)
-        QTimer.singleShot(800, self._do_scroll_bottom)
 
     def _do_scroll_bottom(self):
         self._scroll_pending = False
@@ -2966,8 +2993,10 @@ class AgentPanel(QDialog):
                     f'<img src="{url}" width="{img_w}" style="border-radius:10px;'
                     'border:1px solid #000000;display:block;margin:12px 0 12px 0;"></div>')
             elif t == "text":
-                parts.append(f'<div style="color:{TEXT};font-size:{f_main}px;">'
-                             f'{_render_text(seg["raw"])}</div>')
+                # 流式期间用轻量渲染（避免每帧重跑 markdown 解析），结束后切回完整渲染
+                html = _render_stream_text(seg["raw"]) if seg.get("streaming") \
+                    else _render_text(seg["raw"])
+                parts.append(f'<div style="color:{TEXT};font-size:{f_main}px;">{html}</div>')
             elif t == "mark":
                 parts.append(f'<div style="color:{TEXT_DIM};font-size:{f_sm}px;">'
                              f'{_linkify(seg["html"])}</div>')
@@ -4239,6 +4268,11 @@ class AgentPanel(QDialog):
             self._task_active = False
             self._hide_spinner()
             self._set_action_idle()   # 融合按钮恢复空闲发送状态
+            # 流式结束：正文段切回完整 markdown 渲染一次（此前为轻量流式渲染）
+            for seg in self._segments:
+                if seg.get("type") == "text":
+                    seg["streaming"] = False
+            self._refresh_ai_html()
             if not self._end_badge_shown:
                 self._end_badge_shown = True
                 self._show_end_badge()
@@ -4317,6 +4351,7 @@ class AgentPanel(QDialog):
         self._ensure_ai_bubble()
         self._ensure_text_segment()
         self._segments[-1]["raw"] += s
+        self._segments[-1]["streaming"] = True   # 流式期间轻量渲染
         self._refresh_ai_html()
         self._scroll_bottom()
 
@@ -4450,8 +4485,8 @@ class AgentPanel(QDialog):
                 mw.activateWindow()
         if self._engine:
             self._engine.stop()
-            self._engine.join(3)
-        self._persist_current()   # 关闭前持久化当前会话（重启可恢复）
+            self._engine.join(1)   # 缩短等待：持久化改后台线程收尾，避免关闭窗口长时间阻塞
+        self._persist_current()   # 关闭前持久化当前会话（上下文异步落盘，UI 只快速保存）
         try:
             self._mcp.close_all()
         except Exception:

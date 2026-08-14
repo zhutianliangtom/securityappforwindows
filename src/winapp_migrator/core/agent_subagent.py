@@ -14,17 +14,18 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from winapp_migrator.core import agent_llm, agent_tools
 
-# 子 Agent 可用工具白名单：读 + 联网（只读） + 编辑/创建/删除（迭代项目需要改代码）
+# 子 Agent 可用工具白名单：读 + 联网（只读） + 只读 git 查询 + 编辑/创建/删除（迭代项目需要改代码）
 SUB_AGENT_WHITELIST = ("read_file", "write_file", "edit_file", "delete_file",
                        "list_directory", "search_files", "find_app",
                        "web_fetch", "web_search", "clipboard", "extract_text",
+                       "git_info",
                        "create_docx", "create_pptx", "create_xlsx",
                        "system_info", "get_time", "env_var")
 
 _SUB_SYSTEM = """你是子 Agent：负责独立完成一项聚焦的子任务，结果会被主 Agent 汇总使用。
 规则：
 1. 使用提供的工具完成子任务：可读取/列目录/搜索，也可创建、编辑、删除项目文件（write_file / edit_file / delete_file）。
-2. 禁止执行任何命令（run_command 不可用）；修改文件前先读取相关内容，避免破坏已有逻辑。
+2. 禁止执行危险命令（run_command 不可用）；可用 git_info 查看仓库状态/日志/差异（仅只读查询）；修改文件前先读取相关内容，避免破坏已有逻辑。
 3. 先快速了解范围再动手，避免重复搜索或重复读取同一文件。
 4. 输出精炼总结：关键路径、关键结论与所做的修改，不要整篇贴原文。
 5. 找不到或无法完成时，明确说明已尝试的范围与原因。"""

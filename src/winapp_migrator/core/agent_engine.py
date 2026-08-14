@@ -33,6 +33,9 @@ _TTS_MIN_SEG = 18
 # 无句末标点时达到该长度强制切分（保证长句也能边输出边朗读）
 _TTS_MAX_SEG = 60
 
+# 上下文自动压缩触发阈值：估算 token 超过该值（约常见模型窗口的 70%）触发摘要压缩
+_COMPRESS_TOKEN_LIMIT = 70000
+
 # 对话上下文持久化路径
 CONTEXT_FILE = agent_skills.CONFIG_DIR / "context.json"
 
@@ -630,15 +633,26 @@ class AgentEngine:
     def _system_prompt(self, agent_name: str = "", skills: list = None) -> str:
         """构建系统提示词：每次都重新读取 settings.json，
         用户中途新增/修改的自定义规则在下一轮立即生效。
-        自动匹配到的技能（_auto_skills）与手动指定技能合并注入，让 AI 先按技能流程执行。"""
+        自动匹配到的技能（_auto_skills）与手动指定技能合并注入，让 AI 先按技能流程执行。
+        存在未完成的任务清单时附加注入，保证多步任务进度可见（上下文压缩后不丢失）。"""
         merged = list(skills or [])
         for s in (self._auto_skills or []):
             if s not in merged:
                 merged.append(s)
-        return agent_skills.build_system_prompt(agent_name, extra_skills=merged,
-                                                text_only=self.text_only,
-                                                memory_enabled=self.memory_enabled,
-                                                direct=self.direct)
+        prompt = agent_skills.build_system_prompt(agent_name, extra_skills=merged,
+                                                  text_only=self.text_only,
+                                                  memory_enabled=self.memory_enabled,
+                                                  direct=self.direct)
+        try:
+            active = [t for t in agent_tools.load_todos() if t.get("status") != "completed"]
+            if active:
+                lines = ["\n\n【当前任务清单】用 update_todo 跟踪进度（全量提交含已完成项）："]
+                for i, t in enumerate(active, 1):
+                    lines.append(f"{i}. [{t.get('status', 'pending')}] {t.get('title', '')}")
+                prompt += "\n".join(lines)
+        except Exception:
+            pass
+        return prompt
 
     @staticmethod
     def _rules_text() -> str:
@@ -716,15 +730,14 @@ class AgentEngine:
                 else:
                     self._prune_images(2)   # 视觉模型：历史截图只保留最近 2 张，防上下文膨胀
                     send_msgs = self._messages
-                # 自动压缩：上下文过长时让当前模型自主摘要压缩（失败回退启发式），
-                # 阈值/保留量取较大值：让 AI 记住最近 60 条完整消息，仅真正超长时才压缩
-                if len(self._messages) > 200:
+                # tokens 预计算（含数组文本，供 token 感知压缩）
+                self.last_estimate = self._estimate_tokens()
+                # 自动压缩：token 估算超阈值（约 70% 窗口）或条数兜底（>200 条）。
+                # 压缩时让当前模型自主摘要（失败回退启发式），保留最近 60 条完整消息。
+                if self.last_estimate > _COMPRESS_TOKEN_LIMIT or len(self._messages) > 200:
                     n = self._auto_compress(keep_recent=60)
                     if n and self.on_status:
                         self.on_status(f"上下文较长，已由模型自动摘要压缩 {n} 条旧消息")
-                # tokens 预计算
-                self.last_estimate = agent_llm.estimate_tokens(
-                    "".join(m["content"] for m in self._messages if isinstance(m.get("content"), str)))
                 result = self.llm.chat_stream(
                     send_msgs, tools=self._all_tools(), tool_choice="auto",
                     on_delta=self._on_stream_delta,
@@ -884,6 +897,18 @@ class AgentEngine:
                     virtual_desktop("back")
                 except Exception:
                     pass
+
+    def _estimate_tokens(self) -> int:
+        """估算当前上下文 token（含数组 text 内容），用于 token 感知压缩"""
+        texts = []
+        for m in self._messages:
+            c = m.get("content")
+            if isinstance(c, str):
+                texts.append(c)
+            elif isinstance(c, list):
+                texts.extend(x.get("text") or "" for x in c
+                             if isinstance(x, dict) and x.get("type") == "text")
+        return agent_llm.estimate_tokens("".join(texts))
 
     def _accum_usage(self, usage, cache=None):
         if not usage:

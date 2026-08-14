@@ -1,10 +1,13 @@
 import ctypes
 from ctypes import wintypes
 from pathlib import Path
+import subprocess
 
 from winapp_migrator.utils.helpers import setup_logging
 
 logger = setup_logging()
+
+NO_WINDOW = subprocess.CREATE_NO_WINDOW if hasattr(subprocess, "CREATE_NO_WINDOW") else 0
 
 ADVAPI32 = ctypes.windll.advapi32
 KERNEL32 = ctypes.windll.kernel32

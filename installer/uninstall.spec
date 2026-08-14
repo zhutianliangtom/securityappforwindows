@@ -47,5 +47,6 @@ exe = EXE(
     entitlements_file=None,
     icon='../assets/icon.ico',
     manifest='../assets/admin.manifest',
+    version='../build/version_info.txt',
     uac_admin=True,
 )

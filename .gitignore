@@ -7,6 +7,12 @@ __pycache__/
 .eggs/
 *.log
 
+# Cython build artifacts (.c generated from .py)
+src/winapp_migrator/**/*.c
+
+# Code-signing private key (public .cer / bat are committed)
+build/certs/*.pfx
+
 # PyInstaller
 build/__pycache__/
 build/WinAppMigrator/

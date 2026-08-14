@@ -27,8 +27,8 @@ from PyQt6.QtWidgets import (
 )
 
 APP_NAME = "zhuzhu Copilot"
-APP_VERSION = "2.0.2"
-APP_PUBLISHER = "zhuzhu Copilot"
+APP_VERSION = "3.0.0"
+APP_PUBLISHER = "zhutianliang"
 UNINSTALL_REG_PATH = r"Software\Microsoft\Windows\CurrentVersion\Uninstall\zhuzhu Copilot"
 
 # ------------------------------------------------------------

@@ -143,6 +143,13 @@ def delete_voice(voice_id: str, timeout: int = 60) -> dict:
     return _request(CUSTOMIZATION_URL, payload, timeout=timeout)
 
 
+def list_voices(timeout: int = 60) -> list:
+    """列出已创建的音色（action=list），返回 [{'voice','target_model','language','gmt_create'}, ...]"""
+    payload = {"model": ENROLL_MODEL, "input": {"action": "list"}}
+    d = _request(CUSTOMIZATION_URL, payload, timeout=timeout)
+    return (d.get("output") or {}).get("voice_list") or []
+
+
 # ---------------------------------------------------------------- 合成
 def synthesize(text: str, voice_id: str, model: str = DEFAULT_TARGET_MODEL,
                output_path: str = "", timeout: int = 120) -> str:
@@ -153,7 +160,10 @@ def synthesize(text: str, voice_id: str, model: str = DEFAULT_TARGET_MODEL,
     if not text.strip():
         raise RuntimeError("合成文本为空")
     if not voice_id.strip():
-        raise RuntimeError("未指定音色 voice_id，请先创建音色或选择已有音色")
+        # 未显式指定音色时，回退到设置面板选中的音色（tts.json）
+        voice_id = str(load_config().get("voice_id", "")).strip()
+    if not voice_id.strip():
+        raise RuntimeError("未指定音色 voice_id，请先在 AI 设置中选择音色")
     payload = {
         "model": model,
         "input": {"text": text, "voice": voice_id},

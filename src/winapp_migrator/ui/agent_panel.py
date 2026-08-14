@@ -40,8 +40,7 @@ from PyQt6.QtWidgets import (
     QLayout, QWidgetItem, QInputDialog,
 )
 
-from winapp_migrator.core import agent_llm, agent_engine, agent_skills, agent_sandbox, agent_tools, agent_screen
-from winapp_migrator.ui.tts_panel import TtsPanel
+from winapp_migrator.core import agent_llm, agent_engine, agent_skills, agent_sandbox, agent_tools, agent_screen, agent_tts
 from winapp_migrator.core.agent_mcp import McpManager
 from winapp_migrator.core.agent_screen import capture_screen_data_url
 from winapp_migrator.ui.widgets import add_brand_footer
@@ -264,6 +263,12 @@ def _line_icon(kind: str, size: int = 18, color: str = TEXT_DIM) -> QIcon:
         p.setBrush(Qt.BrushStyle.NoBrush)
         p.drawLine(QPointF(s * 0.44, s * 0.32), QPointF(s * 0.72, s * 0.32))
         p.drawLine(QPointF(s * 0.44, s * 0.68), QPointF(s * 0.72, s * 0.68))
+    elif kind == "mic":       # 麦克风（语音合成音色）
+        p.drawRoundedRect(QRectF(s * 0.38, s * 0.14, s * 0.24, s * 0.44), s * 0.06, s * 0.06)
+        p.drawLine(QPointF(s * 0.38, s * 0.52), QPointF(s * 0.62, s * 0.52))
+        p.drawLine(QPointF(s * 0.38, s * 0.72), QPointF(s * 0.62, s * 0.72))
+        p.drawLine(QPointF(s * 0.50, s * 0.52), QPointF(s * 0.50, s * 0.72))
+        p.drawArc(QRectF(s * 0.34, s * 0.54, s * 0.32, s * 0.30), 0, 180 * 16)
     p.end()
     return QIcon(pm)
 
@@ -741,6 +746,7 @@ class _AgentSettingsDialog(QDialog):
             ("模型接入", "net"),
             ("技能", "folder"),
             ("MCP 服务器", "server"),
+            ("语音合成", "mic"),
         ):
             self.nav.addItem(QListWidgetItem(_line_icon(kind, 16), name))
         self.nav.setCurrentRow(0)
@@ -758,7 +764,8 @@ class _AgentSettingsDialog(QDialog):
                      self._build_bash_page(s),
                      self._build_model_page(s),
                      self._build_skill_page(),
-                     self._build_mcp_page()):
+                     self._build_mcp_page(),
+                     self._build_tts_page()):
             self.stack.addWidget(page)
         right.addWidget(self.stack, 1)
 
@@ -1010,6 +1017,74 @@ class _AgentSettingsDialog(QDialog):
         lay.addWidget(self.send_effort_check)
         lay.addStretch(1)
         return w
+
+    def _build_tts_page(self) -> QWidget:
+        w = self._page("语音合成")
+        lay = self._page_body(w)
+        tip = QLabel("音色选择：AI 使用 tts_speak 直接调用 DashScope API 合成语音，"
+                     "结果保存到工作目录 tts_output/。点击刷新从云端同步已创建的音色。")
+        tip.setStyleSheet(f"color: {self._DIM}; font-size: 12px;")
+        tip.setWordWrap(True)
+        lay.addWidget(tip)
+        row = QHBoxLayout()
+        row.setSpacing(10)
+        lbl = QLabel("音色")
+        lbl.setStyleSheet(f"color: {self._TEXT}; font-size: 13px;")
+        lbl.setFixedWidth(70)
+        row.addWidget(lbl)
+        self.voice_combo = QComboBox()
+        self.voice_combo.currentIndexChanged.connect(self._on_voice_changed)
+        row.addWidget(self.voice_combo, 1)
+        refresh = QPushButton(_line_icon("net", 16), "刷新")
+        refresh.setStyleSheet(f"background: {self._PANEL}; color: {self._TEXT};"
+                             f"border: 1px solid {self._BORDER}; border-radius: 8px;"
+                             "padding: 6px 14px; font-weight: 600;")
+        refresh.setAutoDefault(False)
+        refresh.clicked.connect(self._reload_voices)
+        row.addWidget(refresh)
+        lay.addLayout(row)
+        self.voice_status = QLabel("")
+        self.voice_status.setStyleSheet(f"color: {self._DIM}; font-size: 12px;")
+        self.voice_status.setWordWrap(True)
+        lay.addWidget(self.voice_status)
+        lay.addStretch(1)
+        self._reload_voices()
+        return w
+
+    def _reload_voices(self):
+        """从 tts.json 与云端（list_voices）加载音色列表并选中当前音色"""
+        cfg = agent_tts.load_config()
+        current = str(cfg.get("voice_id", "")).strip()
+        known = {}
+        try:
+            for v in agent_tts.list_voices():
+                vid = str(v.get("voice", "")).strip()
+                if vid:
+                    known[vid] = str(v.get("gmt_create", ""))[:10]
+            self.voice_status.setText(f"云端音色 {len(known)} 个")
+        except Exception as e:
+            self.voice_status.setText(f"云端刷新失败（使用本地记录）：{e}")
+        if current not in known and current:
+            known[current] = "本地记录"
+        self.voice_combo.blockSignals(True)
+        self.voice_combo.clear()
+        for vid, date in known.items():
+            label = (str(cfg.get("preferred_name", "")) + " ") if vid == current else ""
+            self.voice_combo.addItem(f"{label}{vid[-12:]}（{date}）", vid)
+        if current:
+            idx = self.voice_combo.findData(current)
+            self.voice_combo.setCurrentIndex(idx if idx >= 0 else 0)
+        self.voice_combo.blockSignals(False)
+
+    def _on_voice_changed(self, _idx):
+        """选择音色立即写入 tts.json，AI 后续 tts_speak 无需再带 voice_id"""
+        vid = str(self.voice_combo.currentData() or "").strip()
+        if not vid:
+            return
+        if agent_tts.save_config(voice_id=vid):
+            self.voice_status.setText(f"已选用音色：{vid}")
+        else:
+            self.voice_status.setText("音色保存失败（无写入权限）")
 
     def _build_skill_page(self) -> QWidget:
         w = self._page("技能")
@@ -1328,6 +1403,10 @@ class _AgentSettingsDialog(QDialog):
             q.setValue("agent_workdir", self.workdir_edit.text().strip())
             if not mcp_ok:
                 QMessageBox.warning(self, "提示", "MCP 配置保存失败（无写入权限），其余设置已保存")
+            # 音色选择：独立写入 tts.json，避免被 settings.json 覆写
+            vid = str(getattr(self, "voice_combo", None).currentData() or "").strip() if hasattr(self, "voice_combo") else ""
+            if vid:
+                agent_tts.save_config(voice_id=vid)
             self.accept()
         else:
             QMessageBox.warning(self, "错误", "保存设置失败（无写入权限）")
@@ -2279,17 +2358,6 @@ class AgentPanel(QDialog):
         bottom.addWidget(self.input, 1)
 
         # TTS 语音合成快捷入口
-        self.tts_btn = QPushButton("TTS")
-        self.tts_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.tts_btn.setAutoDefault(False)
-        self.tts_btn.setFixedSize(42, 42)
-        self.tts_btn.setStyleSheet(
-            f"QPushButton {{ background: {PANEL}; border: 1px solid {BORDER};"
-            f"border-radius: 21px; color: {TEXT}; font-size: 13px; }}"
-            f"QPushButton:hover {{ border: 1px solid {ACCENT}; }}")
-        self.tts_btn.setToolTip("Qwen-TTS 声音复刻")
-        self.tts_btn.clicked.connect(self._open_tts_panel)
-        bottom.addWidget(self.tts_btn)
 
 
         # 输入框右侧「+」上传按钮：文件选择器多选（也支持拖拽 / Ctrl+V 粘贴）
@@ -4335,19 +4403,6 @@ class AgentPanel(QDialog):
     # ---------- 设置 ----------
     # 模型/接口/API Key 已写死，无需设置对话框
 
-
-    def _open_tts_panel(self):
-        """打开 TTS 语音合成面板"""
-        try:
-            from winapp_migrator.ui.tts_panel import TtsPanel
-            if not hasattr(self, '_tts_panel') or self._tts_panel is None:
-                self._tts_panel = TtsPanel(self)
-            self._tts_panel.show()
-            self._tts_panel.raise_()
-            self._tts_panel.activateWindow()
-        except Exception as e:
-            print(f"TTS 面板打开失败: {e}")
-            return
 
     def closeEvent(self, event):
         # 隐藏主程序窗口模式下关闭 AI 面板时，恢复显示主窗口，避免应用无可见窗口

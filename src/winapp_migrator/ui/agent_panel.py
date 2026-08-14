@@ -525,6 +525,55 @@ def _render_text(raw: str) -> str:
     return _md_to_html(raw)
 
 
+def _split_md_blocks(raw: str) -> list:
+    """把 markdown 文本切成渲染块：代码块整体为一块（可跨空行），
+    其余以空行分界。流式输出时只有尾部块会增长，前面的块内容恒定 →
+    可按块内容做增量渲染缓存（key 即块字符串）。"""
+    blocks, buf, in_code = [], [], False
+    for line in raw.split("\n"):
+        if in_code:
+            buf.append(line)
+            if line.strip().startswith("```"):
+                blocks.append("\n".join(buf))
+                buf, in_code = [], False
+            continue
+        if line.strip().startswith("```"):
+            if buf:
+                blocks.append("\n".join(buf))
+                buf = []
+            buf.append(line)
+            in_code = True
+            continue
+        if not line.strip():
+            if buf:
+                blocks.append("\n".join(buf))
+                buf = []
+            continue
+        buf.append(line)
+    if buf:
+        blocks.append("\n".join(buf))
+    return blocks
+
+
+def _render_text_incr(raw: str, cache: dict) -> str:
+    """增量渲染：按块缓存已渲染 HTML，只重算增长的尾部块。
+    长文本流式时避免每次对整段全量 markdown 重渲染（单次 O(n)、累计 O(n²) 卡顿）。
+    输出与 _render_text(整段) 一致：未闭合代码块时直接退化为完整渲染。"""
+    if raw.count("```") % 2 == 1:
+        return _render_text(raw)
+    parts = []
+    for b in _split_md_blocks(raw):
+        h = cache.get(b)
+        if h is None:
+            h = _render_text(b)
+            cache[b] = h
+            if len(cache) > 200:   # 块缓存容量上限（按插入序保留最近 100 项）
+                for _k in list(cache)[: len(cache) - 100]:
+                    del cache[_k]
+        parts.append(h)
+    return "".join(parts)
+
+
 def _seg_sig(seg: dict) -> tuple:
     """段内容签名（用于渲染缓存命中判断）：只取能影响渲染结果的字段，
     流式追加只改尾部 -> O(1) 签名，避免每 tick 对全段做昂贵重渲染"""
@@ -2985,6 +3034,11 @@ class AgentPanel(QDialog):
             if html is None:
                 continue
             self._seg_cache[id(seg)] = (sig, html)
+            if len(self._seg_cache) > 400:
+                # 按插入序裁剪只保留最近 200 项：长会话反复加载时缓存不再无限膨胀，
+                # 避免大 dict 拖慢哈希查找与占内存（当前气泡的热段始终会重新入缓存）
+                for _k in list(self._seg_cache)[: len(self._seg_cache) - 200]:
+                    del self._seg_cache[_k]
             parts.append(html)
         return "".join(parts)
 
@@ -3050,8 +3104,9 @@ class AgentPanel(QDialog):
                 f'<img src="{url}" width="{img_w}" style="border-radius:10px;'
                 'border:1px solid #000000;display:block;margin:12px 0 12px 0;"></div>')
         if t == "text":
-            return (f'<div style="color:{TEXT};font-size:{f_main}px;">'
-                    f'{_render_text(seg["raw"])}</div>')
+            seg.setdefault("_rd_cache", {})
+            body = _render_text_incr(seg["raw"], seg["_rd_cache"])
+            return (f'<div style="color:{TEXT};font-size:{f_main}px;">{body}</div>')
         if t == "mark":
             return (f'<div style="color:{TEXT_DIM};font-size:{f_sm}px;">'
                     f'{_linkify(seg["html"])}</div>')
@@ -3116,21 +3171,29 @@ class AgentPanel(QDialog):
 
     def _render_history_all(self):
         """全量重建消息流：按持久化交错行渲染（加载会话/全屏缩放时调用），
-        用户消息与 AI 回复天然成对，杜绝数量错位导致的顺序错乱"""
-        while self.msg_lay.count() > 1:   # 清空消息流（保留末尾 stretch）
-            item = self.msg_lay.takeAt(0)
-            self._free_layout_item(item)
-        self._bubble_widgets = []
-        self._bubble_segs = {}
-        self._ai_bubble = None
-        for r in (self._rows or self._reconstruct_rows()):
-            if r.get("type") == "user":
-                self._add_bubble(r.get("text", ""), "user", animate=False)
-            else:
-                self._add_ai_group_bubble(r.get("segs") or [], animate=False)
-        # 未归档的当前回复段（渲染时恒为空，防御保留）
-        if self._segments:
-            self._add_ai_group_bubble(self._segments)
+        用户消息与 AI 回复天然成对，杜绝数量错位导致的顺序错乱。
+        批量插入期间暂停整个滚动区重绘，一次性重建后再统一刷新，
+        避免每条气泡插入都触发整窗重排版导致长对话加载卡顿。"""
+        viewport = self.msg_area.viewport()
+        viewport.setUpdatesEnabled(False)
+        try:
+            while self.msg_lay.count() > 1:   # 清空消息流（保留末尾 stretch）
+                item = self.msg_lay.takeAt(0)
+                self._free_layout_item(item)
+            self._bubble_widgets = []
+            self._bubble_segs = {}
+            self._ai_bubble = None
+            for r in (self._rows or self._reconstruct_rows()):
+                if r.get("type") == "user":
+                    self._add_bubble(r.get("text", ""), "user", animate=False)
+                else:
+                    self._add_ai_group_bubble(r.get("segs") or [], animate=False)
+            # 未归档的当前回复段（渲染时恒为空，防御保留）
+            if self._segments:
+                self._add_ai_group_bubble(self._segments)
+        finally:
+            viewport.setUpdatesEnabled(True)
+            viewport.update()
 
     def _add_ai_group_bubble(self, segs: list, animate: bool = True):
         """把一组 AI 段渲染为一条独立气泡，并设为当前气泡（新回复流式续接）"""
@@ -3253,7 +3316,18 @@ class AgentPanel(QDialog):
         raw = (self._segments[-1].get("raw", "")
                if self._segments and self._segments[-1].get("type") == "text" else "")
         n = len(raw)
-        delay = 60 if n < 8000 else (120 if n < 24000 else 200)
+        # 自适应节流：正文越长整段全量 markdown 重渲染越贵（O(n) 每次、累计 O(n²)），
+        # 逐步放宽刷新间隔摊薄重算次数，保长输出流畅（dirty 防抖会合并期间的所有增量）
+        if n < 8000:
+            delay = 60
+        elif n < 24000:
+            delay = 120
+        elif n < 60000:
+            delay = 250
+        elif n < 150000:
+            delay = 400
+        else:
+            delay = 600
         QTimer.singleShot(delay, self._apply_refresh_ai_html)
 
     def _apply_refresh_ai_html(self):

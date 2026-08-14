@@ -3055,9 +3055,10 @@ class AgentPanel(QDialog):
             try:
                 agent_tts.synthesize_stream(
                     text, voice_id="", on_chunk=agent_tools._tts_play_chunk)
+                agent_tools._tts_play_finish()
             except Exception as e:
+                agent_tools._tts_play_stop()
                 self._add_status(f"朗读失败：{e}", ERR)
-            agent_tools._tts_play_stop()
         self._add_status("正在朗读该回复…", ACCENT)
         threading.Thread(target=work, daemon=True).start()
 

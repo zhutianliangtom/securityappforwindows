@@ -73,6 +73,21 @@ def load_config() -> dict:
     return data
 
 
+# 朗读意图关键词：命中即自动开启"AI 边输出边朗读 / 回复自动朗读"
+READ_INTENT_KEYWORDS = (
+    "朗读", "读出来", "读给我听", "读一下", "读一读", "读给", "读给我", "念出来",
+    "语音回复", "语音播报", "语音输出", "语音回答", "语音", "播报",
+    "边读边", "边输出边读", "边说边读", "读出来给我",
+    "voice", "speak", "read aloud",
+)
+
+
+def has_read_intent(text: str) -> bool:
+    """判断用户输入是否要求朗读（命中任一关键词返回 True）"""
+    t = (text or "").lower()
+    return any(k in t for k in READ_INTENT_KEYWORDS)
+
+
 def _request(url: str, payload: dict, timeout: int = 120) -> dict:
     """发起 DashScope POST 请求，返回解析后的 JSON dict；失败抛 RuntimeError"""
     key = load_api_key()

@@ -10,6 +10,7 @@
 
 import json
 import os
+import queue
 import re
 import threading
 import time
@@ -18,12 +19,15 @@ from pathlib import Path
 from PyQt6.QtCore import Qt, QByteArray, QBuffer, QIODevice
 from PyQt6.QtGui import QImage
 
-from winapp_migrator.core import agent_llm, agent_tools, agent_skills, agent_subagent
+from winapp_migrator.core import agent_llm, agent_tools, agent_skills, agent_subagent, agent_tts
 from winapp_migrator.core.agent_screen import virtual_desktop
 
 # 开发类工具：动手开发/修改代码前必须先确认用户开发规则（首次调用被拦截，规则确认后下一轮放行）
 _DEV_TOOLS = frozenset({"write_file", "edit_file", "delete_file",
                         "run_command", "create_skill", "dispatch_sub_agents"})
+
+# 朗读分段：按这些结尾标点把流式文本切成短句，逐句合成播放（避免整段等待、实现"边输出边朗读"）
+_TTS_SENT_END = ("。", "！", "？", "！？", "……", "…", "！", "?", "；", ";", "\n")
 
 # 对话上下文持久化路径
 CONTEXT_FILE = agent_skills.CONFIG_DIR / "context.json"
@@ -134,10 +138,18 @@ class AgentEngine:
         self._skills_read = set()       # 已注入/已读取规范流程的技能名
         self._skill_consulted = set()   # 已做技能规范化拦截的工具名（每工具最多注入一次）
         self._auto_skills = []          # 按用户提示词自动匹配并注入的技能名
+        # 自动朗读（用户要求"朗读/语音回复"时，AI 流式输出边生成边合成播放）
+        self._tts_auto = False          # 本任务是否需要自动朗读
+        self._tts_buf = ""              # 流式文本累积游标（未切分部分）
+        self._tts_queue = queue.Queue()  # 待朗读句子队列（朗读线程消费）
+        self._tts_finish = False        # 是否已停止接收新句子（完成后让队列读完）
+        self._tts_stop = threading.Event()  # 立即停止朗读（用户手动停止时置位）
+        self._tts_thread = None         # 朗读工作线程
 
     # ---------- 控制 ----------
     def stop(self):
         self._stop.set()
+        self._tts_stop_read()   # 用户停止：立即停掉正在播放/合成的语音
 
     def reset_tokens(self):
         self.tokens = {"prompt": 0, "completion": 0, "cache_hit": 0, "cache_miss": 0}
@@ -401,6 +413,9 @@ class AgentEngine:
 
     def _execute(self, name: str, args: dict, allow_dangerous: bool = False) -> dict:
         """执行内置或 MCP 工具，返回 {"text", "images"}"""
+        if name == "tts_speak":
+            # AI 主动调用朗读工具：停掉引擎的自动分段朗读，避免与 tts_speak 双重播放
+            self._tts_stop_read()
         if self.auto_vd and name == "virtual_desktop":
             # 自动虚拟桌面接管时，禁止 AI 手动切换桌面（防止重复 new/back 打乱静默流程）
             return {"text": "[自动模式] 系统已在独立虚拟桌面执行本任务，结束后自动返回主桌面，无需手动切换", "images": []}
@@ -510,6 +525,82 @@ class AgentEngine:
         inter = tuple(n for n in names if n in agent_subagent.SUB_AGENT_WHITELIST)
         return inter or None
 
+    # ---------- 自动朗读（边输出边朗读 / 回复自动朗读） ----------
+    def _on_stream_delta(self, s: str):
+        """LLM 流式文本增量：转发面板显示，同时把完整句子切出投递给朗读线程"""
+        if self.on_delta:
+            self.on_delta(s)
+        if self._tts_auto and s and not self._tts_finish:
+            self._tts_buf += s
+            self._tts_flush_sentences()
+
+    def _tts_flush_sentences(self):
+        """把累积文本按结尾标点切成短句入队（未完成部分留在缓冲继续累积）"""
+        buf = self._tts_buf
+        pos, n = 0, len(buf)
+        while pos < n:
+            j = pos
+            while j < n and buf[j] not in _TTS_SENT_END:
+                j += 1
+            if j >= n:
+                break
+            seg = buf[pos:j + 1].strip()
+            pos = j + 1
+            if seg:
+                self._tts_queue.put(seg)
+        self._tts_buf = buf[pos:]
+
+    def _tts_start_worker(self):
+        """启动朗读线程：若上一轮线程仍在收尾（队列未读完）先等其退出，避免双播放源"""
+        if self._tts_thread and self._tts_thread.is_alive():
+            self._tts_thread.join(timeout=10)
+        self._tts_thread = threading.Thread(target=self._tts_worker, daemon=True)
+        self._tts_thread.start()
+
+    def _tts_worker(self):
+        """朗读线程：逐句调 DashScope 流式合成，边合成边 pygame 播放（串行队列）"""
+        if not agent_tools._tts_play_start():
+            if self.on_status:
+                self.on_status("自动朗读不可用：pygame 未安装或音频初始化失败，已跳过语音播放")
+            return   # 播放器不可用：不合成（避免白耗 API）
+        while True:
+            if self._tts_stop.is_set():
+                break
+            try:
+                seg = self._tts_queue.get(timeout=0.5)
+            except queue.Empty:
+                if self._tts_finish:
+                    break
+                continue
+            if self._tts_stop.is_set():
+                break
+            try:
+                agent_tts.synthesize_stream(
+                    seg, voice_id="", on_chunk=agent_tools._tts_play_chunk)
+            except Exception:
+                pass   # 单句合成失败不中断后续
+        agent_tools._tts_play_stop()
+
+    def _tts_finish_read(self):
+        """任务正常完成：停止接收新句子，残余文本入队，让朗读线程读完队列后自行退出"""
+        if not self._tts_auto:
+            return
+        self._tts_finish = True
+        if self._tts_buf.strip():
+            self._tts_queue.put(self._tts_buf.strip())
+            self._tts_buf = ""
+
+    def _tts_stop_read(self):
+        """立即停止朗读：清空队列并通知朗读线程退出（用户停止 / AI 主动 tts_speak 时）"""
+        self._tts_stop.set()
+        self._tts_finish = True
+        self._tts_buf = ""
+        while not self._tts_queue.empty():
+            try:
+                self._tts_queue.get_nowait()
+            except queue.Empty:
+                break
+
     # ---------- 主循环 ----------
     def _system_prompt(self, agent_name: str = "", skills: list = None) -> str:
         """构建系统提示词：每次都重新读取 settings.json，
@@ -543,6 +634,22 @@ class AgentEngine:
         if self._auto_skills and self.on_status:
             self.on_status(f"正在调用技能: {', '.join(self._auto_skills)}")
             self.on_status(f"技能已调用: {', '.join(self._auto_skills)}")
+        # 自动朗读：用户明确要求"朗读/语音回复"时开启，AI 流式输出边生成边合成播放。
+        # 未配置音色或 API Key 时给出提示并自动关闭（避免无声假象）。
+        self._tts_finish = False
+        self._tts_stop.clear()
+        self._tts_auto = agent_tts.has_read_intent(user_input)
+        if self._tts_auto:
+            tts_cfg = agent_tts.load_config()
+            if not tts_cfg.get("voice_id") or not agent_tts.load_api_key():
+                self._tts_auto = False
+                if self.on_status:
+                    self.on_status("检测到朗读请求，但未配置音色或 DashScope API Key，"
+                                   "已跳过自动朗读（可在设置-语音合成中配置）")
+            else:
+                self._tts_start_worker()
+                if self.on_status:
+                    self.on_status("已开启自动朗读：AI 输出时将边生成边播放语音")
         if not self._messages or self._messages[0].get("role") != "system":
             self._messages.insert(0, {"role": "system",
                                       "content": self._system_prompt(agent_name, skills)})
@@ -594,7 +701,7 @@ class AgentEngine:
                     "".join(m["content"] for m in self._messages if isinstance(m.get("content"), str)))
                 result = self.llm.chat_stream(
                     send_msgs, tools=self._all_tools(), tool_choice="auto",
-                    on_delta=self.on_delta,
+                    on_delta=self._on_stream_delta,
                     on_reasoning=self.on_reasoning,
                     stop=lambda: self._stop.is_set())
                 self._accum_usage(result["usage"])
@@ -740,6 +847,11 @@ class AgentEngine:
             if self.on_status:
                 self.on_status("已停止" if stopped else f"错误: {e}")
         finally:
+            # 朗读收尾：正常完成则让朗读线程把剩余文本读完；停止/出错则立即停
+            if self.end_state == "done":
+                self._tts_finish_read()
+            else:
+                self._tts_stop_read()
             # 任何结束路径（完成/停止/错误/超轮数）都返回用户桌面，AI 操作完全无感
             if switched:
                 try:

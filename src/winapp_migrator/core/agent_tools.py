@@ -942,8 +942,9 @@ _TTS_CHANNEL = None
 _TTS_QUEUED = 0
 
 
-def _tts_play_start():
-    """开始一段流式播放：初始化 mixer（幂等）并清空上一段未播完的队列"""
+def _tts_play_start() -> bool:
+    """开始一段流式播放：初始化 mixer（幂等）并清空上一段未播完的队列。
+    返回是否可播放（True=播放可用；False=pygame 不可用/初始化失败）。"""
     global _TTS_MIXER_OK, _TTS_CHANNEL, _TTS_QUEUED
     with _TTS_PLAYER_LOCK:
         if not _TTS_MIXER_OK:
@@ -954,7 +955,7 @@ def _tts_play_start():
                 _TTS_MIXER_OK = True
             except Exception:
                 _TTS_MIXER_OK = False
-                return
+                return False
         try:
             import pygame
             if _TTS_CHANNEL is None:
@@ -962,7 +963,8 @@ def _tts_play_start():
             _TTS_CHANNEL.stop()
             _TTS_QUEUED = 0
         except Exception:
-            pass
+            return False
+        return True
 
 
 def _tts_play_chunk(pcm: bytes):
@@ -1247,10 +1249,11 @@ def execute_tool(name: str, args: dict, allow_dangerous: bool = False,
         if name == "tts_speak":
             try:
                 play = bool(args.get("play", True))
+                play_ok = True
                 if play:
-                    _tts_play_start()
+                    play_ok = _tts_play_start()   # 播放器不可用时不再静默：明确反馈给 AI/用户
                 def _on_chunk(pcm):
-                    if play:
+                    if play and play_ok:
                         _tts_play_chunk(pcm)
                 out = agent_tts.synthesize_stream(
                     str(args.get("text", "")),
@@ -1258,8 +1261,10 @@ def execute_tool(name: str, args: dict, allow_dangerous: bool = False,
                     str(args.get("model", agent_tts.DEFAULT_TARGET_MODEL)),
                     on_chunk=_on_chunk,
                     output_path=str(args.get("output_path", "")))
-                return {"text": f"语音合成完成，已保存：{out}" +
-                                ("（已自动播放）" if play else ""), "images": []}
+                note = "（已自动播放）" if (play and play_ok) else \
+                       ("（合成成功，但自动播放不可用：pygame 未安装或音频初始化失败，"
+                        "已保存音频文件，可用其他播放器打开）" if play else "")
+                return {"text": f"语音合成完成，已保存：{out}" + note, "images": []}
             except Exception as e:
                 _tts_play_stop()
                 return _blocked(f"[tts_speak] {e}")

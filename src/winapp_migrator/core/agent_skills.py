@@ -575,6 +575,14 @@ DEFAULT_AGENTS = [
              "执行拆分": ["需要实时或知识范围外信息时先 web_search",
                           "必要时再 web_fetch 打开具体结果页"],
          },
+         "tts_speak": {
+             "理解": "把文本合成为语音并自动播放（DashScope 真实 API，流式边生成边播放，同时保存 wav）。"
+                    "用户要求朗读/读出来/语音回复/播报时，用它对要朗读的文本调用；"
+                    "voice_id 留空自动使用设置面板选中的音色；play 默认 true 自动播放。",
+             "执行拆分": ["判断用户是否要求朗读/语音输出：是则把回复正文或用户指定文本交给 tts_speak",
+                          "voice_id 留空（使用设置面板音色），output_path 留空（自动保存工作目录 tts_output/）",
+                          "返回语音合成完成与文件路径，确认已朗读"],
+         },
      },
      "system_prompt": ("你是 zhuzhu Copilot，桌面自动化助手。通过独立浏览器操控 + 命令/文件工具"
                        "帮用户完成任务。\n"
@@ -1147,6 +1155,9 @@ def build_system_prompt(agent_name: str = "", extra_skills: list = None,
                "create_docx(生成 Word 文档：标题+段落+可传 style 自定义配色字体排版)、"
                "create_pptx(生成 PPT：标题+每页要点+可传 style 自定义配色封面布局)、"
                "create_xlsx(生成 Excel：多工作表二维数据+可传 style 自定义表头隔行边框)、"
+               "tts_speak(把文本合成为语音并自动播放，适合朗读回复/语音输出；"
+               "用户要求朗读/读出来/语音回复时，回复正文后用它对需要朗读的文本调用，"
+               "voice_id 留空使用设置面板选中的音色)、"
                "read_file/write_file/edit_file/delete_file/list_directory(文件读写改删列，相对路径基于工作目录)、"
                "save_memory/load_memory(本地长期记忆)。"
                "若连接了 MCP 服务器，其工具同样可用。")

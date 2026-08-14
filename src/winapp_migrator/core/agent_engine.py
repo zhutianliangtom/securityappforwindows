@@ -590,11 +590,12 @@ class AgentEngine:
                 continue
             if self._tts_stop.is_set():
                 break
-            # 每句开始前标记新段：若缓冲已耗尽，下一块从静默恢复时淡入消除爆音
+            # 每句开始前标记新段：句首淡入消除爆音
             agent_tools._tts_play_segment_start()
             try:
                 agent_tts.synthesize_stream(
                     seg, voice_id="", on_chunk=agent_tools._tts_play_chunk)
+                agent_tools._tts_play_flush()   # 整句累积完成：一次性播放，句内无切块
             except Exception as e:
                 if not err_shown:
                     err_shown = True
@@ -603,7 +604,7 @@ class AgentEngine:
         if self._tts_stop.is_set():
             agent_tools._tts_play_stop()   # 用户停止：立即停声并清缓冲
         else:
-            agent_tools._tts_play_finish()  # 正常结束：播完缓冲剩余音频后退出
+            agent_tools._tts_play_finish()  # 正常结束：播完剩余整句后退出
 
     def _tts_finish_read(self):
         """任务正常完成：停止接收新句子，残余文本入队，让朗读线程读完队列后自行退出"""

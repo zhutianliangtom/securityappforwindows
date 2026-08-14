@@ -3055,6 +3055,7 @@ class AgentPanel(QDialog):
             try:
                 agent_tts.synthesize_stream(
                     text, voice_id="", on_chunk=agent_tools._tts_play_chunk)
+                agent_tools._tts_play_flush()
                 agent_tools._tts_play_finish()
             except Exception as e:
                 agent_tools._tts_play_stop()

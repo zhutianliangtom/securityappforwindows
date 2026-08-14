@@ -934,29 +934,32 @@ SUB_AGENT_TOOLS = ("dispatch_sub_agents", "explore_project", "search_large")
 
 
 # ------------------------------------------------------------
-# TTS 流式播放器（累积缓冲 + 后台播放线程，边生成边播放）
+# TTS 播放器（整句累积 + 后台播放线程）
 #
-# 实现说明：pygame 的 Channel.queue() 多段排队实测不可靠（只播第一段即停），
-# 逐片 queue 会造成句间断音/爆音。因此改为：合成线程把 PCM 累积进缓冲，
-# 播放线程按块（约 0.5s）顺序 play，块间从静默恢复时做淡入，保证连续无爆音。
+# 实现说明：
+# 1. pygame 的 Channel.queue() 多段排队实测不可靠（只播第一段即停）；
+# 2. 固定时长切块 + 块尾淡出会产生周期性"音量坑"（每 0.5s 一次噗/咚声）。
+# 因此采用最干净的方案：合成线程把整句 PCM 累积进缓冲，句合成完成后
+# 通过 _tts_play_flush() 通知播放线程一次性 play 整句；句与句之间是
+# 合成自然停顿，句内无任何切块 → 无爆音、无咚咚声。
 # ------------------------------------------------------------
 _TTS_PLAYER_LOCK = threading.Lock()
 _TTS_MIXER_OK = False
 _TTS_CHANNEL = None
-_TTS_BUF = bytearray()          # 待播放 mono PCM 累积（24kHz/16bit）
+_TTS_BUF = bytearray()          # 当前句 mono PCM 累积（24kHz/16bit）
 _TTS_STOP_EVT = threading.Event()  # 播放线程停止（用户停止/合成失败）
 _TTS_DONE_EVT = threading.Event()  # 合成方声明无更多数据（播完缓冲后退出）
-_TTS_SEG_START = True           # 即将从静默恢复播放（需要淡入防爆音）
+_TTS_FLUSH_EVT = threading.Event()  # 合成方提示"有整句可播"
+_TTS_SEG_START = True           # 即将从静默恢复播放（句首淡入防爆音）
 _TTS_PLAYER_THREAD = None
-_TTS_BLOCK = 24000              # 每块约 1.0s mono PCM 字节（24000 样本*2）
-_TTS_FADE = 240                 # 淡入 10ms @24kHz（240 样本）
+_TTS_FADE = 240                 # 句首淡入 10ms @24kHz（240 样本）
 
 
 def _tts_play_start() -> bool:
     """开始流式播放：初始化 mixer（幂等）、清空缓冲并启动播放线程。
     返回是否可播放（True=播放可用；False=pygame 不可用/初始化失败）。"""
     global _TTS_MIXER_OK, _TTS_CHANNEL, _TTS_BUF, _TTS_SEG_START
-    global _TTS_STOP_EVT, _TTS_DONE_EVT, _TTS_PLAYER_THREAD
+    global _TTS_STOP_EVT, _TTS_DONE_EVT, _TTS_FLUSH_EVT, _TTS_PLAYER_THREAD
     with _TTS_PLAYER_LOCK:
         if not _TTS_MIXER_OK:
             try:
@@ -978,6 +981,7 @@ def _tts_play_start() -> bool:
             _TTS_SEG_START = True
             _TTS_STOP_EVT.clear()
             _TTS_DONE_EVT.clear()
+            _TTS_FLUSH_EVT.clear()
             if _TTS_PLAYER_THREAD is None or not _TTS_PLAYER_THREAD.is_alive():
                 _TTS_PLAYER_THREAD = threading.Thread(
                     target=_tts_player_loop, daemon=True)
@@ -988,14 +992,14 @@ def _tts_play_start() -> bool:
 
 
 def _tts_play_segment_start():
-    """标记一段新合成的开始：若缓冲耗尽则下一块从静默恢复时淡入，消除段间爆音"""
+    """标记一段新合成的开始：下一句从静默恢复时句首淡入，消除句间爆音"""
     global _TTS_SEG_START
     with _TTS_PLAYER_LOCK:
         _TTS_SEG_START = True
 
 
 def _tts_play_chunk(pcm: bytes):
-    """把合成返回的 PCM 分片（mono 24kHz/16bit，已剥 WAV 头）追加进播放缓冲"""
+    """把合成返回的 PCM 分片（mono 24kHz/16bit，已剥 WAV 头）追加进当前句缓冲"""
     if not pcm or not _TTS_MIXER_OK:
         return
     with _TTS_PLAYER_LOCK:
@@ -1004,35 +1008,33 @@ def _tts_play_chunk(pcm: bytes):
         _TTS_BUF.extend(pcm)
 
 
+def _tts_play_flush():
+    """当前句合成完成：通知播放线程把整句一次性 play（句内无切块）"""
+    global _TTS_FLUSH_EVT
+    with _TTS_PLAYER_LOCK:
+        if _TTS_BUF:
+            _TTS_FLUSH_EVT.set()
+
+
 def _tts_player_loop():
-    """后台播放线程：从缓冲按块取 PCM，构造 Sound 顺序 play。
-    块间如果缓冲连续则保持播放；缓冲耗尽（等待新数据）后从静默恢复时淡入。"""
+    """后台播放线程：等待整句数据就绪后一次性 play，句间等待下一句（自然停顿）"""
     global _TTS_SEG_START
     import time as _time
     while not _TTS_STOP_EVT.is_set():
+        _TTS_FLUSH_EVT.wait(timeout=0.1)
+        if _TTS_STOP_EVT.is_set():
+            break
         with _TTS_PLAYER_LOCK:
-            n = len(_TTS_BUF)
-            if n >= _TTS_BLOCK:
-                blk = bytes(_TTS_BUF[:_TTS_BLOCK])
-                del _TTS_BUF[:_TTS_BLOCK]
-                seg_start = _TTS_SEG_START
-                _TTS_SEG_START = False
-                start_fade = True      # 块内数据多，始终在块首淡入，避免 play 起始 click
-            elif _TTS_DONE_EVT.is_set() and n > 0:
-                # 合成完毕：取完剩余数据
-                blk = bytes(_TTS_BUF)
-                _TTS_BUF.clear()
-                seg_start = _TTS_SEG_START
-                _TTS_SEG_START = False
-                start_fade = seg_start or not _TTS_CHANNEL.get_busy()
-            else:
-                blk = None
-                start_fade = False
-        if blk is None:
-            if _TTS_DONE_EVT.is_set():
-                break          # 无更多数据且声明完成 → 退出
-            _time.sleep(0.03)
-            continue
+            if not _TTS_BUF:
+                if _TTS_DONE_EVT.is_set():
+                    break
+                _TTS_FLUSH_EVT.clear()
+                continue
+            blk = bytes(_TTS_BUF)
+            _TTS_BUF.clear()
+            _TTS_FLUSH_EVT.clear()
+            seg_start = _TTS_SEG_START
+            _TTS_SEG_START = False
         try:
             import pygame, struct, array
             init = pygame.mixer.get_init()
@@ -1044,8 +1046,8 @@ def _tts_player_loop():
                     for _ in range(out_ch):
                         out.append(x)
                 blk = out.tobytes()
-            if start_fade:
-                # 块首淡入：消除每次 play 的起始 click（静默恢复或块边界）
+            if seg_start:
+                # 句首淡入：消除从静默开始播放的 click/爆音
                 a = array.array("h", blk)
                 fade = min(_TTS_FADE, len(a))
                 for i in range(fade):
@@ -1060,7 +1062,7 @@ def _tts_player_loop():
                 if _TTS_CHANNEL is None:
                     continue
                 _TTS_CHANNEL.play(snd)
-            # 等当前块播完或收到停止，再取下一块（play 顺序播放，不用 queue）
+            # 等整句播完（或用户停止），期间合成线程可累积下一句缓冲
             while not _TTS_STOP_EVT.is_set() and _TTS_CHANNEL.get_busy():
                 _time.sleep(0.02)
         except Exception:
@@ -1068,9 +1070,10 @@ def _tts_player_loop():
 
 
 def _tts_play_finish():
-    """合成方声明全部数据已入缓冲：播放线程播完剩余数据后自行退出"""
-    global _TTS_DONE_EVT
+    """合成方声明全部数据已入缓冲：通知播放线程播完剩余整句后退出"""
+    global _TTS_DONE_EVT, _TTS_FLUSH_EVT
     with _TTS_PLAYER_LOCK:
+        _TTS_FLUSH_EVT.set()   # 最后一句也触发播放
         _TTS_DONE_EVT.set()
 
 
@@ -1087,6 +1090,7 @@ def _tts_play_stop():
         _TTS_SEG_START = True
         _TTS_STOP_EVT.set()
         _TTS_DONE_EVT.set()
+        _TTS_FLUSH_EVT.set()
 
 
 # 沙盒拒绝返回（无截图）
@@ -1349,7 +1353,8 @@ def execute_tool(name: str, args: dict, allow_dangerous: bool = False,
                     on_chunk=_on_chunk,
                     output_path=str(args.get("output_path", "")))
                 if play and play_ok:
-                    _tts_play_finish()   # 数据全部入缓冲：播完剩余音频
+                    _tts_play_flush()    # 整句累积完成：一次性播放
+                    _tts_play_finish()   # 无后续数据：播完即退出
                 note = "（已自动播放）" if (play and play_ok) else \
                        ("（合成成功，但自动播放不可用：pygame 未安装或音频初始化失败，"
                         "已保存音频文件，可用其他播放器打开）" if play else "")

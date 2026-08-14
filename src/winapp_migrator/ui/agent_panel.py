@@ -1016,12 +1016,11 @@ class _AgentSettingsDialog(QDialog):
         self.effort_slider.setValue(agent_llm.EFFORTS.index(self._effort)
                                     if self._effort in agent_llm.EFFORTS else 0)
         self.effort_slider.blockSignals(False)
-        # 推理参数
-        self.send_effort_check = QCheckBox(
-            "向 API 发送 reasoning_effort 参数（仅支持该参数的服务商开启，如 OpenAI o 系列 / Qwen）")
-        self.send_effort_check.setStyleSheet(f"color: {self._TEXT}; font-size: 13px; spacing: 8px;")
-        self.send_effort_check.setChecked(cfg.get("send_effort", False))
-        lay.addWidget(self.send_effort_check)
+        tip = QLabel("工作强度会自动按模型映射：DeepSeek V4 思考模式（high/max）、"
+                     "GLM-4.5+ 深度思考、OpenAI o 系列 reasoning_effort，无需手动开启")
+        tip.setStyleSheet(f"color: {self._TEXT_DIM}; font-size: 12px;")
+        tip.setWordWrap(True)
+        lay.addWidget(tip)
         lay.addStretch(1)
         return w
 
@@ -1363,7 +1362,6 @@ class _AgentSettingsDialog(QDialog):
             "providers": providers,
             "model": first_models[0],   # 兼容旧字段
             "models": providers[0].get("models") or [],
-            "send_effort": self.send_effort_check.isChecked(),
             "protocol": providers[0]["protocol"] or "chat",
             "effort": self._effort,
             "auto_effort": self.auto_effort_check.isChecked(),
@@ -3723,8 +3721,9 @@ class AgentPanel(QDialog):
         engine.llm.api_key = api_key
         engine.llm.protocol = protocol
         engine.llm.model = model
-        engine.llm.reasoning_effort = (agent_llm.reasoning_effort_for(effort)
-                                       if cfg.get("send_effort") else None)
+        # 工作强度自动调节（Claude Code/Codex 式）：按模型正确映射 thinking/reasoning_effort，
+        # 支持的服务商（DeepSeek V4 / GLM-4.5+ / OpenAI o 系列）自动附加参数，其余不发送
+        engine.llm.effort_params = agent_llm.build_effort_params(model, effort)
         engine.text_only = agent_llm.is_text_only_model(model)
         # 手动指定纯文本模型时剥离图片（混配模型场景逐次判断）
         if engine.text_only and send_images:

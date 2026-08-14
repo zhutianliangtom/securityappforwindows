@@ -44,6 +44,38 @@ EFFORTS = ("low", "medium", "high", "max", "ultra")
 # 发送给 API 的 reasoning_effort 取值（OpenAI 兼容仅支持 low/medium/high，max/ultra 折算为 high）
 _REASONING_EFFORT = {"low": "low", "medium": "medium", "high": "high",
                      "max": "high", "ultra": "high"}
+# 各服务商按力度正确映射的 API 参数（Claude Code / Codex 式"工作强度"调节）
+_DEEPSEEK_EFFORT = {"high": "high", "max": "max", "ultra": "max"}      # DeepSeek V4 思考模式仅 high/max
+_GLM52_EFFORT = {"low": "minimal", "medium": "medium", "high": "high",
+                 "max": "xhigh", "ultra": "max"}                        # GLM-5.2+ 全档位
+_OPENAI_EFFORT = {"low": "low", "medium": "medium", "high": "high",
+                  "max": "high", "ultra": "high"}                       # OpenAI o 系列
+
+
+def build_effort_params(model: str, effort: str) -> dict:
+    """把工作力度正确映射为当前模型的 API 参数（自动调节，无需手动开关）。
+
+    - DeepSeek V4（deepseek-v4-* / deepseek-chat / deepseek-reasoner）：
+      思考模式 reasoning_effort 仅 high/max；low/medium 不强制思考（响应更快）
+    - GLM-5.x：thinking.type 开关（low 关闭、medium+ 开启）+ reasoning_effort 全档位
+    - GLM-4.5/4.6/4.7：仅 thinking.type 开关（该系列不支持 reasoning_effort）
+    - OpenAI o 系列：顶层 reasoning_effort（low/medium/high）
+    - 其他模型（agnes 等）：不支持，返回空 dict（不发送任何参数）
+    """
+    m = (model or "").lower()
+    eff = effort if effort in EFFORTS else "medium"
+    if "deepseek" in m:
+        if eff not in ("high", "max", "ultra"):
+            return {}
+        return {"reasoning_effort": _DEEPSEEK_EFFORT.get(eff, "high")}
+    if "glm-5" in m:
+        return {"thinking": {"type": "enabled" if eff in ("high", "max", "ultra") else "disabled"},
+                "reasoning_effort": _GLM52_EFFORT.get(eff, "medium")}
+    if m.startswith("glm-4.5") or m.startswith("glm-4.6") or m.startswith("glm-4.7"):
+        return {"thinking": {"type": "enabled" if eff in ("high", "max", "ultra") else "disabled"}}
+    if m.startswith(("o1", "o3", "o4", "o5", "gpt-5")):
+        return {"reasoning_effort": _OPENAI_EFFORT.get(eff, "medium")}
+    return {}
 
 
 def is_text_only_model(model: str) -> bool:
@@ -745,7 +777,11 @@ class LLMClient:
             sys_txt = messages[0].get("content")
             if isinstance(sys_txt, str) and sys_txt.strip():
                 payload["instructions"] = sys_txt
-        if self.reasoning_effort:
+        if self.effort_params:
+            # Responses 协议：effort 参数映射到 reasoning.effort；thinking 等不适用则忽略
+            if "reasoning_effort" in self.effort_params:
+                payload["reasoning"] = {"effort": self.effort_params["reasoning_effort"]}
+        elif self.reasoning_effort:
             payload["reasoning"] = {"effort": self.reasoning_effort}
         if tools:
             payload["tools"] = [

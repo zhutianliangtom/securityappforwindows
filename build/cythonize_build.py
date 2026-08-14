@@ -36,6 +36,6 @@ setup(
         compiler_directives={"language_level": 3},
         quiet=True,
     ),
-    script_args=["build_ext", "--inplace", "--compiler=mingw32"],
+    script_args=["build_ext", "--inplace"],
 )
 print("[cythonize] 编译完成")

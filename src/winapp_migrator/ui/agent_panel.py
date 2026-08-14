@@ -23,7 +23,7 @@ import uuid
 import webbrowser
 from pathlib import Path
 
-from PyQt6.QtCore import (Qt, QTimer, QSettings, QPropertyAnimation, pyqtSignal,
+from PyQt6.QtCore import (Qt, QTimer, QSettings, QPropertyAnimation, pyqtSignal, QThread,
                           pyqtProperty, QEasingCurve, QByteArray, QBuffer, QIODevice,
                           QEvent, QRect, QRectF, QSize, QPoint, QPointF, QMimeData, QUrl,
                           QAbstractNativeEventFilter)
@@ -1215,7 +1215,10 @@ class _AgentSettingsDialog(QDialog):
         v.setSpacing(2)
         top = QHBoxLayout()
         top.setSpacing(8)
-        name = QLabel(str(p.get("name", "")))
+        name_text = str(p.get("name", ""))
+        if agent_llm.is_default_provider(p):
+            name_text += "（内置 · 锁定）"
+        name = QLabel(name_text)
         name.setStyleSheet(f"color: {self._TEXT}; font-size: 14px; font-weight: 700;")
         top.addWidget(name)
         top.addStretch(1)
@@ -1261,16 +1264,29 @@ class _AgentSettingsDialog(QDialog):
             return
         sel = self._current_provider()
         if sel is not None:
-            self.del_provider_btn.setStyleSheet(
-                f"background: {self._DANGER}; color: #FFFFFF; border: none;"
-                "border-radius: 8px; padding: 7px 16px; font-weight: 700;")
-            self.del_provider_btn.setToolTip(f"删除服务商「{sel.get('name')}」")
-            models = ", ".join(sel.get("models") or [])
-            self.provider_hint.setText(
-                f"已选中「{sel.get('name')}」｜接口 {sel.get('base_url')}｜模型：{models}")
-            self.provider_hint.setStyleSheet(
-                f"color: {self._ACCENT_HOVER}; font-size: 12px;")
+            locked = agent_llm.is_default_provider(sel)
+            self.del_provider_btn.setEnabled(not locked)
+            if locked:
+                self.del_provider_btn.setStyleSheet(
+                    f"background: {self._PANEL}; color: {self._DIM};"
+                    f"border: 1px solid {self._BORDER}; border-radius: 8px;"
+                    "padding: 7px 16px; font-weight: 600;")
+                self.del_provider_btn.setToolTip("内置默认服务商（agnes）不可删除")
+                self.provider_hint.setText(
+                    f"「{sel.get('name')}」为内置默认服务商，整行锁定：不可删除、不可编辑")
+                self.provider_hint.setStyleSheet(f"color: {self._DIM}; font-size: 12px;")
+            else:
+                self.del_provider_btn.setStyleSheet(
+                    f"background: {self._DANGER}; color: #FFFFFF; border: none;"
+                    "border-radius: 8px; padding: 7px 16px; font-weight: 700;")
+                self.del_provider_btn.setToolTip(f"删除服务商「{sel.get('name')}」")
+                models = ", ".join(sel.get("models") or [])
+                self.provider_hint.setText(
+                    f"已选中「{sel.get('name')}」｜接口 {sel.get('base_url')}｜模型：{models}")
+                self.provider_hint.setStyleSheet(
+                    f"color: {self._ACCENT_HOVER}; font-size: 12px;")
         else:
+            self.del_provider_btn.setEnabled(True)
             self.del_provider_btn.setStyleSheet(
                 f"background: {self._PANEL}; color: {self._DIM};"
                 f"border: 1px solid {self._BORDER}; border-radius: 8px;"
@@ -1313,7 +1329,11 @@ class _AgentSettingsDialog(QDialog):
         idx = self.provider_list.row(item)
         if not (0 <= idx < len(self._providers)):
             return
-        dlg = _ProviderDialog(provider=self._providers[idx], parent=self)
+        p = self._providers[idx]
+        if agent_llm.is_default_provider(p):
+            QMessageBox.information(self, "提示", "内置默认服务商（agnes）不可编辑")
+            return
+        dlg = _ProviderDialog(provider=p, parent=self)
         if dlg.exec() != QDialog.DialogCode.Accepted:
             return
         newp = dlg.provider_data()
@@ -1330,6 +1350,9 @@ class _AgentSettingsDialog(QDialog):
         if not (0 <= idx < len(self._providers)):
             return
         p = self._providers[idx]
+        if agent_llm.is_default_provider(p):
+            QMessageBox.information(self, "提示", "内置默认服务商（agnes）不可删除")
+            return
         reply = QMessageBox.question(
             self, "删除服务商", f"确定删除服务商「{p.get('name')}」？",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
@@ -1616,19 +1639,40 @@ class _McpServerDialog(QDialog):
         return d
 
 
+class _ConnTestThread(QThread):
+    """后台连通性测试线程：真实 API 最小请求验证 base_url + api_key + 模型，结果经信号回主线程"""
+
+    done = pyqtSignal(bool, str)
+
+    def __init__(self, base_url: str, api_key: str, model: str, protocol: str, parent=None):
+        super().__init__(parent)
+        self._args = (base_url, api_key, model, protocol)
+
+    def run(self):
+        try:
+            ok, msg = agent_llm.test_provider_connection(*self._args)
+            self.done.emit(ok, msg)
+        except Exception as e:   # noqa: BLE001
+            self.done.emit(False, f"测试异常：{e}")
+
+
 class _ProviderDialog(QDialog):
-    """单个 AI 服务商配置：名称 / 接口地址 / API Key / 模型列表 / 接口协议"""
+    """单个 AI 服务商配置：预设 / 名称 / 接口地址 / API Key / 模型列表 / 接口协议。
+    添加/编辑保存前必须通过真实连通性测试（不 mock），确保接入即可用。"""
 
     _BG = "#0F172A"
     _PANEL = "#1E293B"
     _TEXT = "#F1F5F9"
     _BORDER = "#334155"
     _ACCENT = "#1E40AF"
+    _DIM = "#8A8A8A"
+    _ERR = "#EF4444"
+    _OK = "#22C55E"
 
     def __init__(self, provider: dict = None, parent=None):
         super().__init__(parent)
         self.setWindowTitle("编辑服务商" if provider else "添加服务商")
-        self.setMinimumWidth(480)
+        self.setMinimumWidth(520)
         self.setStyleSheet(
             f"QDialog {{ background: {self._BG}; }}"
             f"QLabel {{ color: {self._TEXT}; font-size: 13px; }}"
@@ -1638,12 +1682,26 @@ class _ProviderDialog(QDialog):
             f"QComboBox QAbstractItemView {{ background: {self._PANEL}; color: {self._TEXT};"
             f"border: 1px solid {self._BORDER}; selection-background-color: {self._PANEL}; }}")
         self._provider = provider or {}
+        self._test_ok = False
+        self._test_thread = None
         form = QFormLayout(self)
         form.setContentsMargins(18, 16, 18, 16)
         form.setSpacing(12)
 
+        # 预设服务商：一键填入主流 coding/Agent 服务商（仍需填 Key 并测试）
+        self.preset_combo = QComboBox()
+        self.preset_combo.addItem("（自定义 / 手动填写）", None)
+        for p in agent_llm.PRESET_PROVIDERS:
+            self.preset_combo.addItem(p["name"], p)
+        self.preset_combo.currentIndexChanged.connect(self._apply_preset)
+        form.addRow("预设服务商", self.preset_combo)
+        self.preset_hint = QLabel("")
+        self.preset_hint.setWordWrap(True)
+        self.preset_hint.setStyleSheet(f"color: {self._DIM}; font-size: 12px;")
+        form.addRow("", self.preset_hint)
+
         self.name_edit = QLineEdit(self._provider.get("name", ""))
-        self.name_edit.setPlaceholderText("服务商名称，如 智谱、OpenAI、DeepSeek")
+        self.name_edit.setPlaceholderText("服务商名称，如 火山方舟、智谱、DeepSeek")
         form.addRow("名称", self.name_edit)
 
         self.base_edit = QLineEdit(self._provider.get("base_url", ""))
@@ -1652,11 +1710,11 @@ class _ProviderDialog(QDialog):
 
         self.key_edit = QLineEdit(self._provider.get("api_key", ""))
         self.key_edit.setEchoMode(QLineEdit.EchoMode.Password)
-        self.key_edit.setPlaceholderText("sk-xxxxxxxx")
+        self.key_edit.setPlaceholderText("sk-xxxxxxxx（必填，用于连通性测试）")
         form.addRow("API Key", self.key_edit)
 
         self.models_edit = QLineEdit(", ".join(self._provider.get("models", [])))
-        self.models_edit.setPlaceholderText("模型名逗号分隔，如 agnes-2.5-flash")
+        self.models_edit.setPlaceholderText("模型名逗号分隔，如 glm-4.7, glm-4.7-flash")
         form.addRow("模型列表", self.models_edit)
 
         self.multimodal_edit = QLineEdit(", ".join(self._provider.get("multimodal_models", [])))
@@ -1671,11 +1729,25 @@ class _ProviderDialog(QDialog):
         self.protocol_combo.setCurrentIndex(pidx if pidx >= 0 else 0)
         form.addRow("接口协议", self.protocol_combo)
 
+        # 连通性测试：真实请求通过后保存；配置变化需重新测试
+        trow = QHBoxLayout()
+        self.test_btn = QPushButton("测试连接")
+        self.test_btn.setStyleSheet(
+            f"background: {self._PANEL}; color: {self._TEXT}; border: 1px solid {self._ACCENT};"
+            "border-radius: 8px; padding: 8px 18px; font-weight: 600;")
+        self.test_btn.clicked.connect(lambda: self._run_test(from_ok=False))
+        self.test_result = QLabel("添加/编辑服务商前必须先通过连通性测试")
+        self.test_result.setWordWrap(True)
+        self.test_result.setStyleSheet(f"color: {self._DIM}; font-size: 12px;")
+        trow.addWidget(self.test_btn)
+        trow.addWidget(self.test_result, 1)
+        form.addRow("", trow)
+
         row = QHBoxLayout()
         ok = QPushButton("确定")
         ok.setStyleSheet(f"background: {self._ACCENT}; color: #FFFFFF; border: none;"
                          "border-radius: 8px; padding: 8px 24px; font-weight: 700;")
-        ok.clicked.connect(self.accept)
+        ok.clicked.connect(self._confirm)
         cancel = QPushButton("取消")
         cancel.setStyleSheet(f"background: {self._PANEL}; color: {self._TEXT};"
                              f"border: 1px solid {self._BORDER}; border-radius: 8px;"
@@ -1686,19 +1758,97 @@ class _ProviderDialog(QDialog):
         row.addWidget(ok)
         form.addRow("", row)
 
-    def provider_data(self) -> dict:
+        # 任何配置变化 → 测试结果失效，需重新测试
+        for w in (self.name_edit, self.base_edit, self.key_edit,
+                  self.models_edit, self.multimodal_edit):
+            w.textChanged.connect(self._invalidate)
+        self.protocol_combo.currentIndexChanged.connect(self._invalidate)
+
+    def _invalidate(self, *_):
+        self._test_ok = False
+        self.test_result.setStyleSheet(f"color: {self._DIM}; font-size: 12px;")
+        self.test_result.setText("配置已变化，需重新测试连接")
+
+    def _apply_preset(self, idx):
+        p = self.preset_combo.itemData(idx)
+        if not p:
+            self.preset_hint.setText("")
+            return
+        self.name_edit.setText(p.get("name", ""))
+        self.base_edit.setText(p.get("base_url", ""))
+        self.key_edit.setText("")   # Key 必须用户填写
+        self.models_edit.setText(", ".join(p.get("models") or []))
+        self.multimodal_edit.setText(", ".join(p.get("multimodal_models") or []))
+        pidx = self.protocol_combo.findData(p.get("protocol", "chat"))
+        if pidx >= 0:
+            self.protocol_combo.setCurrentIndex(pidx)
+        self.preset_hint.setText(p.get("desc", ""))
+
+    def _current_params(self) -> dict:
         models = [x.strip() for x in self.models_edit.text().replace("，", ",").split(",")
                   if x.strip()]
-        multimodal = [x.strip() for x in self.multimodal_edit.text().replace("，", ",").split(",")
-                      if x.strip()]
         return {
             "name": self.name_edit.text().strip() or "服务商",
             "base_url": self.base_edit.text().strip(),
             "api_key": self.key_edit.text().strip(),
             "models": models,
-            "multimodal_models": multimodal,
             "protocol": self.protocol_combo.currentData() or "chat",
         }
+
+    def _confirm(self, *_):
+        """确定：已通过测试直接保存；否则自动先测，通过后再保存"""
+        if self._test_ok:
+            self.accept()
+            return
+        self._run_test(from_ok=True)
+
+    def _run_test(self, from_ok: bool):
+        if self._test_thread is not None and self._test_thread.isRunning():
+            return
+        p = self._current_params()
+        if not p["base_url"] or not p["api_key"] or not p["models"]:
+            self.test_result.setStyleSheet(f"color: {self._ERR}; font-size: 12px;")
+            self.test_result.setText("请先填写接口地址、API Key 与至少一个模型名")
+            return
+        self.test_btn.setEnabled(False)
+        self.test_btn.setText("测试中…")
+        self.test_result.setStyleSheet(f"color: {self._ACCENT}; font-size: 12px;")
+        self.test_result.setText(f"正在连接 {p['base_url']} 测试模型「{p['models'][0]}」…")
+        self._test_thread = _ConnTestThread(p["base_url"], p["api_key"], p["models"][0],
+                                            p["protocol"], self)
+        self._test_thread.done.connect(
+            lambda ok, msg, fo=from_ok: self._on_test_done(ok, msg, fo))
+        self._test_thread.finished.connect(self._test_thread.deleteLater)
+        self._test_thread.start()
+
+    def _on_test_done(self, ok: bool, msg: str, from_ok: bool):
+        self.test_btn.setEnabled(True)
+        self.test_btn.setText("测试连接")
+        if ok:
+            self._test_ok = True
+            self.test_result.setStyleSheet(f"color: {self._OK}; font-size: 12px;")
+            self.test_result.setText("✓ " + msg)
+            if from_ok:
+                self.accept()
+        else:
+            self._test_ok = False
+            self.test_result.setStyleSheet(f"color: {self._ERR}; font-size: 12px;")
+            self.test_result.setText(msg)
+            if from_ok:
+                QMessageBox.warning(self, "连通性测试失败", msg)
+
+    def closeEvent(self, e):
+        t = self._test_thread
+        if t is not None and t.isRunning():
+            t.wait(2000)   # 等待后台测试线程收尾，避免 QThread 运行中销毁
+        super().closeEvent(e)
+
+    def provider_data(self) -> dict:
+        p = self._current_params()
+        p["multimodal_models"] = [
+            x.strip() for x in self.multimodal_edit.text().replace("，", ",").split(",")
+            if x.strip()]
+        return p
 
 
 class _AskUserDialog(QDialog):

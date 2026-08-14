@@ -17,9 +17,57 @@ from typing import Callable, List, Optional
 DEFAULT_BASE_URL = "https://api.agnes-ai.cn/v1"
 DEFAULT_MODEL = "agnes-2.5-flash"
 DEFAULT_API_KEY = "sk-iydeFjzDmQr4Se3N6yxEjRHccWQbhSXLOSp27ZH5qhxathwR"
+DEFAULT_PROVIDER_NAME = "默认服务商"   # 内置默认服务商（agnes），整行锁定不可删除/编辑
 _UA = "WinAppMigrator/1.0 AgentClient"
 _MAX_RETRIES = 3    # 请求失败（429/5xx/网络）自动重试次数
 _RETRY_DELAY = 2.0  # 重试基础延迟（秒），指数退避
+
+# 主流 coding/Agent 服务商预设（添加服务商时一键填入，仍需填写 Key 并通过连通性测试）。
+# 模型名为 2026 主流可用名，仅作预填参考；若测试失败请按各平台控制台实际模型名修改。
+PRESET_PROVIDERS = [
+    {"name": "火山方舟（Coding Plan）",
+     "base_url": "https://ark.cn-beijing.volces.com/api/coding/v3",
+     "models": ["ark-code-latest", "deepseek-v4-flash", "deepseek-v4-pro", "kimi-k2.7-code"],
+     "multimodal_models": [],
+     "protocol": "chat",
+     "desc": "火山方舟 Coding Plan 企业版专属接口（OpenAI 兼容），需用 Coding Plan 专属 API Key"},
+    {"name": "火山方舟（通用）",
+     "base_url": "https://ark.cn-beijing.volces.com/api/v3",
+     "models": ["doubao-seed-2-1-pro-260628"],
+     "multimodal_models": ["doubao-1-5-vision-pro"],
+     "protocol": "chat",
+     "desc": "火山方舟数据面 API，模型名可用推理接入点 ID 或基础模型名"},
+    {"name": "智谱清言",
+     "base_url": "https://open.bigmodel.cn/api/paas/v4",
+     "models": ["glm-4.7", "glm-4.7-flash", "glm-5.2"],
+     "multimodal_models": ["glm-4v-plus"],
+     "protocol": "chat",
+     "desc": "智谱开放平台（OpenAI 兼容），glm-4.7-flash 为免费模型"},
+    {"name": "DeepSeek",
+     "base_url": "https://api.deepseek.com/v1",
+     "models": ["deepseek-chat", "deepseek-reasoner"],
+     "multimodal_models": [],
+     "protocol": "chat",
+     "desc": "DeepSeek 官方 API"},
+    {"name": "OpenAI",
+     "base_url": "https://api.openai.com/v1",
+     "models": ["gpt-4o", "gpt-4o-mini", "gpt-4.1"],
+     "multimodal_models": ["gpt-4o", "gpt-4o-mini"],
+     "protocol": "chat",
+     "desc": "OpenAI 官方 API"},
+    {"name": "Kimi（月之暗面）",
+     "base_url": "https://api.moonshot.cn/v1",
+     "models": ["kimi-k2", "moonshot-v1-32k"],
+     "multimodal_models": ["moonshot-v1-vision"],
+     "protocol": "chat",
+     "desc": "月之暗面 Kimi API"},
+    {"name": "硅基流动",
+     "base_url": "https://api.siliconflow.cn/v1",
+     "models": ["deepseek-ai/DeepSeek-V3", "Qwen/Qwen2.5-72B-Instruct"],
+     "multimodal_models": ["Qwen/Qwen2.5-VL-72B-Instruct"],
+     "protocol": "chat",
+     "desc": "SiliconFlow 聚合平台（OpenAI 兼容）"},
+]
 
 # 纯文本模型关键字（子串匹配）：命中即视为不支持图像输入，禁用截图/视觉能力。
 # 只收录"确定无视觉"的文本模型名/前缀，避免误伤 gpt-4o / qwen-vl / glm-4v / hunyuan-vision 等视觉模型
@@ -162,6 +210,51 @@ def provider_for_model(cfg: dict, model: str) -> dict:
         if model in (p.get("models") or []):
             return p
     return {}
+
+
+def is_default_provider(p: dict) -> bool:
+    """是否内置默认服务商（agnes）：整行锁定，不可删除/编辑。
+    按名称「默认服务商」或 agnes 默认地址识别（兼容旧配置与兜底生成）。"""
+    if not isinstance(p, dict):
+        return False
+    return (str(p.get("name") or "") == DEFAULT_PROVIDER_NAME
+            or str(p.get("base_url") or "").startswith(DEFAULT_BASE_URL))
+
+
+def test_provider_connection(base_url: str, api_key: str, model: str,
+                             protocol: str = "chat", timeout: float = 15.0) -> tuple:
+    """真实连通性测试：用最小 chat/completions 请求验证 base_url + api_key + 模型可用。
+    全程真实 API 调用，不 mock；返回 (ok, message)，失败附具体 HTTP/网络错误便于排障。"""
+    base_url = (base_url or "").strip().rstrip("/")
+    api_key = (api_key or "").strip()
+    model = (model or "").strip()
+    if not base_url or not api_key or not model:
+        return False, "请填写完整的接口地址、API Key 与模型名"
+    url = f"{base_url}/chat/completions"
+    payload = {"model": model,
+               "messages": [{"role": "user", "content": "ping"}],
+               "max_tokens": 1, "stream": False}
+    req = urllib.request.Request(
+        url, data=json.dumps(payload).encode("utf-8"),
+        headers={"Content-Type": "application/json",
+                 "User-Agent": _UA,
+                 "Authorization": f"Bearer {api_key}"},
+        method="POST")
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            resp.read()
+            return True, f"连接成功（HTTP {resp.status}），Key 与模型「{model}」可用"
+    except urllib.error.HTTPError as e:
+        detail = ""
+        try:
+            detail = (e.read().decode("utf-8", "replace") or "")[:200]
+        except Exception:
+            pass
+        return False, f"HTTP {e.code}：{detail or '请求被拒绝（请检查地址/Key/模型名）'}"
+    except urllib.error.URLError as e:
+        return False, f"网络错误：{e.reason}"
+    except Exception as e:
+        return False, f"测试失败：{e}"
 
 
 def is_vision_model(cfg: dict, model: str) -> bool:

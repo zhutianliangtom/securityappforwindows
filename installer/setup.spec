@@ -29,6 +29,9 @@ a = Analysis(
     noarchive=False,
 )
 
+# 性能优化：剔除全部 Qt 翻译文件(.qm)，减小 onefile 体积
+a.datas = [d for d in a.datas if not d[0].endswith('.qm')]
+
 pyz = PYZ(a.pure)
 
 # 把已构建好的主应用 dist\zhuzhu Copilot 整体嵌入（_MEIPASS/app）

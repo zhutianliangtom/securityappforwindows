@@ -54,12 +54,26 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=[],
+    # 运行环境性能优化：排除确定未使用的重型 Qt 模块与内置库，
+    # 减小体积、加快启动加载、降低驻留内存（QtWebEngine 等体积数百 MB）
+    excludes=[
+        'tkinter', 'PyQt6.QtWebEngineCore', 'PyQt6.QtWebEngineWidgets',
+        'PyQt6.QtQuick', 'PyQt6.QtQml', 'PyQt6.Qt3DCore', 'PyQt6.Qt3DRender',
+        'PyQt6.QtCharts', 'PyQt6.QtDataVisualization', 'PyQt6.QtPdf',
+        'PyQt6.QtBluetooth', 'PyQt6.QtNfc', 'PyQt6.QtSerialPort',
+        'PyQt6.QtWebSockets', 'PyQt6.QtDesigner', 'PyQt6.QtHelp',
+        'PyQt6.QtSql', 'PyQt6.QtXml', 'PyQt6.QtTest', 'PyQt6.QtDBus',
+        'numpy', 'pandas', 'scipy', 'matplotlib', 'sklearn', 'torch',
+    ],
     win_no_prefer_redirects=False,
     win_private_assemblies=False,
     cipher=block_cipher,
     noarchive=False,
 )
+
+# 性能优化：应用未使用 QTranslator，剔除全部 Qt 翻译文件(.qm)，
+# 减小体积、加快安装解压与目录扫描
+a.datas = [d for d in a.datas if not d[0].endswith('.qm')]
 
 pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
 

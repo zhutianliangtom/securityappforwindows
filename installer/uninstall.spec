@@ -24,6 +24,9 @@ a = Analysis(
     noarchive=False,
 )
 
+# 性能优化：剔除全部 Qt 翻译文件(.qm)，减小 onefile 体积
+a.datas = [d for d in a.datas if not d[0].endswith('.qm')]
+
 pyz = PYZ(a.pure)
 
 exe = EXE(

@@ -46,6 +46,10 @@ _COMPRESS_COOLDOWN = 5
 # 整段历史全部 miss；todo 每轮更新，放 system 会让每次请求都全量重计费
 _TODO_MARK = "【当前任务清单】"
 
+# 任务技能消息标记：自动匹配/手动指定的技能 instruction 同样以对话末尾独立
+# user 消息注入并原位替换，system 保持稳定 → 前缀缓存持续命中（与 _TODO_MARK 同理）
+_SKILL_MARK = "【任务技能规范】"
+
 # 对话上下文持久化路径
 CONTEXT_FILE = agent_skills.CONFIG_DIR / "context.json"
 
@@ -647,21 +651,15 @@ class AgentEngine:
                 break
 
     # ---------- 主循环 ----------
-    def _system_prompt(self, agent_name: str = "", skills: list = None) -> str:
+    def _system_prompt(self, agent_name: str = "") -> str:
         """构建系统提示词：每次都重新读取 settings.json，
         用户中途新增/修改的自定义规则在下一轮立即生效。
-        自动匹配到的技能（_auto_skills）与手动指定技能合并注入，让 AI 先按技能流程执行。
-        注意：任务清单不在此注入（见 _sync_todo_msg），保证 system 前缀稳定，
-        服务端上下文缓存持续命中，最大限度节省 token。"""
-        merged = list(skills or [])
-        for s in (self._auto_skills or []):
-            if s not in merged:
-                merged.append(s)
-        prompt = agent_skills.build_system_prompt(agent_name, extra_skills=merged,
-                                                  text_only=self.text_only,
-                                                  memory_enabled=self.memory_enabled,
-                                                  direct=self.direct)
-        return prompt
+        注意：任务清单（_sync_todo_msg）与任务技能（_sync_skill_msg）都不在此注入，
+        保证 system 前缀稳定，服务端上下文缓存持续命中，最大限度节省 token。"""
+        return agent_skills.build_system_prompt(agent_name,
+                                                text_only=self.text_only,
+                                                memory_enabled=self.memory_enabled,
+                                                direct=self.direct)
 
     def _todo_text(self) -> str:
         """读取未完成任务清单，格式化为对话消息文本（无任务时返回空串）"""
@@ -689,6 +687,42 @@ class AgentEngine:
             if (isinstance(m, dict) and m.get("role") == "user"
                     and isinstance(m.get("content"), str)
                     and m["content"].startswith(_TODO_MARK)):
+                idx = i
+                break
+        if not text:
+            if idx is not None:
+                del self._messages[idx]
+            return
+        if idx is not None:
+            self._messages[idx]["content"] = text
+        else:
+            self._messages.append({"role": "user", "content": text})
+
+    def _sync_skill_msg(self, manual_skills: list = None):
+        """把当前任务技能指令（自动匹配 + 手动指定）同步为对话末尾独立 user 消息
+        （原位替换，不累积）。
+
+        技能指令按任务（user_input）变化，若注入 system 会让每条新任务都改变
+        system → 服务端前缀缓存整段 miss、全量重计费。改为末尾消息后，
+        system + 早期历史保持字节级不变，技能变化只 miss 末尾几十 token 的短消息。
+        技能指令内容与路由硬拦截（skills_covering_tools）完全不受影响。"""
+        merged = list(self._auto_skills or [])
+        for s in (manual_skills or []):
+            if s not in merged:
+                merged.append(s)
+        text = ""
+        if merged:
+            inst = agent_skills.skill_instructions(merged)
+            if inst:
+                text = (f"{_SKILL_MARK}当前任务已匹配并指定以下技能，"
+                        f"必须严格按各技能 instruction 的规范流程执行，"
+                        f"先按其流程组织步骤再行动，不要跳过技能直接调用底层工具：\n\n{inst}")
+        idx = None
+        for i in range(len(self._messages) - 1, 0, -1):   # 从末尾向前找（最新一条）
+            m = self._messages[i]
+            if (isinstance(m, dict) and m.get("role") == "user"
+                    and isinstance(m.get("content"), str)
+                    and m["content"].startswith(_SKILL_MARK)):
                 idx = i
                 break
         if not text:
@@ -738,9 +772,9 @@ class AgentEngine:
                     self.on_status("已开启自动朗读：AI 输出时将边生成边播放语音")
         if not self._messages or self._messages[0].get("role") != "system":
             self._messages.insert(0, {"role": "system",
-                                      "content": self._system_prompt(agent_name, skills)})
+                                      "content": self._system_prompt(agent_name)})
         else:
-            self._messages[0]["content"] = self._system_prompt(agent_name, skills)
+            self._messages[0]["content"] = self._system_prompt(agent_name)
         self._messages.append({"role": "user",
                                "content": agent_llm.build_content(user_input, images)})
         # 静默虚拟桌面：任务开始切到独立桌面，结束自动返回主桌面（finally 兜底所有结束路径）
@@ -764,10 +798,11 @@ class AgentEngine:
                     return
                 # 每轮重建系统提示词：用户中途新增/修改的规则在下一轮立即生效；
                 # 内容未变化时不覆盖，保持发送前缀稳定利于上下文缓存命中
-                new_prompt = self._system_prompt(agent_name, skills)
+                new_prompt = self._system_prompt(agent_name)
                 if self._messages[0].get("content") != new_prompt:
                     self._messages[0]["content"] = new_prompt
-                # 任务清单同步为末尾独立消息（原位替换，不污染 system 前缀缓存）
+                # 任务技能 + 任务清单同步为末尾独立消息（原位替换，不污染 system 前缀缓存）
+                self._sync_skill_msg(skills)
                 self._sync_todo_msg()
                 if self.on_status:
                     self.on_status("正在思考…")

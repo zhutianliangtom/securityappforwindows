@@ -1105,11 +1105,14 @@ def build_system_prompt(agent_name: str = "", extra_skills: list = None,
                         direct: bool = False) -> str:
     """构造 system prompt：人设 persona + 基础提示 + 严格规则 + 工具执行规范 + 技能说明 + 工具列表
 
-    extra_skills: 手动调用的技能名列表（/技能名 提示），其 instruction 注入本任务系统提示词。
     text_only: 纯文本模型（无视觉输入），追加禁用截图/视觉引导。
     memory_enabled: 记忆开关，关闭时追加禁用记忆工具引导。
     direct: 直接工作模式（无确认直行），追加减少询问/确认的引导。
     自定义规则 / 自定义系统提示词从 settings.json 读取并追加。
+
+    注意：自动匹配/手动指定的任务技能（extra_skills）不再注入 system —— 由引擎以
+    对话末尾独立消息注入（_sync_skill_msg），避免每轮任务 system 变化导致
+    服务端前缀缓存整段 miss、全量重计费。
     """
     agent = next((a for a in load_agents() if a.get("name") == agent_name), None) \
         or DEFAULT_AGENTS[0]
@@ -1139,14 +1142,14 @@ def build_system_prompt(agent_name: str = "", extra_skills: list = None,
         parts.append("\n".join(block))
     prompt = "\n\n".join(parts)
 
-    skills = list(agent.get("skills", [])) + list(extra_skills or [])
+    # 仅注入 agent 自带固定技能（配置稳定，不破坏 system 前缀缓存）。
+    # 自动匹配/手动指定的任务技能 instruction 由引擎以对话末尾独立消息注入
+    # （_sync_skill_msg），内容变化只 miss 末尾几十 token 的短消息。
+    skills = list(agent.get("skills", []))
     if skills:
         inst = skill_instructions(skills)
         if inst:
             prompt += "\n\n" + inst
-    if extra_skills:
-        prompt += ("\n\n当前任务已匹配并指定以下技能，必须严格按各技能 instruction 的规范流程执行，"
-                   "先按其流程组织步骤再行动，不要跳过技能直接调用底层工具。")
     prompt += _skill_router_block()
     prompt += ("\n\n可用内置工具："
                "browser_open(启动独立浏览器实例，不影响用户浏览器；浏览器任务第一步用它)、"

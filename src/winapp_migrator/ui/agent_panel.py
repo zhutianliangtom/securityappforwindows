@@ -41,6 +41,7 @@ from PyQt6.QtWidgets import (
 )
 
 from winapp_migrator.core import agent_llm, agent_engine, agent_skills, agent_sandbox, agent_tools, agent_screen
+from winapp_migrator.ui.tts_panel import TtsPanel
 from winapp_migrator.core.agent_mcp import McpManager
 from winapp_migrator.core.agent_screen import capture_screen_data_url
 from winapp_migrator.ui.widgets import add_brand_footer
@@ -2277,6 +2278,20 @@ class AgentPanel(QDialog):
         self.input.fileDropped.connect(self._on_input_files_dropped)   # 文件拖入 → 附件
         bottom.addWidget(self.input, 1)
 
+        # TTS 语音合成快捷入口
+        self.tts_btn = QPushButton("TTS")
+        self.tts_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.tts_btn.setAutoDefault(False)
+        self.tts_btn.setFixedSize(42, 42)
+        self.tts_btn.setStyleSheet(
+            f"QPushButton {{ background: {PANEL}; border: 1px solid {BORDER};"
+            f"border-radius: 21px; color: {TEXT}; font-size: 13px; }}"
+            f"QPushButton:hover {{ border: 1px solid {ACCENT}; }}")
+        self.tts_btn.setToolTip("Qwen-TTS 声音复刻")
+        self.tts_btn.clicked.connect(self._open_tts_panel)
+        bottom.addWidget(self.tts_btn)
+
+
         # 输入框右侧「+」上传按钮：文件选择器多选（也支持拖拽 / Ctrl+V 粘贴）
         self.attach_btn = QPushButton(_line_icon("plus", 20, ACCENT), "")
         self.attach_btn.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -4319,6 +4334,20 @@ class AgentPanel(QDialog):
 
     # ---------- 设置 ----------
     # 模型/接口/API Key 已写死，无需设置对话框
+
+
+    def _open_tts_panel(self):
+        """打开 TTS 语音合成面板"""
+        try:
+            from winapp_migrator.ui.tts_panel import TtsPanel
+            if not hasattr(self, '_tts_panel') or self._tts_panel is None:
+                self._tts_panel = TtsPanel(self)
+            self._tts_panel.show()
+            self._tts_panel.raise_()
+            self._tts_panel.activateWindow()
+        except Exception as e:
+            print(f"TTS 面板打开失败: {e}")
+            return
 
     def closeEvent(self, event):
         # 隐藏主程序窗口模式下关闭 AI 面板时，恢复显示主窗口，避免应用无可见窗口

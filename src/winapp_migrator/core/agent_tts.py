@@ -205,6 +205,80 @@ def _detect_language(text: str) -> str:
     return "English"
 
 
+# ---------------------------------------------------------------- 情感/语速
+# DashScope 官方"情感与富语言标签"（emtag）：文本内嵌 [英文标签] 控制情感，
+# qwen3-tts-vc 实测支持、不读出（仅作用于韵律）。用于让朗读更有感情变化。
+_EMO_RULES = (
+    # (情感词/标点特征, 注入标签, 语速倍率)
+    (("难过", "伤心", "遗憾", "痛苦", "失望", "难受", "悲伤", "心碎",
+      "沮丧", "委屈", "呜咽", "低沉"), "[sad]", 0.9),
+    (("愤怒", "生气", "可恶", "过分", "凭什么", "受不了", "气死",
+      "怒斥", "严厉", "警告", "吼"), "[shouting]", 1.15),
+    (("天哪", "竟然", "居然", "没想到", "惊讶", "吓人", "真的吗",
+      "不敢置信"), "[panicked]", 1.0),
+    (("恭喜", "太棒", "真好", "万岁", "成功了", "赢了", "完美", "惊喜",
+      "开心", "高兴", "欢呼", "哈哈", "太高兴"), "[happy]", 1.1),
+    (("恳求", "请一定", "拜托", "求求", "轻声", "温柔"), "[whispers]", 0.9),
+    (("累了", "疲惫", "辛苦", "无奈", "叹气", "唉"), "[sighing]", 0.92),
+)
+# 富语言标签：可在句中插入拟声效果，增强表现力
+_EMO_SOUND = (
+    (("哈哈", "咯咯", "笑死"), "[laughing]"),
+    (("咳嗽", "咳了一声"), "[clears throat]"),
+)
+
+
+def _analyze_expression(text: str):
+    """按文本内容做轻量情感/语速分析（本地规则，不额外调用 LLM）。
+
+    返回 (情感标签, 语速倍率)：标签注入到合成文本开头控制情感韵律，
+    倍率用于 speech_rate 参数（感叹快/悲伤慢/长句慢/短句快）。
+    """
+    t = text or ""
+    tag, rate = "", 1.0
+    for words, emo, r in _EMO_RULES:
+        if any(k in t for k in words):
+            tag, rate = emo, r
+            break
+    # 富语言拟声标签：命中词所在位置插到文本前（语气词单独成段，避免打断正文）
+    sound = ""
+    for words, sfx in _EMO_SOUND:
+        if any(k in t for k in words):
+            sound = sfx
+            break
+    if not tag:
+        # 标点补充：感叹→兴奋，疑问→略快，省略号→舒缓
+        if "！" in t or "!" in t:
+            tag, rate = "[happy]", 1.1
+        elif "？" in t or "?" in t or any(k in t for k in ("吗", "呢", "怎么", "为什么")):
+            rate = 1.05
+        elif "……" in t or "..." in t:
+            rate = 0.95
+    # 拟声标签（如 [laughing]）置于最前：先带笑声/语气再说话，增强表现力
+    if sound:
+        tag = sound + tag
+    # 句长补充：长句放慢、短句稍快，让节奏有变化
+    if len(t) >= 40:
+        rate = min(rate, 0.95)
+    elif len(t) <= 8:
+        rate = max(rate, 1.05)
+    return tag, rate
+
+
+def _decorate_for_synthesis(text: str) -> tuple:
+    """合成前装饰：注入情感/拟声标签 + 计算有效语速。
+
+    返回 (装饰后的合成文本, 有效语速倍率)。
+    有效语速 = 用户面板基准语速 × 动态倍率，限制在 [0.5, 2.0]。
+    """
+    tag, rate = _analyze_expression(text)
+    cfg = load_config()
+    base = float(cfg.get("speech_rate") or 1.0)
+    eff = min(2.0, max(0.5, base * rate))
+    deco = (tag + text) if tag else text
+    return deco, eff
+
+
 def _pcm_to_wav(pcm: bytes, rate: int = 24000, channels: int = 1, bits: int = 16) -> bytes:
     """PCM -> 完整 WAV 内存字节（流式合成落盘用）"""
     import struct
@@ -285,12 +359,13 @@ def synthesize_stream(text: str, voice_id: str, model: str = DEFAULT_TARGET_MODE
         "input": {"text": text, "voice": voice_id},
         "parameters": {"stream": True},
     }
-    # 语言类型 + 语速：对齐参考音频的发音/语调/节奏，还原原生音色
-    cfg = load_config()
-    lang = _detect_language(text)
+    # 语言类型 + 情感标签 + 动态语速：还原原生音色并让朗读有情感/节奏变化
+    deco_text, eff_speed = _decorate_for_synthesis(text)
+    payload["input"]["text"] = deco_text
+    lang = _detect_language(text)   # 用原文判断语言（标签为英文，避免误判）
     if lang:
         payload["input"]["language_type"] = lang
-    speed = float(cfg.get("speech_rate") or 1.0)
+    speed = eff_speed
     if 0.5 <= speed <= 2.0:
         payload["parameters"]["speech_rate"] = speed
     req = urllib.request.Request(
@@ -330,7 +405,10 @@ def synthesize_stream(text: str, voice_id: str, model: str = DEFAULT_TARGET_MODE
         out_dir = pathlib.Path.cwd() / "tts_output"
         out_dir.mkdir(parents=True, exist_ok=True)
         output_path = str(out_dir / f"tts_{int(__import__('time').time())}.wav")
-    pathlib.Path(output_path).write_bytes(_pcm_to_wav(b"".join(parts)))
+    # 落盘前做句首淡入 + 句尾淡出：服务端音频开头/结尾直接是非零波形，
+    # 不处理则任何播放器（含系统播放器）从静音突变到语音都会爆"咚"
+    pcm = _fade_edges(b"".join(parts))
+    pathlib.Path(output_path).write_bytes(_pcm_to_wav(pcm))
     return output_path
 
 

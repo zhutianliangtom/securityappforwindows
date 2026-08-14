@@ -49,8 +49,9 @@ def load_api_key() -> str:
 
 def save_config(api_key: str = "", target_model: str = DEFAULT_TARGET_MODEL,
                 voice_id: str = "", preferred_name: str = "", auto_read: bool = True,
-                speech_rate: float = 1.0) -> bool:
-    """保存 TTS 配置到独立文件 tts.json（设置面板写入，避免被 settings.json 覆写）"""
+                speech_rate: float = 1.0, voice_angry_id: str = "") -> bool:
+    """保存 TTS 配置到独立文件 tts.json（设置面板写入，避免被 settings.json 覆写）
+    voice_id 为默认音色（正常/高兴），voice_angry_id 为生气/怀疑专用音色。"""
     try:
         data = {}
         if CONFIG_FILE.exists():
@@ -58,6 +59,7 @@ def save_config(api_key: str = "", target_model: str = DEFAULT_TARGET_MODEL,
         data["api_key"] = api_key or data.get("api_key", "")
         data["target_model"] = target_model or data.get("target_model", DEFAULT_TARGET_MODEL)
         data["voice_id"] = voice_id or data.get("voice_id", "")
+        data["voice_angry_id"] = voice_angry_id or data.get("voice_angry_id", "")
         data["preferred_name"] = preferred_name or data.get("preferred_name", "")
         data["auto_read"] = bool(auto_read)
         data["speech_rate"] = float(speech_rate or 1.0)
@@ -70,8 +72,8 @@ def save_config(api_key: str = "", target_model: str = DEFAULT_TARGET_MODEL,
 
 def load_config() -> dict:
     """读取 TTS 配置（不含敏感 Key 之外的全部字段）"""
-    data = {"target_model": DEFAULT_TARGET_MODEL, "voice_id": "", "preferred_name": "",
-            "auto_read": True, "speech_rate": 1.0}
+    data = {"target_model": DEFAULT_TARGET_MODEL, "voice_id": "", "voice_angry_id": "",
+            "preferred_name": "", "auto_read": True, "speech_rate": 1.0}
     try:
         if CONFIG_FILE.exists():
             data.update(json.loads(CONFIG_FILE.read_text(encoding="utf-8")))
@@ -210,25 +212,34 @@ def _detect_language(text: str) -> str:
 # （DashScope 官方 emtag 仅对部分模型生效），因此不做文本注入，
 # 只通过 speech_rate 按句动态变速（感叹快/悲伤慢/长句慢/短句快），
 # 让朗读节奏有起伏；情感语义交给模型自身理解（High Expressiveness）。
-def _analyze_expression(text: str) -> float:
-    """按文本内容做轻量语速分析（本地规则，不额外调用 LLM）。
+def _analyze_expression(text: str):
+    """按文本内容做轻量情感/语速分析（本地规则，不额外调用 LLM）。
 
-    返回语速倍率：情感词/感叹疑问标点/句长综合，使每句节奏有变化。
+    返回 (情感分类, 语速倍率)：
+    - 情感分类用于按情感选择音色（angry/suspicious 用生气音色，其余默认音色）
+    - 倍率用于 speech_rate 参数（感叹快/悲伤慢/长句慢/短句快）
     """
     t = text or ""
+    emotion = "normal"
     rate = 1.0
-    # 情感词 → 语速倾向（悲伤/恳求放慢，激动/愤怒加快）
-    if any(k in t for k in ("难过", "伤心", "遗憾", "痛苦", "失望", "难受",
-                            "悲伤", "心碎", "沮丧", "委屈", "低沉", "呜咽",
-                            "唉", "恳求", "拜托", "求求", "轻声", "温柔",
-                            "累了", "疲惫", "辛苦", "无奈")):
-        rate = 0.9
-    elif any(k in t for k in ("愤怒", "生气", "可恶", "过分", "凭什么",
-                              "受不了", "气死", "怒斥", "严厉", "警告",
-                              "恭喜", "太棒", "真好", "万岁", "成功了", "赢了",
+    # 生气/怀疑 → 新音色；悲伤/高兴 → 语速倾向
+    if any(k in t for k in ("愤怒", "生气", "可恶", "过分", "凭什么", "受不了",
+                            "气死", "怒斥", "严厉", "警告", "滚", "闭嘴",
+                            "讨厌", "烦死了", "岂有此理", "混蛋")):
+        emotion, rate = "angry", 1.15
+    elif any(k in t for k in ("怀疑", "质疑", "难道", "莫非", "真的假的",
+                              "不可能吧", "骗人", "说谎", "有诈", "不对劲",
+                              "古怪", "蹊跷", "糊弄", "耍我", "玩我")):
+        emotion, rate = "suspicious", 1.0
+    elif any(k in t for k in ("难过", "伤心", "遗憾", "痛苦", "失望", "难受",
+                              "悲伤", "心碎", "沮丧", "委屈", "低沉", "呜咽",
+                              "唉", "恳求", "拜托", "求求", "轻声", "温柔",
+                              "累了", "疲惫", "辛苦", "无奈")):
+        emotion, rate = "sad", 0.9
+    elif any(k in t for k in ("恭喜", "太棒", "真好", "万岁", "成功了", "赢了",
                               "完美", "惊喜", "开心", "高兴", "欢呼")):
-        rate = 1.1
-    if rate == 1.0:
+        emotion, rate = "happy", 1.1
+    if emotion in ("normal", "suspicious"):
         # 标点补充：感叹/疑问略快，省略号舒缓
         if "！" in t or "!" in t:
             rate = 1.1
@@ -241,7 +252,21 @@ def _analyze_expression(text: str) -> float:
         rate = min(rate, 0.95)
     elif len(t) <= 8:
         rate = max(rate, 1.05)
-    return rate
+    return emotion, rate
+
+
+def _select_voice(text: str, voice_id: str = "") -> str:
+    """按文本情感选择音色：显式指定的 voice_id 优先；
+    生气/怀疑文本用配置的 voice_angry_id（新音色），其余用默认 voice_id。"""
+    if voice_id.strip():
+        return voice_id.strip()
+    cfg = load_config()
+    emotion = _analyze_expression(text)[0]
+    if emotion in ("angry", "suspicious"):
+        angry_id = str(cfg.get("voice_angry_id") or "").strip()
+        if angry_id:
+            return angry_id
+    return str(cfg.get("voice_id") or "").strip()
 
 
 def _decorate_for_synthesis(text: str) -> tuple:
@@ -250,7 +275,7 @@ def _decorate_for_synthesis(text: str) -> tuple:
     返回 (原文本, 有效语速倍率)。
     有效语速 = 用户面板基准语速 × 动态倍率，限制在 [0.5, 2.0]。
     """
-    rate = _analyze_expression(text)
+    _emotion, rate = _analyze_expression(text)
     cfg = load_config()
     base = float(cfg.get("speech_rate") or 1.0)
     eff = min(2.0, max(0.5, base * rate))
@@ -399,8 +424,8 @@ def synthesize(text: str, voice_id: str, model: str = DEFAULT_TARGET_MODEL,
     if not text.strip():
         raise RuntimeError("合成文本为空")
     if not voice_id.strip():
-        # 未显式指定音色时，回退到设置面板选中的音色（tts.json）
-        voice_id = str(load_config().get("voice_id", "")).strip()
+        # 未显式指定音色时，按文本情感选择（生气/怀疑用专用音色，其余默认）
+        voice_id = _select_voice(text)
     if not voice_id.strip():
         raise RuntimeError("未指定音色 voice_id，请先在 AI 设置中选择音色")
     payload = {

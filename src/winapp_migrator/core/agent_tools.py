@@ -950,7 +950,9 @@ def _tts_play_start() -> bool:
         if not _TTS_MIXER_OK:
             try:
                 import pygame
-                pygame.mixer.pre_init(24000, -16, 1, 4096)
+                # 统一请求双声道：SDL 常把单声道请求强制回退为 stereo，
+                # 主动用 stereo 可保证 mixer.get_init() 声道数稳定，播放端按该声道扩展 PCM
+                pygame.mixer.pre_init(24000, -16, 2, 4096)
                 pygame.mixer.init()
                 _TTS_MIXER_OK = True
             except Exception:
@@ -968,15 +970,31 @@ def _tts_play_start() -> bool:
 
 
 def _tts_play_chunk(pcm: bytes):
-    """把一个 PCM 分片构造为内存 WAV 并排队播放（每片 0.3s，天然帧对齐）"""
+    """把一个 PCM 分片构造为内存 WAV 并排队播放（每片 0.3s，天然帧对齐）
+
+    注意：SDL 可能把请求的单声道强制开成双声道（mixer.get_init() 返回 2 声道），
+    此时必须把 mono PCM 扩展为 mixer 实际声道数，否则 Sound 会把 mono 数据按
+    stereo 解析 → 时长减半 → 播放倍速 + 音调翻倍（听起来"夹/发尖"）。
+    """
     global _TTS_QUEUED
     if not pcm or not _TTS_MIXER_OK:
         return
     try:
-        import pygame, struct
+        import pygame, struct, array
+        # 读取 mixer 实际声道数（pre_init 请求 mono，但 SDL 可能回退为 stereo）
+        init = pygame.mixer.get_init()
+        out_ch = init[2] if init and len(init) >= 3 else 1
+        if out_ch > 1:
+            a = array.array("h", pcm)
+            out = array.array("h")
+            for x in a:
+                for _ in range(out_ch):
+                    out.append(x)
+            pcm = out.tobytes()
         wav = struct.pack("<4sI4s4sIHHIIHH4sI",
                           b"RIFF", 36 + len(pcm), b"WAVE", b"fmt ", 16,
-                          1, 1, 24000, 48000, 2, 16, b"data", len(pcm)) + pcm
+                          1, out_ch, 24000, 24000 * out_ch * 2, out_ch * 2, 16,
+                          b"data", len(pcm)) + pcm
         snd = pygame.mixer.Sound(buffer=wav)
         with _TTS_PLAYER_LOCK:
             if _TTS_CHANNEL is None:

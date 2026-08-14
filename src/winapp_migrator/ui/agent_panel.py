@@ -1607,7 +1607,7 @@ class _ProviderDialog(QDialog):
         form.addRow("API Key", self.key_edit)
 
         self.models_edit = QLineEdit(", ".join(self._provider.get("models", [])))
-        self.models_edit.setPlaceholderText("模型名逗号分隔，如 deepseek-v4-pro, deepseek-v4-flash")
+        self.models_edit.setPlaceholderText("模型名逗号分隔，如 agnes-2.5-flash")
         form.addRow("模型列表", self.models_edit)
 
         self.multimodal_edit = QLineEdit(", ".join(self._provider.get("multimodal_models", [])))

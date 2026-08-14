@@ -215,6 +215,54 @@ def _pcm_to_wav(pcm: bytes, rate: int = 24000, channels: int = 1, bits: int = 16
                        1, channels, rate, byte_rate, block_align, bits, b"data", len(pcm)) + pcm
 
 
+def _fade_edges(pcm: bytes, rate: int = 24000, fade_ms: int = 20) -> bytes:
+    """句首淡入 + 句尾淡出（作用于 16bit PCM 拼接数据）。
+
+    服务端合成的音频开头/结尾往往直接是非零语音波形（无前导/尾随静音），
+    任何播放器从静音突变到非零波形都会爆一声"咚"。落盘前线性渐入渐出，
+    保证文件本身开头从 0 渐起、结尾渐到 0，任何播放器播放都干净。
+    """
+    if not pcm:
+        return pcm
+    import array as _arr
+    a = _arr.array("h", pcm)
+    n = len(a)
+    f = min(rate * fade_ms // 1000, n // 2)
+    if f > 0:
+        for i in range(f):
+            a[i] = int(a[i] * i / f)                 # 句首渐入（首样本=0）
+            a[n - 1 - i] = int(a[n - 1 - i] * i / f)  # 句尾渐出（末样本=0）
+    return a.tobytes()
+
+
+def _fade_wav_file(path: str, fade_ms: int = 20):
+    """对已落盘的 WAV 文件做句首淡入 + 句尾淡出（16bit 才处理，其他跳过）"""
+    import struct
+    import wave
+    try:
+        with wave.open(path, "rb") as w:
+            ch, sw, fr, n = w.getnchannels(), w.getsampwidth(), w.getframerate(), w.getnframes()
+            data = w.readframes(n)
+    except Exception:
+        return
+    if sw != 2 or not data:
+        return
+    a = __import__("array").array("h", data)
+    f = min(fr * fade_ms // 1000, len(a) // 2)
+    if f > 0:
+        for i in range(f):
+            a[i] = int(a[i] * i / f)
+            a[len(a) - 1 - i] = int(a[len(a) - 1 - i] * i / f)
+    b = a.tobytes()
+    hdr = struct.pack("<4sI4s4sIHHIIHH4sI", b"RIFF", 36 + len(b), b"WAVE", b"fmt ", 16,
+                      1, ch, fr, fr * ch * sw, ch * sw, sw * 8, b"data", len(b))
+    try:
+        with open(path, "wb") as wf:
+            wf.write(hdr + b)
+    except OSError:
+        pass
+
+
 def synthesize_stream(text: str, voice_id: str, model: str = DEFAULT_TARGET_MODEL,
                       on_chunk=None, output_path: str = "", timeout: int = 120) -> str:
     """流式合成语音（SSE 分片），边接收边回调，返回完整 wav 文件路径。
@@ -320,4 +368,5 @@ def synthesize(text: str, voice_id: str, model: str = DEFAULT_TARGET_MODEL,
         out_dir.mkdir(parents=True, exist_ok=True)
         output_path = str(out_dir / f"tts_{int(__import__('time').time())}.wav")
     urllib.request.urlretrieve(audio_url, output_path)
+    _fade_wav_file(output_path)   # 句首淡入 + 句尾淡出，消除文件开头/结尾爆音
     return output_path

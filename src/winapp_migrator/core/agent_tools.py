@@ -1056,12 +1056,15 @@ def _tts_player_loop():
                     a[i] = int(a[i] * i / fade)
                 blk = a.tobytes()
             # 句尾淡出：pygame 播到 Sound 末尾是硬截断，若句尾波形非零会突然
-            # 停止产生"咚"的 pop 爆音；末尾线性衰减到 0 消除截断爆音
+            # 停止产生"咚"的 pop 爆音；末尾线性衰减到 0 消除截断爆音。
+            # 注意乘数必须使最后一个样本为 0（i=0 → 0）：此前写成 (fade-i)/fade
+            # 把末尾样本留在满幅、开头反而压到近 0，等于做成了淡入，
+            # 硬截断爆音始终存在（每句结尾一声"咚"）。
             a = array.array("h", blk)
             n_s = len(a)
             fade = min(_TTS_FADE, n_s)
             for i in range(fade):
-                a[n_s - 1 - i] = int(a[n_s - 1 - i] * (fade - i) / fade)
+                a[n_s - 1 - i] = int(a[n_s - 1 - i] * i / fade)
             blk = a.tobytes()
             wav = struct.pack("<4sI4s4sIHHIIHH4sI",
                               b"RIFF", 36 + len(blk), b"WAVE", b"fmt ", 16,

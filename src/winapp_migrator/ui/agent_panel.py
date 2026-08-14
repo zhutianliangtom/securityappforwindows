@@ -526,13 +526,6 @@ def _render_text(raw: str) -> str:
     return _md_to_html(raw)
 
 
-def _render_stream_text(raw: str) -> str:
-    """流式输出期间的轻量渲染：仅转义 + 换行，不做完整 markdown 解析。
-    避免每 60ms 对累积全文重跑 _md_to_html 的 O(n²) 开销；输出结束后
-    由 _refresh_meta 收尾切回 _render_text 全量渲染一次。"""
-    return _esc(raw).replace("\n", "<br/>")
-
-
 class _TypingDots(QWidget):
     """任务执行中 AI 气泡下方的打字指示器动画（iMessage 风格：三点依次弹起，
     相位错开 1/3 循环，随消息流滚动，无 emoji）"""
@@ -2991,10 +2984,8 @@ class AgentPanel(QDialog):
                     f'<img src="{url}" width="{img_w}" style="border-radius:10px;'
                     'border:1px solid #000000;display:block;margin:12px 0 12px 0;"></div>')
             elif t == "text":
-                # 流式期间用轻量渲染（避免每帧重跑 markdown 解析），结束后切回完整渲染
-                html = _render_stream_text(seg["raw"]) if seg.get("streaming") \
-                    else _render_text(seg["raw"])
-                parts.append(f'<div style="color:{TEXT};font-size:{f_main}px;">{html}</div>')
+                parts.append(f'<div style="color:{TEXT};font-size:{f_main}px;">'
+                             f'{_render_text(seg["raw"])}</div>')
             elif t == "mark":
                 parts.append(f'<div style="color:{TEXT_DIM};font-size:{f_sm}px;">'
                              f'{_linkify(seg["html"])}</div>')
@@ -4267,11 +4258,6 @@ class AgentPanel(QDialog):
             self._task_active = False
             self._hide_spinner()
             self._set_action_idle()   # 融合按钮恢复空闲发送状态
-            # 流式结束：正文段切回完整 markdown 渲染一次（此前为轻量流式渲染）
-            for seg in self._segments:
-                if seg.get("type") == "text":
-                    seg["streaming"] = False
-            self._refresh_ai_html()
             if not self._end_badge_shown:
                 self._end_badge_shown = True
                 self._show_end_badge()

@@ -1019,7 +1019,9 @@ def _tts_play_flush():
 
 
 def _tts_player_loop():
-    """后台播放线程：等待整句数据就绪后一次性 play，句间等待下一句（自然停顿）"""
+    """后台播放线程：只在合成方 flush 提示"整句就绪"时取缓冲整句播放；
+    否则空等。绝不能仅因缓冲非空就取走——合成是流式的，chunk 逐个到达，
+    若不等 flush 会把一句切成多个小段播放，段间爆音形成周期性"咚咚"声。"""
     global _TTS_SEG_START
     import time as _time
     while not _TTS_STOP_EVT.is_set():
@@ -1027,10 +1029,15 @@ def _tts_player_loop():
         if _TTS_STOP_EVT.is_set():
             break
         with _TTS_PLAYER_LOCK:
-            if not _TTS_BUF:
+            if not _TTS_FLUSH_EVT.is_set():
+                # 仅是轮询超时唤醒，合成方未声明整句就绪 → 继续等（不取缓冲）
                 if _TTS_DONE_EVT.is_set():
                     break
+                continue
+            if not _TTS_BUF:
                 _TTS_FLUSH_EVT.clear()
+                if _TTS_DONE_EVT.is_set():
+                    break
                 continue
             blk = bytes(_TTS_BUF)
             _TTS_BUF.clear()

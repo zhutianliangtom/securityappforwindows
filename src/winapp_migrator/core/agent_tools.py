@@ -972,9 +972,11 @@ def _tts_play_start() -> bool:
 def _tts_play_chunk(pcm: bytes):
     """把一个 PCM 分片构造为内存 WAV 并排队播放（每片 0.3s，天然帧对齐）
 
-    注意：SDL 可能把请求的单声道强制开成双声道（mixer.get_init() 返回 2 声道），
+    注意1：SDL 可能把请求的单声道强制开成双声道（mixer.get_init() 返回 2 声道），
     此时必须把 mono PCM 扩展为 mixer 实际声道数，否则 Sound 会把 mono 数据按
     stereo 解析 → 时长减半 → 播放倍速 + 音调翻倍（听起来"夹/发尖"）。
+    注意2：每段合成返回的第一片常从波形任意点开始，直接播放会产生"啪/咚"爆音，
+    对段首片做短淡入（约 10ms）消除起始 click。
     """
     global _TTS_QUEUED
     if not pcm or not _TTS_MIXER_OK:
@@ -984,6 +986,7 @@ def _tts_play_chunk(pcm: bytes):
         # 读取 mixer 实际声道数（pre_init 请求 mono，但 SDL 可能回退为 stereo）
         init = pygame.mixer.get_init()
         out_ch = init[2] if init and len(init) >= 3 else 1
+        is_first = _TTS_QUEUED == 0
         if out_ch > 1:
             a = array.array("h", pcm)
             out = array.array("h")
@@ -991,6 +994,13 @@ def _tts_play_chunk(pcm: bytes):
                 for _ in range(out_ch):
                     out.append(x)
             pcm = out.tobytes()
+        if is_first:
+            # 段首淡入：前 240 样本（10ms @24kHz）线性升幅，消除播放起始爆音
+            a = array.array("h", pcm)
+            fade = min(240, len(a))
+            for i in range(fade):
+                a[i] = int(a[i] * i / fade)
+            pcm = a.tobytes()
         wav = struct.pack("<4sI4s4sIHHIIHH4sI",
                           b"RIFF", 36 + len(pcm), b"WAVE", b"fmt ", 16,
                           1, out_ch, 24000, 24000 * out_ch * 2, out_ch * 2, 16,

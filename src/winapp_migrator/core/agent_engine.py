@@ -26,8 +26,12 @@ from winapp_migrator.core.agent_screen import virtual_desktop
 _DEV_TOOLS = frozenset({"write_file", "edit_file", "delete_file",
                         "run_command", "create_skill", "dispatch_sub_agents"})
 
-# 朗读分段：按这些结尾标点把流式文本切成短句，逐句合成播放（避免整段等待、实现"边输出边朗读"）
-_TTS_SENT_END = ("。", "！", "？", "！？", "……", "…", "！", "?", "；", ";", "\n")
+# 朗读分段：只在句末标点处切句（逗号/换行不切，避免零散 API 调用造成卡顿）
+_TTS_SENT_END = ("。", "！", "？", "！？", "……", "…", "！", "?", "…")
+# 累积到该长度才触发一次合成（过短句子合并，减少 API 往返）
+_TTS_MIN_SEG = 18
+# 无句末标点时达到该长度强制切分（保证长句也能边输出边朗读）
+_TTS_MAX_SEG = 60
 
 # 对话上下文持久化路径
 CONTEXT_FILE = agent_skills.CONFIG_DIR / "context.json"
@@ -535,20 +539,31 @@ class AgentEngine:
             self._tts_flush_sentences()
 
     def _tts_flush_sentences(self):
-        """把累积文本按结尾标点切成短句入队（未完成部分留在缓冲继续累积）"""
+        """把累积文本按句末标点切成短句入队（未完成部分留在缓冲继续累积）。
+        短句（长度 < _TTS_MIN_SEG）不立即切出，与后续文本合并成一句再合成，
+        减少零散 API 调用导致的卡顿；无标点的长文本到 _TTS_MAX_SEG 强制切分，
+        保证长句也能边输出边朗读。"""
         buf = self._tts_buf
-        pos, n = 0, len(buf)
-        while pos < n:
-            j = pos
-            while j < n and buf[j] not in _TTS_SENT_END:
-                j += 1
-            if j >= n:
-                break
-            seg = buf[pos:j + 1].strip()
-            pos = j + 1
-            if seg:
-                self._tts_queue.put(seg)
-        self._tts_buf = buf[pos:]
+        if not buf:
+            return
+        n = len(buf)
+        # 找到最后一个句末标点位置
+        cut = -1
+        for i, ch in enumerate(buf):
+            if ch in _TTS_SENT_END:
+                cut = i + 1
+        if cut > 0 and cut >= _TTS_MIN_SEG:
+            # 有句末标点且长度足够 → 切出（含标点），剩余留缓冲
+            seg, self._tts_buf = buf[:cut], buf[cut:]
+        elif n >= _TTS_MAX_SEG:
+            # 无足够标点但文本已超长 → 整体强制切出，保证长文持续朗读
+            seg, self._tts_buf = buf, ""
+        else:
+            # 文本太短或只有半句：等待更多内容（finish 时统一入队）
+            return
+        seg = seg.strip()
+        if seg:
+            self._tts_queue.put(seg)
 
     def _tts_start_worker(self):
         """启动朗读线程：若上一轮线程仍在收尾（队列未读完）先等其退出，避免双播放源"""

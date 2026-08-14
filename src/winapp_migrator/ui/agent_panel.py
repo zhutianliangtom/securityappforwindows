@@ -2694,6 +2694,10 @@ class AgentPanel(QDialog):
         # 仅 AI 气泡设最小宽度（让截图/内容覆盖半页）；用户气泡按内容自适应，避免短句异常拉长
         if align == "ai":
             bubble.setMinimumWidth(self._bubble_min_width())
+            # 右键菜单：朗读这条回复（从气泡段中提取正文文本后台合成播放）
+            bubble.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+            bubble.customContextMenuRequested.connect(
+                lambda pos, b=bubble: self._on_ai_bubble_menu(b, pos))
         bubble.setProperty("align", align)
         self._bubble_widgets.append(bubble)
         if align == "user":
@@ -3010,6 +3014,52 @@ class AgentPanel(QDialog):
         self._bubble_segs[id(b)] = segs
         b.linkActivated.connect(self._on_bubble_link)
         self._ai_bubble = b
+
+    # ---------- AI 气泡右键：朗读回复 ----------
+    @staticmethod
+    def _bubble_read_text(segs: list) -> str:
+        """从 AI 气泡段中提取可朗读的正文（text 段 raw 拼接，剔除思考/操作/结果）"""
+        parts = []
+        for seg in segs or []:
+            if seg.get("type") == "text":
+                raw = str(seg.get("raw", "") or "").strip()
+                if raw:
+                    parts.append(raw)
+        return "\n".join(parts).strip()
+
+    def _on_ai_bubble_menu(self, bubble, pos):
+        """AI 气泡右键菜单：朗读这条回复"""
+        segs = self._bubble_segs.get(id(bubble))
+        text = self._bubble_read_text(segs)
+        menu = QMenu(self)
+        read_act = menu.addAction("朗读这条回复")
+        if text:
+            menu.addSeparator()
+            copy_act = menu.addAction("复制全文")
+        act = menu.exec(bubble.mapToGlobal(pos))
+        if act is read_act:
+            if not text:
+                self._add_status("该回复没有可朗读的正文", WARN)
+                return
+            self._read_aloud(text)
+        elif text and act is copy_act:
+            QApplication.clipboard().setText(text)
+            self._add_status("已复制回复全文", ACCENT)
+
+    def _read_aloud(self, text: str):
+        """后台线程合成并朗读文本（复用 TTS 播放器，避免阻塞 UI）"""
+        def work():
+            if not agent_tools._tts_play_start():
+                self._add_status("朗读不可用：pygame 未初始化", WARN)
+                return
+            try:
+                agent_tts.synthesize_stream(
+                    text, voice_id="", on_chunk=agent_tools._tts_play_chunk)
+            except Exception as e:
+                self._add_status(f"朗读失败：{e}", ERR)
+            agent_tools._tts_play_stop()
+        self._add_status("正在朗读该回复…", ACCENT)
+        threading.Thread(target=work, daemon=True).start()
 
     def _on_bubble_link(self, url: str):
         """气泡内链接点击：折叠/展开思考过程（仅局部重渲染该气泡）"""

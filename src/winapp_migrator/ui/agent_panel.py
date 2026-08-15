@@ -899,6 +899,7 @@ class _AgentSettingsDialog(QDialog):
         self.todos_check = QCheckBox("显示任务清单窗口（todos）")
         self.todos_check.setChecked(self._todos_enabled())
         self.todos_check.setStyleSheet(f"color: {self._TEXT}; font-size: 13px; spacing: 8px;")
+        self.todos_check.toggled.connect(self._on_todos_toggled)
         lay.addWidget(self.todos_check)
         # 执行模式：AskBeforeEdit / Edit / YOLO（原面板顶栏下拉，迁入设置页）
         mode_row = QHBoxLayout()
@@ -952,6 +953,14 @@ class _AgentSettingsDialog(QDialog):
     def _todos_enabled(self) -> bool:
         return str(QSettings("WinAppMigrator", "WinAppMigrator")
                    .value("agent_show_todos", "1")).strip().lower() in ("1", "true", "yes")
+
+    def _on_todos_toggled(self, checked: bool):
+        """任务清单窗口开关：点击即生效（无需点保存），立即写入并同步显示/隐藏"""
+        QSettings("WinAppMigrator", "WinAppMigrator").setValue(
+            "agent_show_todos", "1" if checked else "0")
+        panel = self.parent()
+        if panel is not None and hasattr(panel, "_sync_todos_win"):
+            panel._sync_todos_win()
 
     def _main_window(self):
         # 本对话框 parent=AgentPanel，AgentPanel 的 parent=MainWindow
@@ -1229,23 +1238,21 @@ class _AgentSettingsDialog(QDialog):
         v = QVBoxLayout(card)
         v.setContentsMargins(12, 8, 12, 8)
         v.setSpacing(2)
-        top = QHBoxLayout()
-        top.setSpacing(8)
         name_text = str(p.get("name", ""))
         if agent_llm.is_default_provider(p):
             name_text += "（内置 · 锁定）"
         name = QLabel(name_text)
         name.setStyleSheet(f"color: {self._TEXT}; font-size: 14px; font-weight: 700;")
-        top.addWidget(name)
-        top.addStretch(1)
+        v.addWidget(name)
         url = QLabel(str(p.get("base_url", "")))
+        url.setWordWrap(True)   # 长接口地址换行完整显示，不被裁剪
         url.setStyleSheet(f"color: {self._DIM}; font-size: 11px;")
         url.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-        top.addWidget(url)
-        v.addLayout(top)
+        v.addWidget(url)
         mm = set(p.get("multimodal_models") or [])
         models = QLabel("模型：" + ", ".join(
             f"{x}（视觉）" if x in mm else str(x) for x in (p.get("models") or [])))
+        models.setWordWrap(True)   # 长模型列表换行完整显示，不被裁剪
         models.setStyleSheet(f"color: {self._DIM}; font-size: 12px;")
         v.addWidget(models)
         # 保存子标签引用，用于选中时切换纯蓝底+白字
@@ -1260,9 +1267,12 @@ class _AgentSettingsDialog(QDialog):
             p = dict(p)
             item = QListWidgetItem()
             item.setData(Qt.ItemDataRole.UserRole, p)
-            item.setSizeHint(QSize(0, 66))
+            card = self._make_provider_card(p)
             self.provider_list.addItem(item)
-            self.provider_list.setItemWidget(item, self._make_provider_card(p))
+            self.provider_list.setItemWidget(item, card)
+            # 卡片高度随内容自适应（换行后不裁剪完整保存信息）
+            w = max(self.provider_list.viewport().width() - 4, 200)
+            item.setSizeHint(QSize(0, max(56, card.heightForWidth(w))))
 
     def _current_provider(self) -> dict:
         item = self.provider_list.currentItem()
@@ -1679,6 +1689,8 @@ class _ProviderDialog(QDialog):
     """单个 AI 服务商配置：预设 / 名称 / 接口地址 / API Key / 模型列表 / 接口协议。
     添加/编辑保存前必须通过真实连通性测试（不 mock），确保接入即可用。"""
 
+    ai_done = pyqtSignal(str)   # 默认 AI 排障分析结果（后台线程经信号回主线程）
+
     _BG = "#0F172A"
     _PANEL = "#1E293B"
     _TEXT = "#F1F5F9"
@@ -1755,12 +1767,24 @@ class _ProviderDialog(QDialog):
             f"background: {self._PANEL}; color: {self._TEXT}; border: 1px solid {self._ACCENT};"
             "border-radius: 8px; padding: 8px 18px; font-weight: 600;")
         self.test_btn.clicked.connect(lambda: self._run_test(from_ok=False))
+        self.ai_hint = QLabel("")
+        self.ai_hint.setWordWrap(True)
+        self.ai_hint.setStyleSheet(f"color: {self._ACCENT}; font-size: 12px;")
+        trow.addWidget(self.test_btn)
+        trow.addWidget(self.ai_hint, 1)
+        form.addRow("", trow)
+        # 测试结果：独立整行（全宽换行显示不被挤压），成功后可点击查看完整保存信息
         self.test_result = QLabel("添加/编辑服务商前必须先通过连通性测试")
         self.test_result.setWordWrap(True)
+        self.test_result.setTextFormat(Qt.TextFormat.RichText)
+        self.test_result.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse |
+            Qt.TextInteractionFlag.LinksAccessibleByMouse)
+        self.test_result.setOpenExternalLinks(False)
         self.test_result.setStyleSheet(f"color: {self._DIM}; font-size: 12px;")
-        trow.addWidget(self.test_btn)
-        trow.addWidget(self.test_result, 1)
-        form.addRow("", trow)
+        self.test_result.linkActivated.connect(self._show_full_info)
+        form.addRow("", self.test_result)
+        self.ai_done.connect(self._on_ai_done)
 
         row = QHBoxLayout()
         ok = QPushButton("确定")
@@ -1846,15 +1870,72 @@ class _ProviderDialog(QDialog):
         if ok:
             self._test_ok = True
             self.test_result.setStyleSheet(f"color: {self._OK}; font-size: 12px;")
-            self.test_result.setText("✓ " + msg)
+            self.test_result.setText(
+                "✓ " + _esc(msg)
+                + "　<a href='show' style='color:#2563EB'>查看完整保存信息</a>")
+            self.ai_hint.setText("")
             if from_ok:
                 self.accept()
         else:
             self._test_ok = False
             self.test_result.setStyleSheet(f"color: {self._ERR}; font-size: 12px;")
-            self.test_result.setText(msg)
+            self.test_result.setText(_esc(msg))
+            self.ai_hint.setStyleSheet(f"color: {self._ACCENT}; font-size: 12px;")
+            self.ai_hint.setText("正在用默认 AI 分析失败原因，生成排障建议…")
+            # 默认 AI 排障分析（后台线程，不阻塞界面）
+            p = self._current_params()
+            ctx = (f"接口地址：{p.get('base_url')}\n模型：{', '.join(p.get('models') or [])}\n"
+                   f"协议：{p.get('protocol')}\n失败信息：{msg}")
+            threading.Thread(target=self._ai_analyze, args=(ctx,), daemon=True).start()
             if from_ok:
                 QMessageBox.warning(self, "连通性测试失败", msg)
+
+    def _ai_analyze(self, ctx: str):
+        """后台线程：调用默认 AI 分析连通性失败原因（结果经 ai_done 信号回主线程）"""
+        suggestion = agent_llm.analyze_connection_error(ctx)
+        self.ai_done.emit(suggestion)
+
+    def _on_ai_done(self, suggestion: str):
+        """AI 排障建议返回：显示在测试按钮右侧，给出可操作的修复指引"""
+        s = (suggestion or "").strip()
+        if s:
+            self.ai_hint.setStyleSheet(f"color: {self._ACCENT}; font-size: 12px;")
+            self.ai_hint.setText("排障建议：\n" + s)
+
+    def _show_full_info(self, *_):
+        """点击「查看完整保存信息」：弹出完整连接配置（白字深底），可一键复制"""
+        p = self._current_params()
+        if not p.get("base_url"):
+            return
+        key = p.get("api_key") or ""
+        masked = (key[:6] + "…" + key[-4:]) if len(key) > 10 else ("…" if key else "(未填写)")
+        ep = "responses" if p.get("protocol") == "responses" else "chat/completions"
+        endpoint = f"{p.get('base_url').rstrip('/')}/{ep}"
+        lines = [
+            f"服务商：{p.get('name') or '未命名'}",
+            f"接口地址：{p.get('base_url')}",
+            f"请求端点：{endpoint}",
+            f"API Key：{masked}",
+            f"模型列表：{', '.join(p.get('models') or []) or '（空）'}",
+            f"接口协议：{'Responses API' if p.get('protocol') == 'responses' else 'Chat Completions'}",
+        ]
+        mm = self.multimodal_edit.text().strip()
+        if mm:
+            lines.append(f"多模态模型：{mm}")
+        box = QMessageBox(self)
+        box.setWindowTitle("完整保存信息")
+        box.setStyleSheet(
+            f"QMessageBox {{ background: {self._PANEL}; }}"
+            f"QMessageBox QLabel {{ color: {self._TEXT}; font-size: 13px; }}"
+            f"QMessageBox QPushButton {{ color: {self._TEXT}; background: {self._PANEL};"
+            f"border: 1px solid {self._BORDER}; border-radius: 8px;"
+            f"padding: 6px 14px; font-size: 13px; }}")
+        box.setText("\n".join(lines))
+        copy = box.addButton("复制完整信息", QMessageBox.ButtonRole.ActionRole)
+        box.addButton("关闭", QMessageBox.ButtonRole.AcceptRole)
+        box.exec()
+        if box.clickedButton() is copy:
+            QApplication.clipboard().setText("\n".join(lines))
 
     def closeEvent(self, e):
         t = self._test_thread
@@ -4085,20 +4166,35 @@ class AgentPanel(QDialog):
         self.action_btn.setEnabled(True)
         self.action_btn.setToolTip("发送")
 
+    def _ensure_stop_btn(self):
+        """确保发送/停止融合按钮处于「停止」状态（不重启转圈动画，避免误导）"""
+        if self._action_anim.isActive():
+            self._action_anim.stop()
+        self.action_btn.setIcon(_line_icon("stop", self._btn_icon_sz, "#FFFFFF"))
+        self.action_btn.setStyleSheet(_BTN_PRIMARY)
+        self.action_btn.setEnabled(True)
+        self.action_btn.setToolTip("停止当前任务")
+
     def _sync_action_style(self, *_):
         """输入框内容变化：任务空闲时刷新发送按钮配色（空→灰蓝，有内容→深蓝）。
-        任务运行中（task_active / 评估中 / 引擎线程存活）保持停止按钮状态，
-        用户输入文字不会把「停止/暂停」误切回「发送」。"""
-        if self._task_active:
+        任务运行中（task_active / 评估中 / 引擎线程存活）保持「停止」按钮状态——
+        即使按钮曾被误复位为发送，输入文字也会立即恢复为停止，绝不变为发送。"""
+        running = bool(self._task_active)
+        if not running:
+            ep = self._eval_pending
+            if ep is not None and ep[0] == self._session_id:
+                running = True
+        if not running:
+            st = self._cur()
+            eng = st.get("engine") if isinstance(st, dict) else None
+            if eng is not None and eng._thread is not None and eng._thread.is_alive():
+                running = True
+        if not running:
+            self._set_action_idle()
             return
-        ep = self._eval_pending
-        if ep is not None and ep[0] == self._session_id:
-            return
-        st = self._cur()
-        eng = st.get("engine") if isinstance(st, dict) else None
-        if eng is not None and eng._thread is not None and eng._thread.is_alive():
-            return
-        self._set_action_idle()
+        # 任务运行中：若按钮不在「停止」态则立即恢复（用户点停止后保持禁用态不覆盖）
+        if not self._user_stopped and self.action_btn.toolTip() != "停止当前任务":
+            self._ensure_stop_btn()
 
     def _set_action_busy(self):
         """运行中：白色转圈动画（可点击停止）"""

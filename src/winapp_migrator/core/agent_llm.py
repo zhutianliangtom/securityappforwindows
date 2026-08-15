@@ -25,18 +25,33 @@ _RETRY_DELAY = 2.0  # 重试基础延迟（秒），指数退避
 # 主流 coding/Agent 服务商预设（添加服务商时一键填入，仍需填写 Key 并通过连通性测试）。
 # 模型名为 2026 主流可用名，仅作预填参考；若测试失败请按各平台控制台实际模型名修改。
 PRESET_PROVIDERS = [
+    # 火山方舟 Coding Plan：官方专属端点 /api/coding/v3（OpenAI 兼容），必须用 Coding
+    # Plan 专属 API Key；切勿用 /api/v3（不消耗套餐额度、产生额外费用）。
+    # 官方模型：ark-code-latest(控制台切换) / doubao-seed-2.1-turbo / doubao-seed-2.0-lite /
+    # minimax-m3 / glm-5.2(glm-latest) / glm-5.3 / deepseek-v4-flash / deepseek-v4-pro / kimi-k2.7-code
     {"name": "火山方舟（Coding Plan）",
      "base_url": "https://ark.cn-beijing.volces.com/api/coding/v3",
-     "models": ["ark-code-latest", "deepseek-v4-flash", "deepseek-v4-pro", "kimi-k2.7-code"],
+     "models": ["ark-code-latest", "deepseek-v4-flash", "deepseek-v4-pro",
+                "kimi-k2.7-code", "doubao-seed-2.1-turbo", "glm-5.3", "minimax-m3"],
      "multimodal_models": [],
      "protocol": "chat",
-     "desc": "火山方舟 Coding Plan 企业版专属接口（OpenAI 兼容），需用 Coding Plan 专属 API Key"},
+     "desc": "火山方舟 Coding Plan 专属 OpenAI 端点（/api/coding/v3）；须用 Coding Plan 专属 API Key，"
+             "勿用 /api/v3（不消耗套餐额度）。模型可在控制台切换（ark-code-latest）或直接填模型名"},
     {"name": "火山方舟（通用）",
      "base_url": "https://ark.cn-beijing.volces.com/api/v3",
      "models": ["doubao-seed-2-1-pro-260628"],
      "multimodal_models": ["doubao-1-5-vision-pro"],
      "protocol": "chat",
      "desc": "火山方舟数据面 API，模型名可用推理接入点 ID 或基础模型名"},
+    # 智谱 GLM Coding Plan：必须用专属端点 /api/coding/paas/v4（OpenAI 兼容），
+    # 用普通 /api/paas/v4 无法享受套餐额度且可能报错。支持 glm-5.3 / glm-4.7 / glm-4.7-flash
+    {"name": "智谱（GLM Coding Plan）",
+     "base_url": "https://open.bigmodel.cn/api/coding/paas/v4",
+     "models": ["glm-5.3", "glm-4.7", "glm-4.7-flash"],
+     "multimodal_models": [],
+     "protocol": "chat",
+     "desc": "智谱 GLM Coding Plan 专属端点（/api/coding/paas/v4，OpenAI 兼容）；"
+             "须订阅 GLM Coding Plan 并用其专属网关，否则无法享用套餐额度"},
     {"name": "智谱清言",
      "base_url": "https://open.bigmodel.cn/api/paas/v4",
      "models": ["glm-4.7", "glm-4.7-flash", "glm-5.2"],
@@ -255,6 +270,39 @@ def test_provider_connection(base_url: str, api_key: str, model: str,
         return False, f"网络错误：{e.reason}"
     except Exception as e:
         return False, f"测试失败：{e}"
+
+
+def analyze_connection_error(context: str) -> str:
+    """用默认 AI 分析服务商连通性失败原因并给出修复建议（排障助手）。
+
+    始终走内置默认 API（与用户自定义配置无关），失败时返回空串由调用方兜底。
+    返回简短中文建议（2-5 条），便于用户在连通性测试失败后快速定位（如
+    Coding Plan 端点/专属 Key/模型名/协议等）。"""
+    prompt = ("你是 API 接入排障助手。用户配置的 AI 服务商连通性测试失败，"
+              "请分析失败信息，给出最可能的原因与可操作修复建议（简洁中文 2-5 条，不要客套）。\n"
+              f"失败信息：{(context or '').strip()[:800]}")
+    payload = {
+        "model": DEFAULT_MODEL,
+        "messages": [
+            {"role": "system", "content": "你是 API 接入排障助手，只输出简洁的中文分析与建议。"},
+            {"role": "user", "content": prompt},
+        ],
+        "temperature": 0.3,
+        "max_tokens": 300,
+    }
+    try:
+        req = urllib.request.Request(
+            f"{DEFAULT_BASE_URL}/chat/completions",
+            data=json.dumps(payload).encode("utf-8"),
+            headers={"Content-Type": "application/json",
+                     "User-Agent": _UA,
+                     "Authorization": f"Bearer {DEFAULT_API_KEY}"},
+            method="POST")
+        raw = urllib.request.urlopen(req, timeout=30).read().decode("utf-8", "replace")
+        resp = json.loads(raw)
+        return ((resp.get("choices") or [{}])[0].get("message") or {}).get("content", "") or ""
+    except Exception:
+        return ""
 
 
 def is_vision_model(cfg: dict, model: str) -> bool:

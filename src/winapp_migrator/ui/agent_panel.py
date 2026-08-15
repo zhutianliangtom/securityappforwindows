@@ -1792,6 +1792,11 @@ class _ProviderDialog(QDialog):
         self.test_btn.clicked.connect(lambda: self._run_test(from_ok=False))
         self.ai_hint = QLabel("")
         self.ai_hint.setWordWrap(True)
+        self.ai_hint.setTextFormat(Qt.TextFormat.MarkdownText)
+        self.ai_hint.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse |
+            Qt.TextInteractionFlag.LinksAccessibleByMouse)
+        self.ai_hint.setOpenExternalLinks(True)
         self.ai_hint.setStyleSheet(f"color: {self._ACCENT}; font-size: 12px;")
         trow.addWidget(self.test_btn)
         trow.addWidget(self.ai_hint, 1)
@@ -1832,8 +1837,6 @@ class _ProviderDialog(QDialog):
 
     def _invalidate(self, *_):
         self._test_ok = False
-        self.test_btn.setEnabled(True)   # 配置变化后重新启用测试按钮
-        self.test_btn.setText("测试连接")
         self.test_result.setStyleSheet(f"color: {self._DIM}; font-size: 12px;")
         self.test_result.setText("配置已变化，需重新测试连接")
         self.ai_hint.setText("")
@@ -1852,7 +1855,6 @@ class _ProviderDialog(QDialog):
         if pidx >= 0:
             self.protocol_combo.setCurrentIndex(pidx)
         self.preset_hint.setText(p.get("desc", ""))
-        self._invalidate()   # 预设变更需重新测试
 
     def _current_params(self) -> dict:
         models = [x.strip() for x in self.models_edit.text().replace("，", ",").split(",")
@@ -1873,14 +1875,14 @@ class _ProviderDialog(QDialog):
         self._run_test(from_ok=True)
 
     def _run_test(self, from_ok: bool):
-        # 检查线程是否存活且正在运行，避免因 deleteLater 导致的 RuntimeError
+        # 检查是否有正在运行的测试线程（对象可能已被 deleteLater 销毁 → 捕获 RuntimeError）
         if self._test_thread is not None:
             try:
                 if self._test_thread.isRunning():
                     return
             except RuntimeError:
-                # 对象已被 deleteLater 删除，重置为 None
-                self._test_thread = None
+                pass
+            self._test_thread = None
         p = self._current_params()
         if not p["base_url"] or not p["api_key"] or not p["models"]:
             self.test_result.setStyleSheet(f"color: {self._ERR}; font-size: 12px;")
@@ -1898,10 +1900,9 @@ class _ProviderDialog(QDialog):
         self._test_thread.start()
 
     def _on_test_done(self, ok: bool, msg: str, from_ok: bool):
-        # 清理线程引用，避免悬空指针
-        self._test_thread = None
         self.test_btn.setEnabled(True)
         self.test_btn.setText("测试连接")
+        self._test_thread = None   # 测试完成：清除引用，允许再次测试
         if ok:
             self._test_ok = True
             self.test_result.setStyleSheet(f"color: {self._OK}; font-size: 12px;")
@@ -1931,17 +1932,11 @@ class _ProviderDialog(QDialog):
         self.ai_done.emit(suggestion)
 
     def _on_ai_done(self, suggestion: str):
-        """AI 排障建议返回：显示在测试按钮右侧，给出可操作的修复指引（支持 Markdown 渲染）"""
+        """AI 排障建议返回：以 markdown 格式渲染显示在测试按钮右侧"""
         s = (suggestion or "").strip()
         if s:
-            self.ai_hint.setTextFormat(Qt.TextFormat.RichText)
-            self.ai_hint.setTextInteractionFlags(
-                Qt.TextInteractionFlag.TextSelectableByMouse |
-                Qt.TextInteractionFlag.LinksAccessibleByMouse)
-            self.ai_hint.setStyleSheet(f"font-size: 12px;")
-            html = "<p style='color:" + self._ACCENT + ";margin:0;'>排障建议：</p>"
-            html += _md_to_html(s)
-            self.ai_hint.setHtml(html)
+            self.ai_hint.setStyleSheet(f"color: {self._ACCENT}; font-size: 12px;")
+            self.ai_hint.setText(s)
 
     def _show_full_info(self, *_):
         """点击「查看完整保存信息」：弹出完整连接配置（白字深底），可一键复制"""
@@ -2579,7 +2574,7 @@ class TodosPanel(QWidget):
 class TodosWindow(QWidget):
     """TODOS 独立无边框悬浮窗口：停靠 AI 主窗口左侧、顶部与主窗口齐平。
     保留任务清单面板（标题+计数+右上角清空按钮），高度随清单长短自适应（不限高度）。
-    纯黑+淡灰+白+深蓝四色极简风格，无 emoji。支持鼠标拖拽移动，但重启后重置为默认位置。"""
+    纯黑+淡灰+白+深蓝四色极简风格，无 emoji。"""
 
     clear_requested = pyqtSignal()   # 用户手动清空任务清单
 
@@ -2608,9 +2603,9 @@ class TodosWindow(QWidget):
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(0)
         lay.addWidget(self.panel)
-        # 鼠标拖拽状态
-        self._drag_start_pos = None
-        self._is_dragging = False  # 拖拽中标志，防止_sync_todos_win干扰位置
+        # 拖拽移动：记录是否正在拖拽及拖拽起始偏移
+        self._dragging = False
+        self._drag_offset = QPoint()
 
     def _sync_height(self, h: int):
         """面板高度变化 → 窗口高度同步（顶部固定，窗口只增不减地向下生长）"""
@@ -2619,30 +2614,28 @@ class TodosWindow(QWidget):
     def update_todos(self, todos: list):
         self.panel.update_todos(todos)
 
-    def mousePressEvent(self, event):
-        if event.button() == Qt.MouseButton.LeftButton:
-            self._drag_start_pos = event.globalPosition().toPoint()
-            self._is_dragging = True
-            event.accept()
+    # ---- 鼠标拖拽移动 ----
+    def mousePressEvent(self, e):
+        if e.button() == Qt.MouseButton.LeftButton:
+            self._dragging = True
+            self._drag_offset = e.globalPosition().toPoint() - self.frameGeometry().topLeft()
+            e.accept()
+        else:
+            super().mousePressEvent(e)
 
-    def mouseMoveEvent(self, event):
-        if self._drag_start_pos is not None:
-            delta = event.globalPosition().toPoint() - self._drag_start_pos
-            self.move(self.x() + delta.x(), self.y() + delta.y())
-            event.accept()
+    def mouseMoveEvent(self, e):
+        if self._dragging and (e.buttons() & Qt.MouseButton.LeftButton):
+            self.move(e.globalPosition().toPoint() - self._drag_offset)
+            e.accept()
+        else:
+            super().mouseMoveEvent(e)
 
-    def mouseReleaseEvent(self, event):
-        if event.button() == Qt.MouseButton.LeftButton:
-            self._drag_start_pos = None
-            self._is_dragging = False
-            event.accept()
-
-    def focusOutEvent(self, event):
-        # 鼠标离开窗口时重置拖拽状态，防止 _is_dragging 残留
-        if self._is_dragging:
-            self._is_dragging = False
-            self._drag_start_pos = None
-        super().focusOutEvent(event)
+    def mouseReleaseEvent(self, e):
+        if self._dragging:
+            self._dragging = False
+            e.accept()
+        else:
+            super().mouseReleaseEvent(e)
 
 
 class QueuePanel(QWidget):
@@ -4113,16 +4106,17 @@ class AgentPanel(QDialog):
         """todos 独立窗口定位：非全屏停靠主窗口左侧（左移 5px 留间隙、顶部齐平）；
         全屏/最大化时移至屏幕右上角、顶部菜单栏下方（不遮挡菜单栏）。
         设置中关闭任务清单窗口时隐藏且不显示。
-        用户拖拽期间跳过同步，避免飘移。"""
+        重新启用（从隐藏变为显示）时重置到默认位置，不保留用户拖拽位置。"""
         tw = getattr(self, "todos_win", None)
         if tw is None:
             return
-        # 用户正在拖拽时跳过位置同步
-        if getattr(tw, "_is_dragging", False):
-            return
         if not self._todos_enabled():
             tw.hide()
+            tw._dragging = False   # 隐藏时清除拖拽状态
             return
+        # 重新启用（从隐藏变为显示）：重置拖拽位置，回到默认停靠位置
+        if not tw.isVisible():
+            tw._dragging = False
         if self._is_fullscreen():
             # 右上角、顶部菜单栏下方：用屏幕可用区域（避开任务栏），右侧留 10px
             scr = self.screen()

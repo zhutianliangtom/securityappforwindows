@@ -353,6 +353,19 @@ create_skill(name=技能名, description=用途简介, instruction=执行流程�
 2. 用 create_skill 工具创建：instruction 写清触发条件、执行步骤与规则（markdown）。
 3. 创建成功后提示：已可通过 /技能名 或对话描述调用；若用户描述的是可复用的流程，适合沉淀为技能。""",
     },
+    "plugin-create": {
+        "description": "插件创建：根据用户自然语言描述自动生成可运行插件（MCP server + SKILL.md 技能 + 脚本/资源/示例）并加载",
+        "instruction": """# plugin-create：创建新插件
+
+1. 倾听用户对插件的描述，确认插件类型：
+   - mcp：仅提供工具能力（MCP server）
+   - skill：仅沉淀为标准技能（SKILL.md）
+   - combined：同时提供技能与 MCP 工具（默认）
+2. 用 create_plugin 工具创建，description 写清插件要做什么、提供哪些能力。
+3. 创建成功后提示：插件已统一存入插件目录，MCP 工具与技能均已自动登记即时生效；
+   用户可在设置-插件页查看/管理/停用/删除；MCP 服务器需保存后自动重连。
+4. 若用户描述的是可复用的独立能力，适合沉淀为插件；若只是流程，用 skill-create 即可。""",
+    },
     "browser-control": {
         "description": "浏览器操控：用独立浏览器实例（CDP）打开网页、截图、按元素编号/文字点击输入、执行JS解析HTML/CSS、读取页面内容，完全不影响用户其他操作",
         "instruction": """# browser-control：AI 操控浏览器（独立实例，不影响用户）
@@ -1065,6 +1078,7 @@ _SKILL_KEYWORDS = {
     "sub-agent": ["并行", "并发", "大规模搜索", "分布式"],
     "download-skill": ["安装技能", "下载技能", "找技能"],
     "skill-create": ["创建技能", "新技能", "自定义技能"],
+    "plugin-create": ["创建插件", "新插件", "自定义插件", "做一个插件"],
     "test-driven-development": ["写测试", "测试用例", "tdd"],
     "systematic-debugging": ["调试", "排查问题", "修复bug"],
     "brainstorming": ["头脑风暴", "想创意", "方案点子"],

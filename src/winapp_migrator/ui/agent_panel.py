@@ -41,7 +41,8 @@ from PyQt6.QtWidgets import (
     QSizePolicy,
 )
 
-from winapp_migrator.core import agent_llm, agent_engine, agent_skills, agent_sandbox, agent_tools, agent_screen, agent_tts
+from winapp_migrator.core import (agent_llm, agent_engine, agent_skills, agent_sandbox,
+                                  agent_tools, agent_screen, agent_tts, agent_plugins)
 from winapp_migrator.core.agent_mcp import McpManager
 from winapp_migrator.ui.widgets import add_brand_footer
 from winapp_migrator.utils.helpers import is_admin
@@ -269,6 +270,16 @@ def _line_icon(kind: str, size: int = 18, color: str = TEXT_DIM) -> QIcon:
         p.setBrush(Qt.BrushStyle.NoBrush)
         p.drawLine(QPointF(s * 0.44, s * 0.32), QPointF(s * 0.72, s * 0.32))
         p.drawLine(QPointF(s * 0.44, s * 0.68), QPointF(s * 0.72, s * 0.68))
+    elif kind == "puzzle":      # 拼图块（插件）
+        p.drawRoundedRect(QRectF(s * 0.20, s * 0.20, s * 0.30, s * 0.30),
+                          s * 0.08, s * 0.08)
+        p.drawArc(QRectF(s * 0.34, s * 0.34, s * 0.24, s * 0.24), 0, 360 * 16)
+        p.drawRoundedRect(QRectF(s * 0.50, s * 0.50, s * 0.30, s * 0.30),
+                          s * 0.08, s * 0.08)
+        p.drawLine(QPointF(s * 0.20, s * 0.50), QPointF(s * 0.20, s * 0.80))
+        p.drawLine(QPointF(s * 0.20, s * 0.80), QPointF(s * 0.50, s * 0.80))
+        p.drawLine(QPointF(s * 0.50, s * 0.20), QPointF(s * 0.80, s * 0.20))
+        p.drawLine(QPointF(s * 0.80, s * 0.20), QPointF(s * 0.80, s * 0.50))
     elif kind == "mic":       # 麦克风（语音合成音色）
         p.drawRoundedRect(QRectF(s * 0.38, s * 0.14, s * 0.24, s * 0.44), s * 0.06, s * 0.06)
         p.drawLine(QPointF(s * 0.38, s * 0.52), QPointF(s * 0.62, s * 0.52))
@@ -762,7 +773,9 @@ def _split_args(s: str) -> list:
 
 
 class _AgentSettingsDialog(QDialog):
-    """AI 设置：左侧导航 + 右侧分组设置（通用记忆 / 规则 / 提示词 / bash / 模型 / 技能 / MCP）"""
+    """AI 设置：左侧导航 + 右侧分组设置（通用记忆 / 规则 / 提示词 / bash / 模型 / 技能 / MCP / 插件）"""
+
+    plugin_done = pyqtSignal(str, str)   # 插件创建完成（ok, message），后台线程回主线程
 
     # 极简配色：纯黑 / 淡黑 / 白 / 深蓝
     _BG = "#000000"
@@ -824,6 +837,7 @@ class _AgentSettingsDialog(QDialog):
             ("模型接入", "net"),
             ("技能", "folder"),
             ("MCP 服务器", "server"),
+            ("插件", "puzzle"),
             ("语音合成", "mic"),
         ):
             self.nav.addItem(QListWidgetItem(_line_icon(kind, 16), name))
@@ -843,6 +857,7 @@ class _AgentSettingsDialog(QDialog):
                      self._build_model_page(s),
                      self._build_skill_page(),
                      self._build_mcp_page(),
+                     self._build_plugin_page(),
                      self._build_tts_page()):
             self.stack.addWidget(page)
         right.addWidget(self.stack, 1)
@@ -867,6 +882,7 @@ class _AgentSettingsDialog(QDialog):
         root.addLayout(right)
 
         self._reload_mcp_list()
+        self.plugin_done.connect(self._on_plugin_done)
 
     # ---------- 各分组页面 ----------
     def _page(self, title: str) -> QWidget:
@@ -1234,6 +1250,175 @@ class _AgentSettingsDialog(QDialog):
         row.addStretch(1)
         lay.addLayout(row)
         return w
+
+    def _build_plugin_page(self) -> QWidget:
+        w = self._page("插件")
+        lay = self._page_body(w)
+        sub = QLabel("统一管理插件：用自然语言描述即可创建可运行插件（MCP 工具 + 标准技能 SKILL.md），"
+                     "或导入插件包 / 标准技能。停用插件即时移除其 MCP 工具。")
+        sub.setStyleSheet(f"color: {self._DIM}; font-size: 12px;")
+        sub.setWordWrap(True)
+        lay.addWidget(sub)
+        self.plugin_list = QListWidget()
+        self.plugin_list.setStyleSheet(
+            f"QListWidget {{ background: {self._PANEL}; color: {self._TEXT};"
+            f"border: 1px solid {self._BORDER}; border-radius: 8px; padding: 6px; }}"
+            f"QListWidget::item {{ padding: 8px 10px; border-radius: 6px; }}"
+            f"QListWidget::item:selected {{ background: {self._PANEL2};"
+            f"color: {self._ACCENT_HOVER}; }}")
+        lay.addWidget(self.plugin_list, 1)
+        row = QHBoxLayout()
+        row.setSpacing(8)
+        create_b = QPushButton(_line_icon("plus", 16), "创建插件（自然语言）")
+        create_b.setStyleSheet(f"background: {self._ACCENT}; color: #FFFFFF;"
+                               "border: none; border-radius: 8px; padding: 7px 14px; font-weight: 700;")
+        create_b.setAutoDefault(False)
+        create_b.setToolTip("输入自然语言描述，AI 自动生成可运行的插件（MCP server + SKILL.md + 脚本/资源/示例）")
+        create_b.clicked.connect(self._on_plugin_create)
+        imp_zip = QPushButton(_line_icon("folder", 16), "导入插件包")
+        imp_zip.setStyleSheet(f"background: {self._PANEL}; color: {self._TEXT};"
+                              f"border: 1px solid {self._BORDER}; border-radius: 8px;"
+                              "padding: 7px 14px; font-weight: 600;")
+        imp_zip.setAutoDefault(False)
+        imp_zip.setToolTip("导入 zip 插件包（含 plugin.json 的完整插件）")
+        imp_zip.clicked.connect(self._on_plugin_import_zip)
+        imp_skill = QPushButton("导入标准技能")
+        imp_skill.setStyleSheet(f"background: {self._PANEL}; color: {self._TEXT};"
+                                f"border: 1px solid {self._BORDER}; border-radius: 8px;"
+                                "padding: 7px 14px; font-weight: 600;")
+        imp_skill.setAutoDefault(False)
+        imp_skill.setToolTip("导入市场标准 SKILL.md（或含 SKILL.md 的 zip），包装为 skill 型插件")
+        imp_skill.clicked.connect(self._on_plugin_import_skill)
+        toggle_b = QPushButton("启用/停用")
+        toggle_b.setStyleSheet(f"background: {self._PANEL}; color: {self._TEXT};"
+                               f"border: 1px solid {self._BORDER}; border-radius: 8px;"
+                               "padding: 7px 14px; font-weight: 600;")
+        toggle_b.setAutoDefault(False)
+        toggle_b.clicked.connect(self._on_plugin_toggle)
+        del_b = QPushButton(_line_icon("trash", 16), "删除")
+        del_b.setStyleSheet(f"background: {self._PANEL}; color: {self._DIM};"
+                            f"border: 1px solid {self._BORDER}; border-radius: 8px;"
+                            "padding: 7px 14px; font-weight: 600;")
+        del_b.setAutoDefault(False)
+        del_b.clicked.connect(self._on_plugin_delete)
+        row.addWidget(create_b)
+        row.addWidget(imp_zip)
+        row.addWidget(imp_skill)
+        row.addWidget(toggle_b)
+        row.addWidget(del_b)
+        row.addStretch(1)
+        lay.addLayout(row)
+        self._reload_plugin_list()
+        return w
+
+    def _reload_plugin_list(self):
+        self.plugin_list.clear()
+        for p in agent_plugins.list_plugins():
+            kind = {"mcp": "工具", "skill": "技能", "combined": "工具+技能"}.get(p.get("kind"), p.get("kind", ""))
+            state = "启用" if p.get("enabled") else "停用"
+            self.plugin_list.addItem(f"{p.get('name', '?')}   [{kind}]   {state}   {p.get('description', '')}")
+
+    def _current_plugin(self) -> dict:
+        row = self.plugin_list.currentRow()
+        plugins = agent_plugins.list_plugins()
+        if 0 <= row < len(plugins):
+            return plugins[row]
+        return None
+
+    def _on_plugin_create(self, *_):
+        """自然语言描述 → 后台线程 AI 生成插件（真实 API），完成后刷新列表"""
+        text, ok = QInputDialog.getMultiLineText(
+            self, "创建插件", "用自然语言描述你想要的插件（做什么、提供哪些能力）：",
+            "帮我做一个每日天气查询插件：读取本地城市，查询当天天气并生成出行建议")
+        if not ok or not text.strip():
+            return
+        kind, k_ok = QInputDialog.getItem(
+            self, "创建插件", "插件类型：", ["combined（工具+技能）", "mcp（仅工具）", "skill（仅技能）"],
+            0, False)
+        if not k_ok:
+            return
+        k = {"combined（工具+技能）": "combined", "mcp（仅工具）": "mcp",
+             "skill（仅技能）": "skill"}.get(kind, "combined")
+        QMessageBox.information(self, "创建插件",
+                                "正在用 AI 生成插件，可能需要几十秒…\n生成期间请勿关闭设置窗口。")
+        threading.Thread(target=self._plugin_worker, args=(text.strip(), k), daemon=True).start()
+
+    def _plugin_worker(self, desc: str, kind: str):
+        """后台线程：AI 生成插件，经 plugin_done 信号回主线程"""
+        ok, msg = agent_plugins.create_plugin_from_nl(desc, kind)
+        self.plugin_done.emit("1" if ok else "0", msg)
+
+    def _on_plugin_done(self, ok: str, msg: str):
+        if ok == "1":
+            QMessageBox.information(self, "创建插件", msg)
+        else:
+            QMessageBox.warning(self, "创建插件失败", msg)
+        self._reload_plugin_list()
+        self._mcp_servers = agent_skills.load_mcp_servers()
+        self._reload_mcp_list()
+
+    def _on_plugin_import_zip(self, *_):
+        """导入插件 zip 包（含 plugin.json）"""
+        path, _ = QFileDialog.getOpenFileName(
+            self, "选择插件包", "", "插件压缩包 (*.zip);;所有文件 (*.*)")
+        if not path:
+            return
+        ok, msg = agent_plugins.import_plugin_zip(path)
+        if ok:
+            QMessageBox.information(self, "导入插件", msg)
+        else:
+            QMessageBox.warning(self, "导入失败", msg)
+        self._reload_plugin_list()
+
+    def _on_plugin_import_skill(self, *_):
+        """导入标准技能为 skill 型插件"""
+        path, _ = QFileDialog.getOpenFileName(
+            self, "选择标准技能文件", "",
+            "技能文件 (*.md);;压缩包 (*.zip);;所有文件 (*.*)")
+        if not path:
+            return
+        ok, msg = agent_plugins.import_plugin_skill(path)
+        if ok:
+            QMessageBox.information(self, "导入技能插件", msg)
+        else:
+            QMessageBox.warning(self, "导入失败", msg)
+        self._reload_plugin_list()
+
+    def _on_plugin_toggle(self, *_):
+        """启用/停用插件：停用移除 MCP 登记，启用恢复；刷新列表与 MCP 列表"""
+        p = self._current_plugin()
+        if p is None:
+            QMessageBox.information(self, "提示", "请先选择一个插件")
+            return
+        name = p.get("name", "")
+        ok, msg = agent_plugins.set_plugin_enabled(name, not bool(p.get("enabled")))
+        if ok:
+            QMessageBox.information(self, "插件", msg)
+        else:
+            QMessageBox.warning(self, "操作失败", msg)
+        self._reload_plugin_list()
+        self._mcp_servers = agent_skills.load_mcp_servers()
+        self._reload_mcp_list()
+
+    def _on_plugin_delete(self, *_):
+        """删除插件：移除插件目录并解绑 MCP/技能"""
+        p = self._current_plugin()
+        if p is None:
+            QMessageBox.information(self, "提示", "请先选择一个插件")
+            return
+        name = p.get("name", "")
+        reply = QMessageBox.question(
+            self, "确认删除", f"确定删除插件「{name}」吗？\n将同时移除其目录与登记的 MCP 工具/技能。")
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+        ok, msg = agent_plugins.delete_plugin(name)
+        if ok:
+            QMessageBox.information(self, "删除插件", msg)
+        else:
+            QMessageBox.warning(self, "删除失败", msg)
+        self._reload_plugin_list()
+        self._mcp_servers = agent_skills.load_mcp_servers()
+        self._reload_mcp_list()
 
     def _switch_page(self, idx: int):
         self.stack.setCurrentIndex(idx)

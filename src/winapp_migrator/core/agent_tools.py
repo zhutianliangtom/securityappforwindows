@@ -917,6 +917,24 @@ TOOLS = [
                            "required": ["name", "description", "instruction"]},
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "create_plugin",
+            "description": "用自然语言描述创建可运行的插件（统一存入插件目录）：根据用户描述用 AI 生成 "
+                           "可运行的 MCP server 脚本（本地 stdio / 远程 SSE）+ 标准 SKILL.md 技能，"
+                           "并自动生成运行脚本、依赖、示例文件，自动登记到技能与 MCP 配置，创建后即时生效。"
+                           "当用户想做一个独立功能/工具/能力并希望沉淀为插件时使用。",
+            "parameters": {"type": "object",
+                           "properties": {
+                               "description": {"type": "string",
+                                               "description": "用户自然语言描述：插件要做什么、提供哪些能力"},
+                               "kind": {"type": "string",
+                                        "description": "插件类型：mcp（仅工具）/ skill（仅技能）/ combined（两者，默认）",
+                                        "enum": ["mcp", "skill", "combined"]}},
+                           "required": ["description"]},
+        },
+    },
     # ---------- 子 Agent 工具（主 Agent 派发只读子任务，执行由引擎调度） ----------
     {
         "type": "function",
@@ -1481,6 +1499,9 @@ def execute_tool(name: str, args: dict, allow_dangerous: bool = False,
             return _create_skill(str(args.get("name", "")),
                                  str(args.get("description", "")),
                                  str(args.get("instruction", "")))
+        if name == "create_plugin":
+            return _create_plugin(str(args.get("description", "")),
+                                  str(args.get("kind", "combined")))
         # ---- TTS 语音合成（Qwen-TTS 声音复刻，DashScope 真实 API） ----
         if name == "tts_create_voice":
             try:
@@ -3472,6 +3493,14 @@ def _create_skill(name: str, description: str, instruction: str) -> dict:
     """生成市场标准 SKILL.md 技能并注册（创建后立即生效）"""
     from winapp_migrator.core import agent_skills
     ok, msg = agent_skills.create_md_skill(name, description, instruction)
+    return ({"text": msg, "images": []} if ok else _blocked(msg))
+
+
+def _create_plugin(description: str, kind: str) -> dict:
+    """用自然语言描述创建插件（AI 生成可运行 MCP server + SKILL.md + 脚本/资源/示例），
+    统一存入插件目录并登记技能/MCP 配置，创建后即时生效。"""
+    from winapp_migrator.core import agent_plugins
+    ok, msg = agent_plugins.create_plugin_from_nl(description, kind)
     return ({"text": msg, "images": []} if ok else _blocked(msg))
 
 

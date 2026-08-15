@@ -1919,11 +1919,17 @@ class _ProviderDialog(QDialog):
         self.ai_done.emit(suggestion)
 
     def _on_ai_done(self, suggestion: str):
-        """AI 排障建议返回：显示在测试按钮右侧，给出可操作的修复指引"""
+        """AI 排障建议返回：显示在测试按钮右侧，给出可操作的修复指引（支持 Markdown 渲染）"""
         s = (suggestion or "").strip()
         if s:
-            self.ai_hint.setStyleSheet(f"color: {self._ACCENT}; font-size: 12px;")
-            self.ai_hint.setText("排障建议：\n" + s)
+            self.ai_hint.setTextFormat(Qt.TextFormat.RichText)
+            self.ai_hint.setTextInteractionFlags(
+                Qt.TextInteractionFlag.TextSelectableByMouse |
+                Qt.TextInteractionFlag.LinksAccessibleByMouse)
+            self.ai_hint.setStyleSheet(f"font-size: 12px;")
+            html = "<p style='color:" + self._ACCENT + ";margin:0;'>排障建议：</p>"
+            html += _md_to_html(s)
+            self.ai_hint.setHtml(html)
 
     def _show_full_info(self, *_):
         """点击「查看完整保存信息」：弹出完整连接配置（白字深底），可一键复制"""

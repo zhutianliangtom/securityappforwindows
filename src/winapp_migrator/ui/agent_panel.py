@@ -4017,9 +4017,31 @@ class AgentPanel(QDialog):
         except Exception:
             return 58
 
+    def _is_fullscreen(self) -> bool:
+        """是否全屏/最大化：面板自身、顶层窗口或父窗口（MainWindow）任一最大化即视为全屏。
+        真实场景中用户常最大化主窗口，面板（子窗口）的 isMaximized 可能为 False。"""
+        if self.isMaximized():
+            return True
+        tl = self.window()
+        if tl is not None and tl is not self:
+            try:
+                if tl.isMaximized():
+                    return True
+            except Exception:
+                pass
+        parent = self.parentWidget()
+        while parent is not None:
+            try:
+                if parent.isMaximized():
+                    return True
+            except Exception:
+                pass
+            parent = parent.parentWidget()
+        return False
+
     def _sync_todos_win(self):
         """todos 独立窗口定位：非全屏停靠主窗口左侧（左移 5px 留间隙、顶部齐平）；
-        最大化时移至右上角、顶部菜单栏下方（不遮挡菜单栏）。
+        全屏/最大化时移至屏幕右上角、顶部菜单栏下方（不遮挡菜单栏）。
         设置中关闭任务清单窗口时隐藏且不显示。"""
         tw = getattr(self, "todos_win", None)
         if tw is None:
@@ -4027,14 +4049,21 @@ class AgentPanel(QDialog):
         if not self._todos_enabled():
             tw.hide()
             return
-        if self.isMaximized():
-            # 右上角、顶部菜单栏下方：右侧留 10px，顶部下移避开菜单/工具栏
-            x = self.x() + self.width() - tw.width() - 10
-            y = self.y() + self._top_bar_offset()
+        if self._is_fullscreen():
+            # 右上角、顶部菜单栏下方：用屏幕可用区域（避开任务栏），右侧留 10px
+            scr = self.screen()
+            g = scr.availableGeometry() if scr else None
+            if g is not None and g.width() > 0:
+                x = g.right() - tw.width() - 10
+                y = g.top() + self._top_bar_offset()
+            else:
+                x = self.x() + self.width() - tw.width() - 10
+                y = self.y() + self._top_bar_offset()
         else:
             # 停靠左侧、顶部齐平，再左移 5px 与主面板留出间隙
-            x = max(0, self.x() - tw.width() - 5)
-            y = self.y()
+            base = self.mapToGlobal(self.rect().topLeft())
+            x = max(0, base.x() - tw.width() - 5)
+            y = base.y()
         tw.move(x, y)
         if not tw.isVisible():
             tw.show()
@@ -4072,7 +4101,14 @@ class AgentPanel(QDialog):
         # 保证最大化时 todos 移到右上角可见、还原后回到左侧停靠
         self._sync_todos_win()
         # 最大化时 owned 窗口可能被压到面板下层 → 延迟再抬升，确保用户可见
-        if self.isMaximized():
+        if self._is_fullscreen():
+            QTimer.singleShot(0, self._sync_todos_win)
+            QTimer.singleShot(150, self._sync_todos_win)
+
+    def changeEvent(self, e):
+        super().changeEvent(e)
+        # 标题栏最大化/还原、父窗口（MainWindow）状态变化 → 同步 todos 全屏定位
+        if e.type() == QEvent.Type.WindowStateChange:
             QTimer.singleShot(0, self._sync_todos_win)
             QTimer.singleShot(150, self._sync_todos_win)
 

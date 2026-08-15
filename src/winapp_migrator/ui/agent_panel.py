@@ -2351,7 +2351,6 @@ class TodosPanel(QWidget):
         self._list_lay.addStretch(1)
         self._scroll.setWidget(self._list)
         lay.addWidget(self._scroll, 1)
-        self._limit = 220      # 面板最大高度（约页面 1/3，resizeEvent 随窗口更新）
         self._last_h = -1      # 上次应用的高度，避免重复 relayout
         self.update_todos([])
 
@@ -2402,17 +2401,17 @@ class TodosPanel(QWidget):
         return total
 
     def _resize_to_content(self):
-        """自适应高度：内容少时矮、内容多时受限高内部滚动"""
+        """自适应高度：内容少时矮、内容多时随清单增高（不限高度，任凭清单长短）"""
         content = self._content_height()
         # widgetResizable 会把内部列表压缩到视口，minimumHeight 设为内容高度，
-        # 内容超高时才出现滚动条（不被裁剪），内容未超高时消息顶部紧凑排列。
+        # 窗口高度恰好等于内容时不出现滚动条（不被裁剪、不留空白）。
         self._list.setMinimumHeight(content)
         total = 28 + content + 22              # header + 面板上下内边距
-        h = max(56, min(int(total), self._limit))
+        h = max(56, int(total))
         if h != self._last_h:
             self._last_h = h
             self.setFixedHeight(h)
-            self.height_changed.emit(h)   # 排队面板高度联动
+            self.height_changed.emit(h)   # 独立窗口高度联动
 
     def _row(self, t: dict) -> QWidget:
         title = str(t.get("title") or "")
@@ -2439,6 +2438,40 @@ class TodosPanel(QWidget):
         lbl.setStyleSheet(f"color: {color}; font-size: 12px;")
         rl.addWidget(lbl, 1)
         return row
+
+
+class TodosWindow(QWidget):
+    """TODOS 独立无边框悬浮窗口：停靠 AI 主窗口左侧、顶部与主窗口齐平。
+    保留任务清单面板（标题+计数+右上角清空按钮），高度随清单长短自适应（不限高度）。
+    纯黑+淡灰+白+深蓝四色极简风格，无 emoji。"""
+
+    clear_requested = pyqtSignal()   # 用户手动清空任务清单
+
+    WIDTH = 280   # 固定宽度，高度随内容
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        # 无边框 + Tool：独立悬浮窗口，不占任务栏、随主窗口隐藏/最小化
+        self.setWindowFlags(Qt.WindowType.FramelessWindowHint
+                            | Qt.WindowType.Tool)
+        # 透明背景：仅显示内部圆角卡片，四角透出桌面（避免黑方块）
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        self.setFixedWidth(self.WIDTH)
+        self.resize(self.WIDTH, 100)
+        self.panel = TodosPanel(self)
+        self.panel.clear_requested.connect(self.clear_requested.emit)
+        self.panel.height_changed.connect(self._sync_height)
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(0)
+        lay.addWidget(self.panel)
+
+    def _sync_height(self, h: int):
+        """面板高度变化 → 窗口高度同步（顶部固定，窗口只增不减地向下生长）"""
+        self.setFixedHeight(h)
+
+    def update_todos(self, todos: list):
+        self.panel.update_todos(todos)
 
 
 class QueuePanel(QWidget):
@@ -2840,7 +2873,6 @@ class AgentPanel(QDialog):
         self._last_bw = self._last_bmn = -1     # 上次已同步的气泡宽度缓存
         self._last_img_w = -1                   # 上次重渲染时的截图宽度缓存
         self._last_scale = 0.0                  # 上次底部输入行等比缩放系数（0=未初始化）
-        self._last_todos_limit = -1             # 上次 todos 面板限高缓存
         self._btn_icon_sz = 16                  # 发送/转圈按钮图标尺寸（随窗口缩放）
 
         threading.Thread(target=self._init_mcp, daemon=True).start()
@@ -2910,15 +2942,12 @@ class AgentPanel(QDialog):
 
         root.addLayout(top)
 
-        # 主体：TODOS 置顶横条（全宽、高度随内容）+ 下方聊天区（占满剩余宽度）。
-        # TODOS 内嵌于布局（非独立窗口 → 无最小化/最大化/关闭按钮），
-        # 默认常显，AI 使用 update_todo / list_todo 工具时更新内容。
+        # 主体：聊天区占满剩余宽度（TODOS 已移出为独立无边框窗口 TodosWindow，
+        # 停靠 AI 主窗口左侧、顶部齐平，不占主面板布局）。
         body = QVBoxLayout()
         body.setSpacing(10)
-        self.todos_panel = TodosPanel(self)
-        self.todos_panel.clear_requested.connect(self._on_todos_clear)
-        self.todos_panel.height_changed.connect(self._sync_queue_height)
-        body.addWidget(self.todos_panel, 0)   # todos 置顶横条：全宽、高度随内容
+        self.todos_win = TodosWindow(self)
+        self.todos_win.clear_requested.connect(self._on_todos_clear)
         right = QVBoxLayout()
         right.setSpacing(10)
 
@@ -3037,7 +3066,7 @@ class AgentPanel(QDialog):
         right.addWidget(self.queue_panel)
         right.addLayout(bottom)
         body.addLayout(right, 1)
-        root.addLayout(body, 1)   # 底部区域占满窗口：左侧 todos 自适应，右侧聊天区弹性，输入行贴底
+        root.addLayout(body, 1)   # 底部区域占满窗口：聊天区弹性，输入行贴底（todos 已独立成窗口）
         add_brand_footer(self)
 
     def _connect_signals(self):
@@ -3337,14 +3366,16 @@ class AgentPanel(QDialog):
         self._sync_queue_height()
 
     def _sync_queue_height(self, *_):
-        """排队面板高度 = 消息内容自然高度，上限为 todos 面板高度：
+        """排队面板高度 = 消息内容自然高度，上限为主面板 40%（内部滚动）：
         消息少时紧凑、行间无大间距、最上方消息不被顶出；
-        消息多时随 todos 增高并内部滚动（从下至上，最新消息始终可见）。"""
+        消息多时随消息增多而增高并内部滚动（从下至上，最新消息始终可见）。
+        todos 已独立成窗口，排队面板不再联动 todos 高度。"""
         qp = self.queue_panel
         if not qp.isVisible():
             return
         content = getattr(qp, "_rows_h", 0) + 40   # 表头 + 上下内边距 + 间距
-        qp.setFixedHeight(max(56, min(content, self.todos_panel.height())))
+        limit = max(80, int(self.height() * 0.4))
+        qp.setFixedHeight(max(56, min(content, limit)))
 
     def _on_queue_edit(self, idx: int):
         """编辑第 idx 条排队消息：回填输入框并移除该条，发送后按原队列位置重新排队"""
@@ -3377,12 +3408,12 @@ class AgentPanel(QDialog):
         self._update_queue_bar()
 
     def _on_todos_clear(self):
-        """用户手动清空 todos：清空清单文件并刷新面板（AI 下次 update_todo 全量恢复）"""
+        """用户手动清空 todos：清空清单文件并刷新窗口（AI 下次 update_todo 全量恢复）"""
         try:
             agent_tools.TODO_FILE.write_text("[]", encoding="utf-8")
         except OSError:
             pass
-        self.todos_panel.update_todos([])
+        self.todos_win.update_todos([])
 
     def _cancel_queue_edit(self):
         """取消编辑状态并恢复输入框占位提示"""
@@ -3646,9 +3677,9 @@ class AgentPanel(QDialog):
             threading.Thread(target=_load, daemon=True).start()
         # 切到该会话后处理其挂起的确认/提问（后台会话不弹窗，切到前台才弹）
         self._flush_pending(sid)
-        # 切换对话：复位排队编辑状态；todos 面板常显，刷新为全局任务清单
+        # 切换对话：复位排队编辑状态；todos 独立窗口刷新为全局任务清单
         self._cancel_queue_edit()
-        self.todos_panel.update_todos(agent_tools.load_todos())
+        self.todos_win.update_todos(agent_tools.load_todos())
 
     def _finish_switch(self, sid: str, segs: list, ums: list, rows: list):
         """会话切换收尾（主线程）：用后台线程读到的数据一次性渲染"""
@@ -3709,8 +3740,8 @@ class AgentPanel(QDialog):
         self._add_status("已开启新对话，上下文与旧对话隔离", ACCENT)
         self._scroll_bottom()
         self._update_queue_bar()
-        # 新建对话：todos 面板常显，刷新为全局任务清单（无任务显示提示语）
-        self.todos_panel.update_todos(agent_tools.load_todos())
+        # 新建对话：todos 独立窗口刷新为全局任务清单（无任务显示提示语）
+        self.todos_win.update_todos(agent_tools.load_todos())
 
     def _auto_name_session(self, text: str):
         """AI 自动命名：会话无名称时用首条消息前 20 字命名"""
@@ -3778,9 +3809,8 @@ class AgentPanel(QDialog):
     def resizeEvent(self, e):
         super().resizeEvent(e)
         self._apply_topbar_layout()
-        # 底部输入行等比缩放 + todos 面板限高（随窗口高度变化，全屏自动放大）
+        # 底部输入行等比缩放（随窗口高度变化，全屏自动放大）
         self._apply_bottom_scale()
-        self._apply_todos_limit()
         # 气泡宽度同步（轻量 setter）；文本/截图重渲染交给防抖定时器合并。
         # 宽度未变化（仅高度变动）时直接跳过，避免最大化↔正常来回切换时反复遍历气泡
         mw = self._bubble_max_width()
@@ -3813,15 +3843,6 @@ class AgentPanel(QDialog):
         for b in (self.attach_btn, self.action_btn):
             b.setFixedSize(s, s)
             b.setIconSize(QSize(self._btn_icon_sz, self._btn_icon_sz))
-
-    def _apply_todos_limit(self):
-        """todos 置顶横条限高：内容自适应，最高约窗口 1/5（绝对上限 220px），
-        保持紧凑横条形态，不挤压下方聊天区"""
-        limit = max(100, min(int(self.height() * 0.18), 220))
-        if limit != self._last_todos_limit:
-            self._last_todos_limit = limit
-            self.todos_panel._limit = limit
-            self.todos_panel._resize_to_content()
 
     def _rebuild_bubbles_after_resize(self):
         """resize 停止后重渲染。字体固定 14px 不随窗口缩放（_font_scale 恒 1.0），
@@ -3857,10 +3878,21 @@ class AgentPanel(QDialog):
         except Exception:
             pass
 
+    def _sync_todos_win(self):
+        """todos 独立窗口停靠主窗口左侧、顶部齐平；主窗口移动/显示时跟随"""
+        tw = getattr(self, "todos_win", None)
+        if tw is None:
+            return
+        tw.move(max(0, self.x() - tw.width()), self.y())
+        if not tw.isVisible():
+            tw.show()
+
     def showEvent(self, e):
         super().showEvent(e)   # 统一补丁已为 QDialog 深色化标题栏
         # 强制任务栏缩略图（owned window 默认不显示，需手动加 WS_EX_APPWINDOW）
         self._ensure_taskbar_entry()
+        # 打开面板时同步显示 todos 独立窗口（停靠左侧、顶部齐平）
+        self._sync_todos_win()
         # 面板复用（关闭再打开不销毁），滚动位置不会自动重置 → 打开时自动滚到对话底部
         QTimer.singleShot(0, self._scroll_bottom)
         QTimer.singleShot(300, self._scroll_bottom)
@@ -3872,6 +3904,16 @@ class AgentPanel(QDialog):
             QTimer.singleShot(600, self._setup_admin_dnd)   # 兜底重试：窗口完全就绪后再注册一次
         else:
             print("[dnd] 非管理员运行：走 Qt 原生拖放", flush=True)
+
+    def moveEvent(self, e):
+        super().moveEvent(e)
+        self._sync_todos_win()
+
+    def hideEvent(self, e):
+        super().hideEvent(e)
+        tw = getattr(self, "todos_win", None)
+        if tw is not None:
+            tw.hide()
 
     def _add_bubble(self, text: str, align: str, rich: bool = False,
                     animate: bool = True) -> QLabel:
@@ -5521,9 +5563,9 @@ class AgentPanel(QDialog):
         self._stop_send_spin()
         self._last_activity = time.time()
         self._ensure_ai_bubble()
-        # AI 使用任务清单工具时，同步左侧 TODOS 可视化面板（面板常显，实时刷新进度）
+        # AI 使用任务清单工具时，同步独立 todos 窗口（常显，实时刷新进度）
         if name in ("update_todo", "list_todo"):
-            self.todos_panel.update_todos(agent_tools.load_todos())
+            self.todos_win.update_todos(agent_tools.load_todos())
         shown = (text or "").strip()
         if len(shown) > 20000:
             shown = shown[:20000] + " …（输出过长已截断显示，完整内容已返回模型）"
@@ -5780,4 +5822,8 @@ class AgentPanel(QDialog):
             except Exception:
                 pass
             self._admin_drop_filter = None
+        # 关闭面板：同时关闭 todos 独立窗口（无边框悬浮窗口随主面板销毁）
+        tw = getattr(self, "todos_win", None)
+        if tw is not None:
+            tw.close()
         event.accept()

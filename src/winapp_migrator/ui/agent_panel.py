@@ -3331,7 +3331,6 @@ class AgentPanel(QDialog):
         q = qs.pop(idx)
         self._queue_edit_idx = idx
         self.input.setPlainText(q.get("text") or "")
-        self.input.setPlaceholderText(f"正在编辑第 {idx + 1} 条排队消息，发送后回到原队列位置")
         self._update_queue_bar()
         self.input.setFocus()
 
@@ -4783,7 +4782,6 @@ class AgentPanel(QDialog):
             self.input.clear()
             self._clear_attachments()
             self._update_queue_bar()
-            self._add_status("消息已排队，当前任务完成后按序自动发送（可逐条编辑/删除）", ACCENT)
             return
         self._cancel_queue_edit()
         self._do_send(payload)

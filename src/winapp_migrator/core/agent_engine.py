@@ -859,8 +859,11 @@ class AgentEngine:
                                       "content": self._system_prompt(agent_name)})
         else:
             self._messages[0]["content"] = self._system_prompt(agent_name)
+        wd = agent_tools.get_workdir()
+        wd_hint = (f"\n\n【当前工作目录】{wd}\n文件查找/创建/修改/删除、命令执行默认在此目录内进行；"
+                   "未指定绝对路径时，相对路径一律基于该工作目录解析。") if wd else ""
         self._messages.append({"role": "user",
-                               "content": agent_llm.build_content(user_input + _PLAN_HINT,
+                               "content": agent_llm.build_content(user_input + wd_hint + _PLAN_HINT,
                                                                   images)})
         # 静默虚拟桌面：任务开始切到独立桌面，结束自动返回主桌面（finally 兜底所有结束路径）
         switched = False

@@ -936,17 +936,36 @@ class AgentEngine:
                         self.on_status("完成")
                     return
 
-                # 组装 assistant 消息（含 tool_calls）
+                # 组装 assistant 消息（含 tool_calls）。
+                # 关键：arguments 必须是合法 JSON，否则上游（尤其字节 agent plan 等
+                # 严格校验的端点）对历史里这条 assistant tool_call 直接报 400
+                # "arguments must be valid JSON"。这里先净化非法 arguments 为 {} 再
+                # 落库，同时标记待重试，让工具层以「参数错误」提示模型重新发起。
+                bad_indexes = set()
+                cleaned_calls = []
+                for i, c in enumerate(calls):
+                    c = dict(c)
+                    fn = c.get("function") or {}
+                    args_str = (fn.get("arguments") or "").strip()
+                    try:
+                        json.loads(args_str)
+                        valid = True
+                    except (json.JSONDecodeError, TypeError):
+                        valid = False
+                    if not valid:
+                        bad_indexes.add(i)
+                        c["function"] = dict(fn, arguments="{}")
+                    cleaned_calls.append(c)
                 self._messages.append({
                     "role": "assistant",
                     "content": result["text"] or None,
-                    "tool_calls": calls,
+                    "tool_calls": cleaned_calls,
                 })
                 last_images = []
                 last_failed = False
                 answered = set()
                 rules_just = False   # 本轮是否触发过开发规则确认（全部拦截后统一置位）
-                for call in calls:
+                for i, call in enumerate(calls):
                     if self._stop.is_set():
                         # 补齐未执行工具的回复，保持 tool_calls 配对完整，防下一轮发送 400
                         for c in calls:
@@ -991,6 +1010,17 @@ class AgentEngine:
                         answered.add(call["id"])
                         if self.on_result:
                             self.on_result(name, text, [])
+                        continue
+                    if i in bad_indexes:
+                        # 原参数非法 JSON：已净化落库，这里不误执行，返回提示让模型重新生成
+                        text = ("[工具参数错误] tool_calls.arguments 不是合法 JSON，"
+                                "请检查参数格式（字符串需正确转义引号）并重新发起该工具调用。")
+                        self._messages.append({"role": "tool", "tool_call_id": call["id"],
+                                               "content": text})
+                        answered.add(call["id"])
+                        if self.on_result:
+                            self.on_result(name, text, [])
+                        last_failed = True
                         continue
                     try:
                         args = json.loads(call["function"]["arguments"] or "{}")

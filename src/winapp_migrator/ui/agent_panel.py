@@ -4057,6 +4057,12 @@ class AgentPanel(QDialog):
         super().moveEvent(e)
         self._sync_todos_win()
 
+    def resizeEvent(self, e):
+        super().resizeEvent(e)
+        # 最大化/还原触发的是 resize 而非 move → 这里也同步 todos 位置，
+        # 保证最大化时 todos 移到右上角可见、还原后回到左侧停靠
+        self._sync_todos_win()
+
     def hideEvent(self, e):
         super().hideEvent(e)
         tw = getattr(self, "todos_win", None)

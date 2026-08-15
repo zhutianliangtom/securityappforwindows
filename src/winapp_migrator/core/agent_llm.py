@@ -37,6 +37,18 @@ PRESET_PROVIDERS = [
      "protocol": "chat",
      "desc": "火山方舟 Coding Plan 专属 OpenAI 端点（/api/coding/v3）；须用 Coding Plan 专属 API Key，"
              "勿用 /api/v3（不消耗套餐额度）。模型可在控制台切换（ark-code-latest）或直接填模型名"},
+    # 方舟 Agent Plan：与 Coding Plan 是两套套餐/端点，必须区分——专属端点
+    # /api/plan/v3（OpenAI 兼容，支持 Chat 与 Responses API），须用 Agent Plan
+    # 专属 API Key（与 Coding Plan Key、通用火山 Key 均不同，请勿混用）。
+    {"name": "火山方舟（Agent Plan）",
+     "base_url": "https://ark.cn-beijing.volces.com/api/plan/v3",
+     "models": ["ark-code-latest", "deepseek-v4-pro", "deepseek-v4-flash",
+                "glm-5.3", "glm-5.2", "kimi-k3", "doubao-seed-2.1-turbo"],
+     "multimodal_models": ["doubao-seed-2.0-lite"],
+     "protocol": "chat",
+     "desc": "方舟 Agent Plan 专属端点（/api/plan/v3，OpenAI 兼容，支持 Chat/Responses API）；"
+             "须用 Agent Plan 专属 API Key（与 Coding Plan Key、通用火山 Key 均不同），"
+             "官方推荐 Responses API 推理效果更好"},
     {"name": "火山方舟（通用）",
      "base_url": "https://ark.cn-beijing.volces.com/api/v3",
      "models": ["doubao-seed-2-1-pro-260628"],

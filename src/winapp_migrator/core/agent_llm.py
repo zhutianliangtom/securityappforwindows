@@ -997,8 +997,8 @@ def _machine_key() -> bytes:
         return hashlib.sha256(seed.encode()).digest()
 
 
-def _xor_crypt(data: str) -> str:
-    """XOR + base64 加密/解密（对称操作，第二次调用即解密）"""
+def _xor_encrypt(data: str) -> str:
+    """XOR + base64 加密（utf-8 明文 → base64 密文）"""
     if not data:
         return data
     key = _machine_key()
@@ -1006,6 +1006,21 @@ def _xor_crypt(data: str) -> str:
     result = bytes(b ^ key[i % len(key)] for i, b in enumerate(raw))
     import base64
     return base64.urlsafe_b64encode(result).decode("ascii")
+
+
+def _xor_decrypt(data: str) -> str:
+    """XOR + base64 解密（base64 密文 → utf-8 明文）。
+    注意必须先 base64 解码再做 XOR，否则解不出原文（旧实现即为此 bug）。"""
+    if not data:
+        return data
+    key = _machine_key()
+    import base64
+    try:
+        raw = base64.urlsafe_b64decode(data.encode("ascii"))
+    except Exception:
+        return data
+    result = bytes(b ^ key[i % len(key)] for i, b in enumerate(raw))
+    return result.decode("utf-8", "replace")
 
 
 def encrypt_model_config(model_section: dict) -> dict:
@@ -1017,7 +1032,7 @@ def encrypt_model_config(model_section: dict) -> dict:
     if not model_section or not isinstance(model_section, dict):
         return model_section
     raw = json.dumps(model_section, ensure_ascii=False, separators=(",", ":"))
-    return {"_encrypted": True, "data": _xor_crypt(raw)}
+    return {"_encrypted": True, "data": _xor_encrypt(raw)}
 
 
 def decrypt_model_config(model_section: dict) -> dict:
@@ -1033,7 +1048,7 @@ def decrypt_model_config(model_section: dict) -> dict:
     if not cipher:
         return model_section
     try:
-        plain = _xor_crypt(cipher)
+        plain = _xor_decrypt(cipher)
         return json.loads(plain)
     except Exception:
         return model_section  # 解密失败（如换机器），回退旧数据

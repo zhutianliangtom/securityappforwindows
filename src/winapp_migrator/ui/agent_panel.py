@@ -4031,7 +4031,9 @@ class AgentPanel(QDialog):
         tw.move(x, y)
         if not tw.isVisible():
             tw.show()
-            tw.raise_()   # 显示时抬到面板之上（非置顶，可被其他窗口覆盖）
+        # 每次同步都抬升到面板之上：Windows 最大化面板时可能把 owned 的
+        # todos 窗口压到面板下层（截屏验证中心被面板内容盖住），必须主动 raise
+        tw.raise_()
 
     def showEvent(self, e):
         super().showEvent(e)   # 统一补丁已为 QDialog 深色化标题栏
@@ -4062,6 +4064,10 @@ class AgentPanel(QDialog):
         # 最大化/还原触发的是 resize 而非 move → 这里也同步 todos 位置，
         # 保证最大化时 todos 移到右上角可见、还原后回到左侧停靠
         self._sync_todos_win()
+        # 最大化时 owned 窗口可能被压到面板下层 → 延迟再抬升，确保用户可见
+        if self.isMaximized():
+            QTimer.singleShot(0, self._sync_todos_win)
+            QTimer.singleShot(150, self._sync_todos_win)
 
     def hideEvent(self, e):
         super().hideEvent(e)

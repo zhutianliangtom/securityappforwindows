@@ -3444,9 +3444,16 @@ class AgentPanel(QDialog):
             self._suggest_disable_todos()
 
     def _suggest_disable_todos(self):
-        """弹窗提示可关闭任务清单窗口，并提供一键跳转设置"""
+        """弹窗提示可关闭任务清单窗口，并提供一键跳转设置（深色底 + 白字）"""
         box = QMessageBox(self)
         box.setWindowTitle("提示")
+        box.setStyleSheet(
+            f"QMessageBox {{ background: {PANEL}; }}"
+            f"QMessageBox QLabel {{ color: {TEXT}; font-size: 13px; }}"
+            f"QMessageBox QPushButton {{ color: {TEXT}; background: {CARD};"
+            f"border: 1px solid {BORDER}; border-radius: 8px;"
+            f"padding: 6px 14px; font-size: 13px; }}"
+            f"QMessageBox QPushButton:hover {{ background: {HOVER}; }}")
         box.setText("1 秒内连续清空了 3 次任务清单。\n如不需要该窗口，可在设置中关闭任务清单窗口。")
         go = box.addButton("前往设置", QMessageBox.ButtonRole.AcceptRole)
         box.addButton("取消", QMessageBox.ButtonRole.RejectRole)
@@ -3923,7 +3930,8 @@ class AgentPanel(QDialog):
                    .value("agent_show_todos", "1")).strip().lower() in ("1", "true", "yes")
 
     def _sync_todos_win(self):
-        """todos 独立窗口停靠主窗口左侧、顶部齐平；主窗口移动/显示时跟随。
+        """todos 独立窗口定位：非全屏停靠主窗口左侧（左移 5px 留间隙、顶部齐平）；
+        最大化时移至右上角、顶部菜单栏下方（不遮挡菜单栏）。
         设置中关闭任务清单窗口时隐藏且不显示。"""
         tw = getattr(self, "todos_win", None)
         if tw is None:
@@ -3931,7 +3939,15 @@ class AgentPanel(QDialog):
         if not self._todos_enabled():
             tw.hide()
             return
-        tw.move(max(0, self.x() - tw.width()), self.y())
+        if self.isMaximized():
+            # 右上角、顶部菜单栏下方：右侧留 10px，顶部下移避开菜单/工具栏
+            x = self.x() + self.width() - tw.width() - 10
+            y = self.y() + 58
+        else:
+            # 停靠左侧、顶部齐平，再左移 5px 与主面板留出间隙
+            x = max(0, self.x() - tw.width() - 5)
+            y = self.y()
+        tw.move(x, y)
         if not tw.isVisible():
             tw.show()
             tw.raise_()   # 显示时抬到面板之上（非置顶，可被其他窗口覆盖）

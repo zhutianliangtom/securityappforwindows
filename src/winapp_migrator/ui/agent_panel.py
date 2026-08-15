@@ -2413,6 +2413,131 @@ class TodosPanel(QWidget):
         return row
 
 
+class QueuePanel(QWidget):
+    """排队消息面板：任务运行中发送的多条消息在此排队显示，支持逐条编辑/删除。
+    高度自适应：单条单行、多条封顶限高内部滚动；无消息自动隐藏。
+    纯黑+淡灰+白+深蓝四色极简风格，无 emoji。"""
+
+    edit_clicked = pyqtSignal(int)     # 编辑第 idx 条排队消息
+    delete_clicked = pyqtSignal(int)   # 删除第 idx 条排队消息
+    clear_clicked = pyqtSignal()       # 清空全部排队消息
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setObjectName("queuePanel")
+        self.setStyleSheet(
+            f"QWidget#queuePanel {{ background: {PANEL};"
+            f"border: 1px solid {BORDER}; border-radius: 10px; }}")
+        self._limit = 132      # 最大高度（表头 + 约 3 行，超出内部滚动）
+        self._last_h = -1      # 上次应用高度，避免重复 relayout
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(10, 6, 10, 6)
+        lay.setSpacing(6)
+
+        head = QHBoxLayout()
+        head.setSpacing(8)
+        tag = QLabel("排队中")
+        tag.setStyleSheet(f"color: {ACCENT_HOVER}; font-size: 12px; font-weight: 700;")
+        head.addWidget(tag)
+        self._count = QLabel("")
+        self._count.setStyleSheet(f"color: {TEXT_DIM}; font-size: 11px;")
+        head.addWidget(self._count)
+        head.addStretch(1)
+        clear_btn = QPushButton("清空")
+        clear_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        clear_btn.setAutoDefault(False)
+        clear_btn.setStyleSheet(_BTN_GHOST)
+        clear_btn.setFixedHeight(22)
+        clear_btn.setToolTip("取消全部排队消息")
+        clear_btn.clicked.connect(self.clear_all)
+        head.addWidget(clear_btn)
+        lay.addLayout(head)
+
+        self._scroll = QScrollArea()
+        self._scroll.setWidgetResizable(True)
+        self._scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self._scroll.setStyleSheet(
+            "QScrollArea { background: transparent; border: none; }"
+            "QScrollBar:vertical { background: #000000; width: 6px; }"
+            "QScrollBar::handle:vertical { background: #000000;"
+            "border-radius: 3px; min-height: 24px; }"
+            "QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical"
+            "{ background: #000000; width: 0px; height: 0px; }"
+            "QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical"
+            "{ background: #000000; }")
+        self._list = QWidget()
+        self._list.setStyleSheet("background: transparent;")
+        self._list_lay = QVBoxLayout(self._list)
+        self._list_lay.setContentsMargins(2, 0, 2, 0)
+        self._list_lay.setSpacing(4)
+        self._list_lay.addStretch(1)
+        self._scroll.setWidget(self._list)
+        lay.addWidget(self._scroll, 1)
+        self.update_queue([])
+
+    def update_queue(self, items: list):
+        """全量刷新排队消息列表；无消息时自动隐藏面板"""
+        while self._list_lay.count() > 1:
+            item = self._list_lay.takeAt(0)
+            w = item.widget()
+            if w is not None:
+                w.deleteLater()
+        for i, q in enumerate(items or []):
+            self._list_lay.insertWidget(self._list_lay.count() - 1, self._item(i, q))
+        self._count.setText(f"{len(items or [])} 条" if items else "")
+        self.setVisible(bool(items))
+        self._resize_to_content()
+
+    def _item(self, idx: int, q: dict) -> QWidget:
+        text = (q.get("text") or "").strip().replace("\n", " ")
+        if len(text) > 40:
+            text = text[:40] + "…"
+        row = QWidget()
+        row.setStyleSheet("background: transparent;")
+        rl = QHBoxLayout(row)
+        rl.setContentsMargins(4, 0, 4, 0)
+        rl.setSpacing(8)
+        no = QLabel(f"{idx + 1}.")
+        no.setFixedWidth(20)
+        no.setStyleSheet(f"color: {TEXT_DIM}; font-size: 12px;")
+        rl.addWidget(no)
+        lbl = QLabel(f"“{_esc(text)}”")
+        lbl.setStyleSheet(f"color: {TEXT}; font-size: 12px;")
+        lbl.setAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft)
+        rl.addWidget(lbl, 1)
+        edit = QPushButton("编辑")
+        edit.setCursor(Qt.CursorShape.PointingHandCursor)
+        edit.setAutoDefault(False)
+        edit.setStyleSheet(_BTN_GHOST)
+        edit.setFixedHeight(22)
+        edit.setToolTip("回填到输入框修改，发送后回到原队列位置")
+        edit.clicked.connect(lambda _=False, i=idx: self.edit_clicked.emit(i))
+        rl.addWidget(edit)
+        dele = QPushButton("删除")
+        dele.setCursor(Qt.CursorShape.PointingHandCursor)
+        dele.setAutoDefault(False)
+        dele.setStyleSheet(_BTN_GHOST)
+        dele.setFixedHeight(22)
+        dele.setToolTip("取消该条排队消息")
+        dele.clicked.connect(lambda _=False, i=idx: self.delete_clicked.emit(i))
+        rl.addWidget(dele)
+        row.setFixedHeight(26)
+        return row
+
+    def clear_all(self):
+        """清空全部排队消息（仅发信号，由 AgentPanel 负责数据与 UI 同步）"""
+        self.clear_clicked.emit()
+
+    def _resize_to_content(self):
+        """高度自适应：内容少时矮，多条时封顶 _limit 内部滚动"""
+        n = self._list_lay.count() - 1
+        content = n * 26 + max(0, n - 1) * self._list_lay.spacing()
+        h = max(0, min(18 + 12 + content, self._limit))
+        if h != self._last_h:
+            self._last_h = h
+            self.setFixedHeight(h)
+
+
 class _SessionStatusDelegate(QStyledItemDelegate):
     """会话下拉项状态绘制：运行中显示转圈动画（深蓝弧线），待确认显示黄色圆点"""
 
@@ -2533,6 +2658,9 @@ class AgentPanel(QDialog):
         self.setWindowTitle("zhuzhu Copilot")
         self.setWindowIcon(QIcon(_app_icon_path()))
         self.setAcceptDrops(True)   # 支持把图片/文件拖入对话框
+        # 排队消息编辑状态（_init_sessions 的 _switch_to 早期即可能访问，须最先初始化）
+        self._queue_edit_idx = None
+        self._input_placeholder = "描述任务，例如：帮我打开百度搜索天气（输入 / 查看命令）"
         # 窗口可自由调整大小，标题栏带最小化/最大化按钮。
         # Window 标志使其成为独立顶层窗口：任务栏显示独立缩略图，点击任务栏
         # 可定位并恢复/打开 AI 面板（否则作为父窗口子窗口，任务栏无独立入口）
@@ -2802,38 +2930,14 @@ class AgentPanel(QDialog):
         self._attach_bar.setVisible(False)
         right.addWidget(self._attach_bar)
 
-        # 排队消息提示条：任务运行中发送的消息在此显示，可编辑/删除（无 emoji，矢量风格）
-        self._queue_bar = QWidget()
-        self._queue_bar.setStyleSheet("background: transparent;")
-        qb_lay = QHBoxLayout(self._queue_bar)
-        qb_lay.setContentsMargins(0, 0, 0, 0)
-        qb_lay.setSpacing(8)
-        qb_tag = QLabel("排队中")
-        qb_tag.setStyleSheet(f"color: {ACCENT_HOVER}; font-size: 12px; font-weight: 700;")
-        qb_lay.addWidget(qb_tag)
-        self._queue_preview = QLabel("")
-        self._queue_preview.setStyleSheet(f"color: {TEXT_DIM}; font-size: 12px;")
-        self._queue_preview.setWordWrap(True)
-        # 自适应大小：不占满整行（不加 stretch），短消息窄、长消息限宽换行、高度随行数
-        self._queue_preview.setMaximumWidth(260)
-        self._queue_preview.setMinimumWidth(0)
-        qb_lay.addWidget(self._queue_preview)
-        qb_edit = QPushButton("编辑")
-        qb_edit.setCursor(Qt.CursorShape.PointingHandCursor)
-        qb_edit.setAutoDefault(False)
-        qb_edit.setStyleSheet(_BTN_GHOST)
-        qb_edit.setToolTip("把排队消息回填到输入框修改（修改后重新发送即替换）")
-        qb_edit.clicked.connect(self._on_queue_edit)
-        qb_lay.addWidget(qb_edit)
-        qb_del = QPushButton("删除")
-        qb_del.setCursor(Qt.CursorShape.PointingHandCursor)
-        qb_del.setAutoDefault(False)
-        qb_del.setStyleSheet(_BTN_GHOST)
-        qb_del.setToolTip("取消该排队消息")
-        qb_del.clicked.connect(self._on_queue_delete)
-        qb_lay.addWidget(qb_del)
-        self._queue_bar.setVisible(False)
-        right.addWidget(self._queue_bar)
+        # 排队消息面板：任务运行中发送的多条消息在此排队显示，可逐条编辑/删除。
+        # 高度自适应（单条单行、多条限高滚动），无消息自动隐藏。
+        self.queue_panel = QueuePanel(self)
+        self.queue_panel.hide()
+        self.queue_panel.edit_clicked.connect(self._on_queue_edit)
+        self.queue_panel.delete_clicked.connect(self._on_queue_delete)
+        self.queue_panel.clear_clicked.connect(self._on_queue_clear)
+        right.addWidget(self.queue_panel)
 
         # 输入栏
         bottom = QHBoxLayout()
@@ -2849,6 +2953,7 @@ class AgentPanel(QDialog):
         self.input.submit.connect(self._send)   # Enter 发送（Shift+Enter 换行）
         self.input.textChanged.connect(self._update_cmd_suggestions)
         self.input.textChanged.connect(self._sync_action_style)
+        self.input.textChanged.connect(self._on_input_cancel_edit)
         self.input.installEventFilter(self)   # 拦截 Ctrl+V：剪贴板图片转附件
         self.input.fileDropped.connect(self._on_input_files_dropped)   # 文件拖入 → 附件
         bottom.addWidget(self.input, 1)
@@ -3005,7 +3110,7 @@ class AgentPanel(QDialog):
             "think_done": False,
             "think_start": 0.0,
             "task_active": False,
-            "queued": None,           # 排队消息 payload：{text, images, files, ai_text, skill_names, shot}
+            "queued": [],         # 排队消息列表（按序发送）：[{text, images, files, ai_text, skill_names, shot}]
             "pending_confirm": None,  # 后台待确认命令：{name, args, risk, answered}（不弹窗打扰，切过去处理）
             "confirm_evt": None,      # 该会话确认等待事件
             "confirm_result": False,  # 该会话最近一次确认结果
@@ -3184,48 +3289,63 @@ class AgentPanel(QDialog):
                 self._flush_queue(sid)       # 本轮完成 → 自动发送排队消息
             return
 
-    # ---------- 消息排队：任务运行中发消息 → 排队，本轮完成后自动发送 ----------
+    # ---------- 消息排队：任务运行中发消息 → 排队，本轮完成后按序自动发送 ----------
     def _update_queue_bar(self):
-        """刷新当前会话的排队提示条（有排队消息显示，无则隐藏）"""
+        """刷新当前会话的排队消息面板（有多条显示，无则隐藏）"""
         st = self._sess.get(self._session_id)
-        q = (st or {}).get("queued")
-        if q:
-            preview = (q.get("text") or "").strip().replace("\n", " ")
-            if len(preview) > 28:
-                preview = preview[:28] + "…"
-            self._queue_preview.setText(f"“{_esc(preview)}”")
-            self._queue_bar.setVisible(True)
-        else:
-            self._queue_bar.setVisible(False)
+        self.queue_panel.update_queue((st or {}).get("queued") or [])
 
-    def _on_queue_edit(self, *_):
-        """编辑排队消息：内容回填输入框并取消排队"""
+    def _on_queue_edit(self, idx: int):
+        """编辑第 idx 条排队消息：回填输入框并移除该条，发送后按原队列位置重新排队"""
         st = self._sess.get(self._session_id)
-        q = (st or {}).get("queued")
-        if not q:
+        qs = (st or {}).get("queued") or []
+        if idx < 0 or idx >= len(qs):
             return
+        q = qs.pop(idx)
+        self._queue_edit_idx = idx
         self.input.setPlainText(q.get("text") or "")
-        st["queued"] = None
+        self.input.setPlaceholderText(f"正在编辑第 {idx + 1} 条排队消息，发送后回到原队列位置")
         self._update_queue_bar()
         self.input.setFocus()
 
-    def _on_queue_delete(self, *_):
-        """删除排队消息"""
+    def _on_queue_delete(self, idx: int):
+        """删除第 idx 条排队消息"""
         st = self._sess.get(self._session_id)
-        if st:
-            st["queued"] = None
+        qs = (st or {}).get("queued") or []
+        if 0 <= idx < len(qs):
+            qs.pop(idx)
+        if self._queue_edit_idx is not None and idx < self._queue_edit_idx:
+            self._queue_edit_idx -= 1   # 列表左移，编辑目标位置同步前移
         self._update_queue_bar()
 
+    def _on_queue_clear(self):
+        """清空全部排队消息并复位编辑状态"""
+        st = self._sess.get(self._session_id)
+        if st:
+            st["queued"] = []
+        self._cancel_queue_edit()
+        self._update_queue_bar()
+
+    def _cancel_queue_edit(self):
+        """取消编辑状态并恢复输入框占位提示"""
+        self._queue_edit_idx = None
+        self.input.setPlaceholderText(self._input_placeholder)
+
+    def _on_input_cancel_edit(self):
+        """输入框被清空时自动取消编辑状态（避免后续误替换原队列位置）"""
+        if self._queue_edit_idx is not None and not self.input.toPlainText().strip():
+            self._cancel_queue_edit()
+
     def _flush_queue(self, sid: str):
-        """该会话本轮任务完成后：若存在排队消息则自动发送"""
+        """该会话本轮任务完成后：按队列顺序逐条自动发送（一次一条，下轮继续）"""
         st = self._sess.get(sid)
-        if not st or not st.get("queued"):
+        qs = (st or {}).get("queued") or []
+        if not qs:
             return
         eng = st.get("engine")
         if eng and eng._thread and eng._thread.is_alive():
             return     # 该会话仍有任务在跑，继续等待
-        q = st["queued"]
-        st["queued"] = None
+        q = qs.pop(0)
         if sid == self._session_id:
             self._update_queue_bar()
             self._do_send(q)
@@ -3468,7 +3588,8 @@ class AgentPanel(QDialog):
             threading.Thread(target=_load, daemon=True).start()
         # 切到该会话后处理其挂起的确认/提问（后台会话不弹窗，切到前台才弹）
         self._flush_pending(sid)
-        # 刷新 todos 面板（全局清单，无任务时自动隐藏）
+        # 切换会话复位排队编辑状态，并刷新 todos 面板（全局清单，无任务时自动隐藏）
+        self._cancel_queue_edit()
         self.todos_panel.update_todos(agent_tools.load_todos())
 
     def _finish_switch(self, sid: str, segs: list, ums: list, rows: list):
@@ -4615,12 +4736,19 @@ class AgentPanel(QDialog):
         if eng._thread and eng._thread.is_alive():
             busy = True
         if busy:
-            self._sess[self._session_id]["queued"] = payload
+            qs = self._sess[self._session_id]["queued"]
+            ei = self._queue_edit_idx
+            if ei is not None and 0 <= ei < len(qs):
+                qs[ei] = payload          # 编辑后按原队列位置重新排队
+            else:
+                qs.append(payload)        # 新增排队消息（支持多条按序排队）
+            self._cancel_queue_edit()
             self.input.clear()
             self._clear_attachments()
             self._update_queue_bar()
-            self._add_status("消息已排队，当前任务完成后自动发送（可编辑或删除）", ACCENT)
+            self._add_status("消息已排队，当前任务完成后按序自动发送（可逐条编辑/删除）", ACCENT)
             return
+        self._cancel_queue_edit()
         self._do_send(payload)
 
     def _launch_task(self, ai_text: str, send_images: list, skill_names: list,

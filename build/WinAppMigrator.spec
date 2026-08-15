@@ -36,6 +36,7 @@ a = Analysis(
         'winapp_migrator.core.agent_skills',
         'winapp_migrator.core.agent_engine',
         'winapp_migrator.core.agent_tts',
+        'winapp_migrator.core.agent_plugins',
         'winapp_migrator.utils.helpers',
         # TTS 自动朗读播放器（函数内动态 import pygame，显式声明防打包遗漏）
         'pygame',

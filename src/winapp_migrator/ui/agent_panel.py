@@ -5167,7 +5167,8 @@ class AgentPanel(QDialog):
         self._scroll_bottom()
 
     def _on_result(self, name: str, text: str, images: list = None):
-        """工具执行完成：输出文本与截图一并渲染进 AI 气泡（截图以缩略图独立成块，不挤压）"""
+        """工具执行完成：输出文本与截图一并渲染进 AI 气泡（截图以缩略图独立成块，不挤压）。
+        命令执行结果先输出（默认展开可见），短暂展示后自动折叠为一行，可点击展开/收起。"""
         self._stop_send_spin()
         self._last_activity = time.time()
         self._ensure_ai_bubble()
@@ -5178,10 +5179,24 @@ class AgentPanel(QDialog):
         if len(shown) > 20000:
             shown = shown[:20000] + " …（输出过长已截断显示，完整内容已返回模型）"
         shown = _esc(shown).replace("\n", "<br/>")
-        self._segments.append({"type": "result", "html": shown, "collapsed": False})
+        seg = {"type": "result", "html": shown, "collapsed": False}
+        self._segments.append(seg)
         # 截图段（AI 主动截图：browser_snapshot 等工具返回的页面截图）渲染进主对话气泡
         for u in images or []:
             self._segments.append({"type": "image", "url": u, "caption": "已截屏"})
+        self._refresh_ai_html()
+        self._scroll_bottom()
+        # 命令结果「先输出再折叠」：短暂展示后自动折叠（与思考过程一致的折叠体验）
+        sid = self._session_id
+        QTimer.singleShot(1800, lambda: self._auto_collapse_result(sid, seg))
+
+    def _auto_collapse_result(self, sid: str, seg: dict):
+        """把已展示过的命令结果段自动折叠为一行（仅当仍是该会话当前气泡时生效）"""
+        if sid != self._session_id:
+            return
+        if not any(s is seg for s in self._segments):
+            return
+        seg["collapsed"] = True
         self._refresh_ai_html()
         self._scroll_bottom()
 

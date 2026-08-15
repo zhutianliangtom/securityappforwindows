@@ -2300,7 +2300,6 @@ class TodosPanel(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setObjectName("todosPanel")
-        self.setFixedWidth(248)
         self.setStyleSheet(
             f"QWidget#todosPanel {{ background: {PANEL};"
             f"border: 1px solid {ACCENT}; border-radius: 10px; }}")
@@ -2403,8 +2402,12 @@ class TodosPanel(QWidget):
         return total
 
     def _resize_to_content(self):
-        """自适应高度：内容少时矮、内容多时受限高（约窗口一半）内部滚动"""
-        total = 28 + self._content_height() + 22       # header + 面板上下内边距
+        """自适应高度：内容少时矮、内容多时受限高内部滚动"""
+        content = self._content_height()
+        # widgetResizable 会把内部列表压缩到视口，minimumHeight 设为内容高度，
+        # 内容超高时才出现滚动条（不被裁剪），内容未超高时消息顶部紧凑排列。
+        self._list.setMinimumHeight(content)
+        total = 28 + content + 22              # header + 面板上下内边距
         h = max(56, min(int(total), self._limit))
         if h != self._last_h:
             self._last_h = h
@@ -2907,15 +2910,15 @@ class AgentPanel(QDialog):
 
         root.addLayout(top)
 
-        # 主体：左侧 TODOS 可视化面板 + 右侧聊天区。
+        # 主体：TODOS 置顶横条（全宽、高度随内容）+ 下方聊天区（占满剩余宽度）。
         # TODOS 内嵌于布局（非独立窗口 → 无最小化/最大化/关闭按钮），
-        # 默认隐藏，AI 使用 update_todo / list_todo 工具时自动显示。
-        body = QHBoxLayout()
+        # 默认常显，AI 使用 update_todo / list_todo 工具时更新内容。
+        body = QVBoxLayout()
         body.setSpacing(10)
         self.todos_panel = TodosPanel(self)
         self.todos_panel.clear_requested.connect(self._on_todos_clear)
         self.todos_panel.height_changed.connect(self._sync_queue_height)
-        body.addWidget(self.todos_panel, 0)
+        body.addWidget(self.todos_panel, 0)   # todos 置顶横条：全宽、高度随内容
         right = QVBoxLayout()
         right.setSpacing(10)
 
@@ -3812,9 +3815,9 @@ class AgentPanel(QDialog):
             b.setIconSize(QSize(self._btn_icon_sz, self._btn_icon_sz))
 
     def _apply_todos_limit(self):
-        """todos 面板限高：内容自适应，最高约窗口 1/4（绝对上限 300px），
-        避免面板过高挤压聊天区/排队区"""
-        limit = max(120, min(int(self.height() * 0.25), 300))
+        """todos 置顶横条限高：内容自适应，最高约窗口 1/5（绝对上限 220px），
+        保持紧凑横条形态，不挤压下方聊天区"""
+        limit = max(100, min(int(self.height() * 0.18), 220))
         if limit != self._last_todos_limit:
             self._last_todos_limit = limit
             self.todos_panel._limit = limit

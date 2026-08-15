@@ -1873,8 +1873,14 @@ class _ProviderDialog(QDialog):
         self._run_test(from_ok=True)
 
     def _run_test(self, from_ok: bool):
-        if self._test_thread is not None and self._test_thread.isRunning():
-            return
+        # 检查线程是否存活且正在运行，避免因 deleteLater 导致的 RuntimeError
+        if self._test_thread is not None:
+            try:
+                if self._test_thread.isRunning():
+                    return
+            except RuntimeError:
+                # 对象已被 deleteLater 删除，重置为 None
+                self._test_thread = None
         p = self._current_params()
         if not p["base_url"] or not p["api_key"] or not p["models"]:
             self.test_result.setStyleSheet(f"color: {self._ERR}; font-size: 12px;")
@@ -1892,6 +1898,8 @@ class _ProviderDialog(QDialog):
         self._test_thread.start()
 
     def _on_test_done(self, ok: bool, msg: str, from_ok: bool):
+        # 清理线程引用，避免悬空指针
+        self._test_thread = None
         self.test_btn.setEnabled(True)
         self.test_btn.setText("测试连接")
         if ok:

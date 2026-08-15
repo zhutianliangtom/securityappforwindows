@@ -2290,7 +2290,10 @@ class _POINT(ctypes.Structure):
 class TodosPanel(QWidget):
     """左侧 TODOS 可视化面板：AI 使用 update_todo / list_todo 工具时显示任务进度。
     内嵌于 AgentPanel 布局（非独立窗口 → 天然无最小化/最大化/关闭按钮）。
-    纯黑+淡灰+白+深蓝四色极简风格，无 emoji，状态用几何标记区分。"""
+    纯黑+淡灰+白+深蓝四色极简风格，无 emoji，状态用几何标记区分。
+    鼠标悬停时右上角显示小 × 可手动清空任务清单。"""
+
+    clear_requested = pyqtSignal()   # 用户手动清空任务清单
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -2312,6 +2315,19 @@ class TodosPanel(QWidget):
         self._count.setStyleSheet(f"color: {TEXT_DIM}; font-size: 11px;")
         header.addWidget(self._count)
         header.addStretch(1)
+        # 右上角清空小按钮：鼠标悬停面板时显示
+        self._close_btn = QPushButton("×")
+        self._close_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._close_btn.setAutoDefault(False)
+        self._close_btn.setFixedSize(18, 18)
+        self._close_btn.setStyleSheet(
+            f"QPushButton {{ background: transparent; color: {TEXT_DIM};"
+            "border: none; border-radius: 9px; font-size: 14px; }}"
+            f"QPushButton:hover {{ background: #1A2740; color: #FFFFFF; }}")
+        self._close_btn.setToolTip("清空任务清单")
+        self._close_btn.setVisible(False)
+        self._close_btn.clicked.connect(self.clear_requested.emit)
+        header.addWidget(self._close_btn)
         lay.addLayout(header)
 
         self._scroll = QScrollArea()
@@ -2334,7 +2350,7 @@ class TodosPanel(QWidget):
         self._list_lay.addStretch(1)
         self._scroll.setWidget(self._list)
         lay.addWidget(self._scroll, 1)
-        self._limit = 150      # 面板最大高度（底部区域=原 1/3 的 2/3，resizeEvent 随窗口更新）
+        self._limit = 220      # 面板最大高度（约页面 1/3，resizeEvent 随窗口更新）
         self._last_h = -1      # 上次应用的高度，避免重复 relayout
         self.update_todos([])
 
@@ -2358,6 +2374,14 @@ class TodosPanel(QWidget):
         self._count.setText(f"{done}/{len(todos)}" if todos else "")
         self.setVisible(True)   # 面板默认常显
         self._resize_to_content()
+
+    def enterEvent(self, e):
+        super().enterEvent(e)
+        self._close_btn.setVisible(True)   # 鼠标悬停面板：显示右上角清空按钮
+
+    def leaveEvent(self, e):
+        super().leaveEvent(e)
+        self._close_btn.setVisible(False)  # 鼠标移出：隐藏清空按钮
 
     def _content_height(self) -> int:
         """按任务行实际换行高度估算列表自然高度（含行间距）"""
@@ -2887,6 +2911,7 @@ class AgentPanel(QDialog):
         body = QHBoxLayout()
         body.setSpacing(10)
         self.todos_panel = TodosPanel(self)
+        self.todos_panel.clear_requested.connect(self._on_todos_clear)
         body.addWidget(self.todos_panel, 0)
         right = QVBoxLayout()
         right.setSpacing(10)
@@ -3006,7 +3031,7 @@ class AgentPanel(QDialog):
         right.addStretch(1)
         right.addLayout(bottom)
         body.addLayout(right, 1)
-        root.addLayout(body, 1)
+        root.addLayout(body, 0)   # 底部区域按内容高度贴底，聊天区占满其余空间
         add_brand_footer(self)
 
     def _connect_signals(self):
@@ -3334,6 +3359,14 @@ class AgentPanel(QDialog):
             st["queued"] = []
         self._cancel_queue_edit()
         self._update_queue_bar()
+
+    def _on_todos_clear(self):
+        """用户手动清空 todos：清空清单文件并刷新面板（AI 下次 update_todo 全量恢复）"""
+        try:
+            agent_tools.TODO_FILE.write_text("[]", encoding="utf-8")
+        except OSError:
+            pass
+        self.todos_panel.update_todos([])
 
     def _cancel_queue_edit(self):
         """取消编辑状态并恢复输入框占位提示"""
@@ -3766,8 +3799,8 @@ class AgentPanel(QDialog):
             b.setIconSize(QSize(self._btn_icon_sz, self._btn_icon_sz))
 
     def _apply_todos_limit(self):
-        """底部区域（todos 面板）限高 = 原 1/3 页面的 2/3（约页面 2/9），整体更紧凑"""
-        limit = max(90, int(self.height() * 0.33 * 2 / 3))
+        """todos 面板限高 = 窗口高度约 1/3（底部区域按内容贴底，聊天区占满其余）"""
+        limit = max(120, int(self.height() * 0.33))
         if limit != self._last_todos_limit:
             self._last_todos_limit = limit
             self.todos_panel._limit = limit

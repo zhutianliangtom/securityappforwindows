@@ -2338,10 +2338,8 @@ class TodosPanel(QWidget):
         self._last_h = -1      # 上次应用的高度，避免重复 relayout
         self.update_todos([])
 
-    def update_todos(self, todos: list, force: bool = False):
-        """全量刷新任务列表。
-        force=True（AI 调用 todos 工具时）：即使清单为空也弹出面板（显示占位）；
-        否则无任务时自动隐藏面板。"""
+    def update_todos(self, todos: list):
+        """全量刷新任务列表；面板默认常显，无任务时显示提示语占位"""
         while self._list_lay.count() > 1:
             item = self._list_lay.takeAt(0)
             w = item.widget()
@@ -2352,13 +2350,13 @@ class TodosPanel(QWidget):
             for t in todos:
                 self._list_lay.insertWidget(self._list_lay.count() - 1, self._row(t))
         else:
-            empty = QLabel("暂无任务")
+            empty = QLabel("复杂任务进度将会在这显示")
             empty.setStyleSheet(f"color: {TEXT_DIM}; font-size: 12px;")
             empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
             self._list_lay.insertWidget(0, empty)
         done = sum(1 for t in todos if t.get("status") == "completed")
         self._count.setText(f"{done}/{len(todos)}" if todos else "")
-        self.setVisible(bool(todos) or force)
+        self.setVisible(True)   # 面板默认常显
         self._resize_to_content()
 
     def _content_height(self) -> int:
@@ -2487,6 +2485,16 @@ class QueuePanel(QWidget):
         self._count.setText(f"{len(items or [])} 条" if items else "")
         self.setVisible(bool(items))
         self._resize_to_content()
+        if items:
+            # 排队消息从下至上：自动滚动到底部，最新排队消息始终可见
+            QTimer.singleShot(0, self._scroll_to_bottom)
+
+    def _scroll_to_bottom(self):
+        try:
+            bar = self._scroll.verticalScrollBar()
+            bar.setValue(bar.maximum())
+        except RuntimeError:
+            pass
 
     def _item(self, idx: int, q: dict) -> QWidget:
         text = (q.get("text") or "").strip().replace("\n", " ")
@@ -2879,7 +2887,6 @@ class AgentPanel(QDialog):
         body = QHBoxLayout()
         body.setSpacing(10)
         self.todos_panel = TodosPanel(self)
-        self.todos_panel.hide()
         body.addWidget(self.todos_panel, 0)
         right = QVBoxLayout()
         right.setSpacing(10)
@@ -3590,9 +3597,9 @@ class AgentPanel(QDialog):
             threading.Thread(target=_load, daemon=True).start()
         # 切到该会话后处理其挂起的确认/提问（后台会话不弹窗，切到前台才弹）
         self._flush_pending(sid)
-        # 切换对话：复位排队编辑状态，关闭 todos 面板并恢复默认大小（AI 再调用 todos 工具时重新弹出）
+        # 切换对话：复位排队编辑状态；todos 面板常显，刷新为全局任务清单
         self._cancel_queue_edit()
-        self.todos_panel.update_todos([], force=False)
+        self.todos_panel.update_todos(agent_tools.load_todos())
 
     def _finish_switch(self, sid: str, segs: list, ums: list, rows: list):
         """会话切换收尾（主线程）：用后台线程读到的数据一次性渲染"""
@@ -3653,8 +3660,8 @@ class AgentPanel(QDialog):
         self._add_status("已开启新对话，上下文与旧对话隔离", ACCENT)
         self._scroll_bottom()
         self._update_queue_bar()
-        # 新建对话：关闭 todos 面板并恢复默认大小（新对话调用 todos 工具时再弹出）
-        self.todos_panel.update_todos([], force=False)
+        # 新建对话：todos 面板常显，刷新为全局任务清单（无任务显示提示语）
+        self.todos_panel.update_todos(agent_tools.load_todos())
 
     def _auto_name_session(self, text: str):
         """AI 自动命名：会话无名称时用首条消息前 20 字命名"""
@@ -5465,9 +5472,9 @@ class AgentPanel(QDialog):
         self._stop_send_spin()
         self._last_activity = time.time()
         self._ensure_ai_bubble()
-        # AI 使用任务清单工具时必须弹出左侧 TODOS 可视化面板（清单为空也弹出占位）
+        # AI 使用任务清单工具时，同步左侧 TODOS 可视化面板（面板常显，实时刷新进度）
         if name in ("update_todo", "list_todo"):
-            self.todos_panel.update_todos(agent_tools.load_todos(), force=True)
+            self.todos_panel.update_todos(agent_tools.load_todos())
         shown = (text or "").strip()
         if len(shown) > 20000:
             shown = shown[:20000] + " …（输出过长已截断显示，完整内容已返回模型）"

@@ -2295,6 +2295,7 @@ class TodosPanel(QWidget):
     鼠标悬停时右上角显示小 × 可手动清空任务清单。"""
 
     clear_requested = pyqtSignal()   # 用户手动清空任务清单
+    height_changed = pyqtSignal(int) # 面板高度变化（排队面板联动）
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -2408,6 +2409,7 @@ class TodosPanel(QWidget):
         if h != self._last_h:
             self._last_h = h
             self.setFixedHeight(h)
+            self.height_changed.emit(h)   # 排队面板高度联动
 
     def _row(self, t: dict) -> QWidget:
         title = str(t.get("title") or "")
@@ -2445,14 +2447,15 @@ class QueuePanel(QWidget):
     delete_clicked = pyqtSignal(int)   # 删除第 idx 条排队消息
     clear_clicked = pyqtSignal()       # 清空全部排队消息
 
+    _ROW_H = 26        # 每条排队消息行高
+    _SPACING = 4       # 行间距
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setObjectName("queuePanel")
         self.setStyleSheet(
             f"QWidget#queuePanel {{ background: {PANEL};"
             f"border: 1px solid {BORDER}; border-radius: 10px; }}")
-        self._limit = 132      # 最大高度（表头 + 约 3 行，超出内部滚动）
-        self._last_h = -1      # 上次应用高度，避免重复 relayout
         lay = QVBoxLayout(self)
         lay.setContentsMargins(10, 6, 10, 6)
         lay.setSpacing(6)
@@ -2493,22 +2496,28 @@ class QueuePanel(QWidget):
         self._list_lay = QVBoxLayout(self._list)
         self._list_lay.setContentsMargins(2, 0, 2, 0)
         self._list_lay.setSpacing(4)
-        self._list_lay.addStretch(1)
         self._scroll.setWidget(self._list)
         lay.addWidget(self._scroll, 1)
         self.update_queue([])
 
     def update_queue(self, items: list):
         """全量刷新排队消息列表；无消息时自动隐藏面板"""
-        while self._list_lay.count() > 1:
+        while self._list_lay.count():
             item = self._list_lay.takeAt(0)
             w = item.widget()
             if w is not None:
                 w.deleteLater()
+        n = len(items or [])
         for i, q in enumerate(items or []):
-            self._list_lay.insertWidget(self._list_lay.count() - 1, self._item(i, q))
-        self._count.setText(f"{len(items or [])} 条" if items else "")
-        self.setVisible(bool(items))
+            self._list_lay.addWidget(self._item(i, q))
+        # 末尾单一弹性：面板高度恰好等于内容时无空隙；略高于内容时消息顶部排列，行间不拉大间距
+        self._list_lay.addStretch(1)
+        self._rows_h = n * self._ROW_H + max(0, n - 1) * self._SPACING
+        # 关键：widgetResizable 会把内部 widget 压缩到视口，必须把 minimum 高度设为内容高度，
+        # 视口不足时才会出现滚动条（内容不被裁剪），视口充足时消息顶部紧凑排列。
+        self._list.setMinimumHeight(self._rows_h)
+        self._count.setText(f"{n} 条" if n else "")
+        self.setVisible(bool(n))
         if items:
             # 排队消息从下至上：自动滚动到底部，最新排队消息始终可见
             QTimer.singleShot(0, self._scroll_to_bottom)
@@ -2542,7 +2551,7 @@ class QueuePanel(QWidget):
         edit.setAutoDefault(False)
         edit.setStyleSheet(_BTN_GHOST)
         edit.setFixedHeight(22)
-        edit.setFixedWidth(46)
+        edit.setFixedWidth(56)
         edit.setToolTip("回填到输入框修改，发送后回到原队列位置")
         edit.clicked.connect(lambda _=False, i=idx: self.edit_clicked.emit(i))
         rl.addWidget(edit)
@@ -2551,11 +2560,11 @@ class QueuePanel(QWidget):
         dele.setAutoDefault(False)
         dele.setStyleSheet(_BTN_GHOST)
         dele.setFixedHeight(22)
-        dele.setFixedWidth(46)
+        dele.setFixedWidth(56)
         dele.setToolTip("取消该条排队消息")
         dele.clicked.connect(lambda _=False, i=idx: self.delete_clicked.emit(i))
         rl.addWidget(dele)
-        row.setFixedHeight(26)
+        row.setFixedHeight(self._ROW_H)
         return row
 
     def clear_all(self):
@@ -2905,6 +2914,7 @@ class AgentPanel(QDialog):
         body.setSpacing(10)
         self.todos_panel = TodosPanel(self)
         self.todos_panel.clear_requested.connect(self._on_todos_clear)
+        self.todos_panel.height_changed.connect(self._sync_queue_height)
         body.addWidget(self.todos_panel, 0)
         right = QVBoxLayout()
         right.setSpacing(10)
@@ -2939,14 +2949,14 @@ class AgentPanel(QDialog):
         self.msg_stack = QStackedWidget()
         self.msg_stack.addWidget(self.msg_area)
         self.msg_stack.addWidget(self._welcome_page)
-        root.addWidget(self.msg_stack, 1)
+        right.addWidget(self.msg_stack, 1)   # 聊天区：在底部区域内弹性占满
 
         # 命令提示条：输入 / 时展示可用 skill/命令（高度随显示条数自适应）
         self.cmd_list = QListWidget()
         self.cmd_list.setStyleSheet(self._cmd_list_qss())
         self.cmd_list.hide()
         self.cmd_list.itemClicked.connect(self._on_cmd_selected)
-        root.addWidget(self.cmd_list)
+        right.addWidget(self.cmd_list)
 
         # 附件缩略图条：拖入的图片/文件在此预览（隐藏时无高度；子项自动换行不挤压）
         self._attach_bar = QWidget()
@@ -2957,12 +2967,12 @@ class AgentPanel(QDialog):
 
         # 排队消息面板：任务运行中发送的多条消息在此排队显示，可逐条编辑/删除。
         # 高度自适应（单条单行、多条限高滚动），无消息自动隐藏。
+        # 注：添加位置在底部输入行之前（见 _build_ui 末尾），此处只做连接。
         self.queue_panel = QueuePanel(self)
         self.queue_panel.hide()
         self.queue_panel.edit_clicked.connect(self._on_queue_edit)
         self.queue_panel.delete_clicked.connect(self._on_queue_delete)
         self.queue_panel.clear_clicked.connect(self._on_queue_clear)
-        right.addWidget(self.queue_panel)
 
         # 输入栏
         bottom = QHBoxLayout()
@@ -3020,11 +3030,11 @@ class AgentPanel(QDialog):
         self.action_btn.setToolTip("发送")
         self.action_btn.clicked.connect(self._on_action_clicked)
         bottom.addWidget(self.action_btn)
-        # 输入行始终贴底：排队面板显示时由 Expanding 占满，隐藏时由弹性空间撑起
-        right.addStretch(1)
+        # 排队面板：内容自适应高度（消息行数决定），紧贴输入行上方，无底部留白
+        right.addWidget(self.queue_panel)
         right.addLayout(bottom)
         body.addLayout(right, 1)
-        root.addLayout(body, 0)   # 底部区域按内容高度贴底，聊天区占满其余空间
+        root.addLayout(body, 1)   # 底部区域占满窗口：左侧 todos 自适应，右侧聊天区弹性，输入行贴底
         add_brand_footer(self)
 
     def _connect_signals(self):
@@ -3321,6 +3331,17 @@ class AgentPanel(QDialog):
         """刷新当前会话的排队消息面板（有多条显示，无则隐藏）"""
         st = self._sess.get(self._session_id)
         self.queue_panel.update_queue((st or {}).get("queued") or [])
+        self._sync_queue_height()
+
+    def _sync_queue_height(self, *_):
+        """排队面板高度 = 消息内容自然高度，上限为 todos 面板高度：
+        消息少时紧凑、行间无大间距、最上方消息不被顶出；
+        消息多时随 todos 增高并内部滚动（从下至上，最新消息始终可见）。"""
+        qp = self.queue_panel
+        if not qp.isVisible():
+            return
+        content = getattr(qp, "_rows_h", 0) + 40   # 表头 + 上下内边距 + 间距
+        qp.setFixedHeight(max(56, min(content, self.todos_panel.height())))
 
     def _on_queue_edit(self, idx: int):
         """编辑第 idx 条排队消息：回填输入框并移除该条，发送后按原队列位置重新排队"""
@@ -3791,8 +3812,9 @@ class AgentPanel(QDialog):
             b.setIconSize(QSize(self._btn_icon_sz, self._btn_icon_sz))
 
     def _apply_todos_limit(self):
-        """todos 面板限高 = 窗口高度约 1/3（底部区域按内容贴底，聊天区占满其余）"""
-        limit = max(120, int(self.height() * 0.33))
+        """todos 面板限高：内容自适应，最高约窗口 1/4（绝对上限 300px），
+        避免面板过高挤压聊天区/排队区"""
+        limit = max(120, min(int(self.height() * 0.25), 300))
         if limit != self._last_todos_limit:
             self._last_todos_limit = limit
             self.todos_panel._limit = limit

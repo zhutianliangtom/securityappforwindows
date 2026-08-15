@@ -318,26 +318,18 @@ def analyze_connection_error(context: str) -> str:
     prompt = ("你是 API 接入排障助手。用户配置的 AI 服务商连通性测试失败，"
               "请分析失败信息，给出最可能的原因与可操作修复建议（简洁中文 2-5 条，不要客套）。\n"
               f"失败信息：{(context or '').strip()[:800]}")
-    payload = {
-        "model": DEFAULT_MODEL,
-        "messages": [
+    try:
+        # 使用流式请求以支持 responses 协议
+        llm = LLMClient(
+            base_url=DEFAULT_BASE_URL,
+            api_key=DEFAULT_API_KEY,
+            model=DEFAULT_MODEL
+        )
+        res = llm.chat_stream([
             {"role": "system", "content": "你是 API 接入排障助手，只输出简洁的中文分析与建议。"},
             {"role": "user", "content": prompt},
-        ],
-        "temperature": 0.3,
-        "max_tokens": 300,
-    }
-    try:
-        req = urllib.request.Request(
-            f"{DEFAULT_BASE_URL}/chat/completions",
-            data=json.dumps(payload).encode("utf-8"),
-            headers={"Content-Type": "application/json",
-                     "User-Agent": _UA,
-                     "Authorization": f"Bearer {DEFAULT_API_KEY}"},
-            method="POST")
-        raw = urllib.request.urlopen(req, timeout=30).read().decode("utf-8", "replace")
-        resp = json.loads(raw)
-        return ((resp.get("choices") or [{}])[0].get("message") or {}).get("content", "") or ""
+        ])
+        return str(res.get("text") or "").strip()
     except Exception:
         return ""
 

@@ -2628,6 +2628,13 @@ class TodosWindow(QWidget):
             self._is_dragging = False
             event.accept()
 
+    def focusOutEvent(self, event):
+        # 鼠标离开窗口时重置拖拽状态，防止 _is_dragging 残留
+        if self._is_dragging:
+            self._is_dragging = False
+            self._drag_start_pos = None
+        super().focusOutEvent(event)
+
 
 class QueuePanel(QWidget):
     """排队消息面板：任务运行中发送的多条消息在此排队显示，支持逐条编辑/删除。

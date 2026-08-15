@@ -1087,7 +1087,7 @@ class _AgentSettingsDialog(QDialog):
             f"QSlider::handle:horizontal {{ width: 14px; height: 14px; margin: -5px 0;"
             f"background: {self._ACCENT}; border: 2px solid {self._BG}; border-radius: 7px; }}"
             f"QSlider::handle:horizontal:hover {{ background: {self._ACCENT_HOVER}; }}")
-        self.effort_slider.valueChanged.connect(self._on_effort_changed)
+        self.effort_slider.valueChanged.connect(self._on_effort_slider)
         eff_row.addWidget(self.effort_slider)
         self.effort_label = QLabel(self._effort)
         self.effort_label.setStyleSheet(f"color: {self._ACCENT}; font-size: 13px; font-weight: 700;")
@@ -1098,14 +1098,19 @@ class _AgentSettingsDialog(QDialog):
         self.auto_effort_check = QCheckBox("自动按难度（按任务难度自动选择工作力度）")
         self.auto_effort_check.setStyleSheet(f"color: {self._TEXT}; font-size: 13px; spacing: 8px;")
         self.auto_effort_check.setToolTip("按任务难度自动选择工作力度（智能调用）；关闭后仅手动拖动")
-        self.auto_effort_check.toggled.connect(self._on_effort_changed)
-        self.auto_effort_check.setChecked(self._auto_effort)
-        lay.addWidget(self.auto_effort_check)
+        self.auto_effort_check.toggled.connect(self._on_effort_auto)
+        # 先初始化滑块值（屏蔽信号），再设自动开关：避免 setChecked 触发回调时
+        # 读到未初始化的滑块（值为 0=low）把 _effort 覆盖成 low —— 这是「工作力度
+        # 无法保存」的真根因（初始化阶段把配置里的力度洗成 low）。
         self.effort_slider.blockSignals(True)
         self.effort_slider.setValue(agent_llm.EFFORTS.index(self._effort)
                                     if self._effort in agent_llm.EFFORTS else 0)
         self.effort_slider.blockSignals(False)
-        # 自动按难度开启时手动力度不生效 → 置灰提示，避免误以为「没保存」
+        self.auto_effort_check.blockSignals(True)
+        self.auto_effort_check.setChecked(self._auto_effort)
+        self.auto_effort_check.blockSignals(False)
+        lay.addWidget(self.auto_effort_check)
+        # 自动按难度开启时以提示色标注（手动力度会被自动估算覆盖），不置灰不锁定
         self._sync_effort_ui()
         tip = QLabel("工作强度会自动按模型映射：DeepSeek V4 思考模式（high/max）、"
                      "GLM-4.5+ 深度思考、OpenAI o 系列 reasoning_effort，无需手动开启")
@@ -1460,17 +1465,26 @@ class _AgentSettingsDialog(QDialog):
         if d:
             self.workdir_edit.setText(d)
 
-    def _on_effort_changed(self, *_):
-        """力度滑块/自动开关变更：刷新当前力度标签并同步置灰状态"""
+    def _on_effort_slider(self, *_):
+        """用户拖动力度滑块：自动按难度开启时自动关闭（让手动值立即生效），并刷新标签"""
+        if self.auto_effort_check.isChecked():
+            self.auto_effort_check.setChecked(False)
         self._effort = agent_llm.EFFORTS[self.effort_slider.value()]
         self.effort_label.setText(self._effort)
         self._sync_effort_ui()
 
+    def _on_effort_auto(self, *_):
+        """自动按难度开关变更：刷新力度标签（不改手动值，保持已保存的手动力度）"""
+        self.effort_label.setText(self._effort)
+        self._sync_effort_ui()
+
     def _sync_effort_ui(self):
-        """自动按难度开启时手动力度不生效：滑块与力度标签置灰，避免误以为「没保存」"""
+        """手动力度始终可拖动（保存始终生效）；自动按难度开启时仅以提示色标注会被自动估算覆盖"""
         auto = self.auto_effort_check.isChecked()
-        self.effort_slider.setEnabled(not auto)
-        self.effort_label.setEnabled(not auto)
+        self.effort_slider.setEnabled(True)
+        self.effort_label.setEnabled(True)
+        self.effort_label.setStyleSheet(
+            f"color: {self._DIM if auto else self._ACCENT}; font-size: 13px; font-weight: 700;")
 
     def _save(self, *_):
         # 多服务商：基于卡片列表持久化，全部服务商统一参与路由
@@ -4064,10 +4078,10 @@ class AgentPanel(QDialog):
             g = scr.availableGeometry() if scr else None
             if g is not None and g.width() > 0:
                 x = g.right() - tw.width() - 10
-                y = g.top() + self._top_bar_offset()
+                y = g.top() + self._top_bar_offset() + 5   # 垂直再下移 5px
             else:
                 x = self.x() + self.width() - tw.width() - 10
-                y = self.y() + self._top_bar_offset()
+                y = self.y() + self._top_bar_offset() + 5
         else:
             # 停靠左侧、顶部齐平，再左移 5px 与主面板留出间隙
             base = self.mapToGlobal(self.rect().topLeft())
@@ -4864,7 +4878,9 @@ class AgentPanel(QDialog):
 
 
     def _sync_model_combo(self):
-        """重建输入框右侧模型下拉：首项「自动选择」+ 所有服务商的全部模型（跨服务商可切换）"""
+        """重建输入框右侧模型下拉：首项「自动选择」+ 所有服务商的全部模型（跨服务商可切换）。
+        显示名去掉供应商前缀（deepseek-ai/DeepSeek-V4-Pro → DeepSeek-V4-Pro），
+        完整模型 ID 与服务商名放入 tooltip，选中逻辑仍按原始 model 判定。"""
         cfg = self._model_cfg
         providers = cfg.get("providers") or []
         self.model_combo.blockSignals(True)
@@ -4873,7 +4889,11 @@ class AgentPanel(QDialog):
         for p in providers:
             pname = p.get("name", "服务商")
             for x in p.get("models") or []:
-                self.model_combo.addItem(f"{pname} - {x}", (pname, x))
+                label = x.rsplit("/", 1)[-1] if x else x   # 去供应商/组织前缀
+                self.model_combo.addItem(label, (pname, x))
+                self.model_combo.setItemData(
+                    self.model_combo.count() - 1, f"{pname} · {x}",
+                    Qt.ItemDataRole.ToolTipRole)
         # 恢复当前选中（手动指定模型）
         if self._model_override:
             # 注意：QComboBox.findData 对 Python tuple 的 QVariant 比较不可靠

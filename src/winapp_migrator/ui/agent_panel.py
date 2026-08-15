@@ -71,6 +71,12 @@ _BTN_GHOST = (f"QPushButton {{ background: transparent; color: {TEXT_DIM};"
               f"font-size: 12px; font-weight: 600; }}"
               f"QPushButton:hover {{ border-color: {ACCENT_HOVER}; color: {TEXT};"
               f"background: {HOVER}; }}")
+# 排队行内紧凑按钮：22px 高 + 小内边距，避免 6px 垂直内边距把 12px 文字上下裁切
+_BTN_COMPACT = (f"QPushButton {{ background: transparent; color: {TEXT_DIM};"
+                f"border: 1px solid {BORDER}; border-radius: 6px;"
+                f"padding: 1px 8px; font-size: 12px; }}"
+                f"QPushButton:hover {{ border-color: {ACCENT_HOVER}; color: {TEXT};"
+                f"background: {HOVER}; }}")
 _BTN_GHOST_ACCENT = (f"QPushButton {{ background: transparent; color: {ACCENT_HOVER};"
                      f"border: 1px solid {BORDER_SOFT}; border-radius: 8px;"
                      f"padding: 6px 12px; font-size: 12px; font-weight: 600; }}"
@@ -2522,7 +2528,7 @@ class QueuePanel(QWidget):
         clear_btn = QPushButton("清空")
         clear_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         clear_btn.setAutoDefault(False)
-        clear_btn.setStyleSheet(_BTN_GHOST)
+        clear_btn.setStyleSheet(_BTN_COMPACT)
         clear_btn.setFixedHeight(22)
         clear_btn.setToolTip("取消全部排队消息")
         clear_btn.clicked.connect(self.clear_all)
@@ -2599,7 +2605,7 @@ class QueuePanel(QWidget):
         edit = QPushButton("编辑")
         edit.setCursor(Qt.CursorShape.PointingHandCursor)
         edit.setAutoDefault(False)
-        edit.setStyleSheet(_BTN_GHOST)
+        edit.setStyleSheet(_BTN_COMPACT)
         edit.setFixedHeight(22)
         edit.setFixedWidth(56)
         edit.setToolTip("回填到输入框修改，发送后回到原队列位置")
@@ -2608,7 +2614,7 @@ class QueuePanel(QWidget):
         dele = QPushButton("删除")
         dele.setCursor(Qt.CursorShape.PointingHandCursor)
         dele.setAutoDefault(False)
-        dele.setStyleSheet(_BTN_GHOST)
+        dele.setStyleSheet(_BTN_COMPACT)
         dele.setFixedHeight(22)
         dele.setFixedWidth(56)
         dele.setToolTip("取消该条排队消息")
@@ -3380,7 +3386,7 @@ class AgentPanel(QDialog):
         self._sync_queue_height()
 
     def _sync_queue_height(self, *_):
-        """排队面板高度 = 消息内容自然高度，上限为主面板 40%（内部滚动）：
+        """排队面板高度 = 消息内容自然高度，上限为主面板 20%（内部滚动）：
         消息少时紧凑、行间无大间距、最上方消息不被顶出；
         消息多时随消息增多而增高并内部滚动（从下至上，最新消息始终可见）。
         todos 已独立成窗口，排队面板不再联动 todos 高度。"""
@@ -3388,7 +3394,7 @@ class AgentPanel(QDialog):
         if not qp.isVisible():
             return
         content = getattr(qp, "_rows_h", 0) + 40   # 表头 + 上下内边距 + 间距
-        limit = max(80, int(self.height() * 0.4))
+        limit = max(80, int(self.height() * 0.2))
         qp.setFixedHeight(max(56, min(content, limit)))
 
     def _on_queue_edit(self, idx: int):
@@ -4064,10 +4070,19 @@ class AgentPanel(QDialog):
         self.action_btn.setToolTip("发送")
 
     def _sync_action_style(self, *_):
-        """输入框内容变化：空闲时刷新发送按钮配色（空→灰蓝，有内容→深蓝）"""
+        """输入框内容变化：任务空闲时刷新发送按钮配色（空→灰蓝，有内容→深蓝）。
+        任务运行中（task_active / 评估中 / 引擎线程存活）保持停止按钮状态，
+        用户输入文字不会把「停止/暂停」误切回「发送」。"""
+        if self._task_active:
+            return
         ep = self._eval_pending
-        if not self._task_active and not (ep is not None and ep[0] == self._session_id):
-            self._set_action_idle()
+        if ep is not None and ep[0] == self._session_id:
+            return
+        st = self._cur()
+        eng = st.get("engine") if isinstance(st, dict) else None
+        if eng is not None and eng._thread is not None and eng._thread.is_alive():
+            return
+        self._set_action_idle()
 
     def _set_action_busy(self):
         """运行中：白色转圈动画（可点击停止）"""

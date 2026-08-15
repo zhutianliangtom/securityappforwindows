@@ -4010,6 +4010,13 @@ class AgentPanel(QDialog):
         return str(QSettings("WinAppMigrator", "WinAppMigrator")
                    .value("agent_show_todos", "1")).strip().lower() in ("1", "true", "yes")
 
+    def _top_bar_offset(self) -> int:
+        """顶部菜单栏高度（面板坐标底边 + 留白）：最大化时 todos 下移到其下方"""
+        try:
+            return self.session_combo.mapTo(self, self.session_combo.rect().bottomLeft()).y() + 14
+        except Exception:
+            return 58
+
     def _sync_todos_win(self):
         """todos 独立窗口定位：非全屏停靠主窗口左侧（左移 5px 留间隙、顶部齐平）；
         最大化时移至右上角、顶部菜单栏下方（不遮挡菜单栏）。
@@ -4023,7 +4030,7 @@ class AgentPanel(QDialog):
         if self.isMaximized():
             # 右上角、顶部菜单栏下方：右侧留 10px，顶部下移避开菜单/工具栏
             x = self.x() + self.width() - tw.width() - 10
-            y = self.y() + 58
+            y = self.y() + self._top_bar_offset()
         else:
             # 停靠左侧、顶部齐平，再左移 5px 与主面板留出间隙
             x = max(0, self.x() - tw.width() - 5)

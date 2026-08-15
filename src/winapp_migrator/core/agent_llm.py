@@ -120,10 +120,14 @@ EFFORTS = ("low", "medium", "high", "max", "ultra")
 # 发送给 API 的 reasoning_effort 取值（OpenAI 兼容仅支持 low/medium/high，max/ultra 折算为 high）
 _REASONING_EFFORT = {"low": "low", "medium": "medium", "high": "high",
                      "max": "high", "ultra": "high"}
-# 各服务商按力度正确映射的 API 参数（Claude Code / Codex 式"工作强度"调节）
+# 各服务商按力度正确映射的 API 参数（依据各厂商官方文档 2026）
 _DEEPSEEK_EFFORT = {"high": "high", "max": "max", "ultra": "max"}      # DeepSeek V4 思考模式仅 high/max
 _GLM52_EFFORT = {"low": "minimal", "medium": "medium", "high": "high",
-                 "max": "xhigh", "ultra": "max"}                        # GLM-5.2+ 全档位
+                 "max": "xhigh", "ultra": "max"}                        # GLM-5.2 全档位
+_GLM53_EFFORT = {"low": "low", "medium": "high", "high": "high",
+                 "max": "max", "ultra": "max"}                          # GLM-5.3 仅 max/high/low
+_KIMI3_EFFORT = {"low": "low", "medium": "high", "high": "high",
+                 "max": "max", "ultra": "max"}                          # Kimi K3 支持 low/high/max
 _OPENAI_EFFORT = {"low": "low", "medium": "medium", "high": "high",
                   "max": "high", "ultra": "high"}                       # OpenAI o 系列
 
@@ -131,23 +135,43 @@ _OPENAI_EFFORT = {"low": "low", "medium": "medium", "high": "high",
 def build_effort_params(model: str, effort: str) -> dict:
     """把工作力度正确映射为当前模型的 API 参数（自动调节，无需手动开关）。
 
-    - DeepSeek V4（deepseek-v4-* / deepseek-chat / deepseek-reasoner）：
-      思考模式 reasoning_effort 仅 high/max；low/medium 不强制思考（响应更快）
-    - GLM-5.x：thinking.type 开关（low 关闭、medium+ 开启）+ reasoning_effort 全档位
-    - GLM-4.5/4.6/4.7：仅 thinking.type 开关（该系列不支持 reasoning_effort）
-    - OpenAI o 系列：顶层 reasoning_effort（low/medium/high）
-    - 其他模型（agnes 等）：不支持，返回空 dict（不发送任何参数）
+    依据各厂商官方文档（DeepSeek/智谱/Kimi/OpenAI，2026）：
+    - DeepSeek V4：thinking.type 控制思考开关；reasoning_effort 仅 high/max，
+      low/medium 映射为 high；关思考时不传 reasoning_effort（否则 400）
+    - GLM-5.3：思考强制开启不可关，reasoning_effort 仅 max/high/low
+    - GLM-5.2：thinking.type + reasoning_effort（max/xhigh/high/medium/low/minimal/none）
+    - GLM-5/5.1/5v/5-turbo、GLM-4.5/4.6：仅 thinking.type（不支持 reasoning_effort，勿传）
+    - GLM-4.7：强制思考，仅 thinking.type=enabled
+    - Kimi K3：顶层 reasoning_effort（low/high/max，默认 max）
+    - Kimi K2.6/K2.5：thinking.type（默认 enabled）
+    - OpenAI o 系列/gpt-5：顶层 reasoning_effort（low/medium/high）
+    - 其他模型（doubao/minimax/agnes 等）：不支持，返回空 dict（不发送任何参数）
     """
     m = (model or "").lower()
     eff = effort if effort in EFFORTS else "medium"
     if "deepseek" in m:
-        if eff not in ("high", "max", "ultra"):
-            return {}
-        return {"reasoning_effort": _DEEPSEEK_EFFORT.get(eff, "high")}
-    if "glm-5" in m:
-        return {"thinking": {"type": "enabled" if eff in ("high", "max", "ultra") else "disabled"},
+        # DeepSeek V4：思考模式与 reasoning_effort 强耦合（关了思考不能带 effort）
+        if eff in ("low", "medium"):
+            return {"thinking": {"type": "disabled"}}
+        return {"thinking": {"type": "enabled"},
+                "reasoning_effort": "max" if eff in ("max", "ultra") else "high"}
+    if m.startswith("glm-5.3"):
+        return {"thinking": {"type": "enabled"},
+                "reasoning_effort": _GLM53_EFFORT.get(eff, "high")}
+    if m.startswith("glm-5.2"):
+        if eff == "low":
+            return {"thinking": {"type": "disabled"}}
+        return {"thinking": {"type": "enabled"},
                 "reasoning_effort": _GLM52_EFFORT.get(eff, "medium")}
-    if m.startswith("glm-4.5") or m.startswith("glm-4.6") or m.startswith("glm-4.7"):
+    if m.startswith("glm-4.7"):
+        return {"thinking": {"type": "enabled"}}   # 强制思考，不可关闭
+    if m.startswith("glm-4.5") or m.startswith("glm-4.6"):
+        return {"thinking": {"type": "enabled" if eff in ("high", "max", "ultra") else "disabled"}}
+    if m.startswith("glm-5"):
+        return {"thinking": {"type": "enabled" if eff in ("high", "max", "ultra") else "disabled"}}
+    if m.startswith("kimi-k3"):
+        return {"reasoning_effort": _KIMI3_EFFORT.get(eff, "max")}
+    if m.startswith(("kimi-k2.6", "kimi-k2.5")):
         return {"thinking": {"type": "enabled" if eff in ("high", "max", "ultra") else "disabled"}}
     if m.startswith(("o1", "o3", "o4", "o5", "gpt-5")):
         return {"reasoning_effort": _OPENAI_EFFORT.get(eff, "medium")}
@@ -762,7 +786,11 @@ class LLMClient:
             "stream": True,
             "stream_options": {"include_usage": True},
         }
-        if self.reasoning_effort:
+        # 工作力度/思考参数：DeepSeek/GLM/Kimi 等的 effort_params（thinking/reasoning_effort）
+        # 必须真正合入 chat/completions 请求体，否则上游拿不到力度参数
+        if self.effort_params:
+            payload.update(self.effort_params)
+        elif self.reasoning_effort:
             payload["reasoning_effort"] = self.reasoning_effort
         if tools:
             payload["tools"] = tools

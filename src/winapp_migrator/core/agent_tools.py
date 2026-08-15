@@ -1918,6 +1918,13 @@ def _update_todo(todos: list) -> dict:
     except OSError as e:
         return _blocked(f"[update_todo] 保存失败: {e}")
     active = [t for t in clean if t["status"] != "completed"]
+    if clean and not active:
+        # 全部完成：自动清空任务清单（面板回到提示语状态）
+        try:
+            TODO_FILE.write_text("[]", encoding="utf-8")
+        except OSError:
+            pass
+        return {"text": "任务清单已全部完成，已自动清空。", "images": []}
     text = f"任务清单已更新：共 {len(clean)} 项，未完成 {len(active)} 项。"
     if clean:
         text += "\n" + "\n".join(f"- [{t['status']}] {t['title']}" for t in clean)

@@ -2334,7 +2334,7 @@ class TodosPanel(QWidget):
         self._list_lay.addStretch(1)
         self._scroll.setWidget(self._list)
         lay.addWidget(self._scroll, 1)
-        self._limit = 360      # 面板最大高度（普通窗口约窗口一半，resizeEvent 随窗口更新）
+        self._limit = 150      # 面板最大高度（底部区域=原 1/3 的 2/3，resizeEvent 随窗口更新）
         self._last_h = -1      # 上次应用的高度，避免重复 relayout
         self.update_todos([])
 
@@ -3766,8 +3766,8 @@ class AgentPanel(QDialog):
             b.setIconSize(QSize(self._btn_icon_sz, self._btn_icon_sz))
 
     def _apply_todos_limit(self):
-        """todos 面板限高 = 窗口高度约 1/3（功能区独立列、固定高度，互不影响）"""
-        limit = max(120, int(self.height() * 0.33))
+        """底部区域（todos 面板）限高 = 原 1/3 页面的 2/3（约页面 2/9），整体更紧凑"""
+        limit = max(90, int(self.height() * 0.33 * 2 / 3))
         if limit != self._last_todos_limit:
             self._last_todos_limit = limit
             self.todos_panel._limit = limit

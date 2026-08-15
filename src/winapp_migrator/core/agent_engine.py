@@ -384,10 +384,11 @@ class AgentEngine:
             sys_p = ("你是对话上下文压缩助手。把以下历史对话压缩为简洁摘要，保留："
                      "任务目标、已完成的关键步骤与结论、用户的偏好与约束、未解决的问题。"
                      "只输出摘要正文，不要任何前缀或解释。")
-            res = self.llm.chat(
+            # 使用 chat_stream 而非 chat：responses 协议不支持非流式请求
+            res = self.llm.chat_stream(
                 [{"role": "system", "content": sys_p},
                  {"role": "user", "content": f"历史对话：\n{joined}"}],
-                max_tokens=1024, stop=lambda: self._stop.is_set())
+                stop=lambda: self._stop.is_set())
             return str(res.get("text") or "").strip()
         except Exception:
             return ""

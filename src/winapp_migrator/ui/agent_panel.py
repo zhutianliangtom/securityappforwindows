@@ -37,7 +37,7 @@ from PyQt6.QtWidgets import (
     QApplication, QStyle, QListWidget, QGraphicsOpacityEffect,
     QRadioButton, QCheckBox, QListWidgetItem,
     QStackedWidget, QMenu, QFileDialog, QPlainTextEdit, QSlider,
-    QLayout, QWidgetItem, QInputDialog, QFrame,
+    QLayout, QWidgetItem, QInputDialog, QFrame, QStyledItemDelegate,
 )
 
 from winapp_migrator.core import agent_llm, agent_engine, agent_skills, agent_sandbox, agent_tools, agent_screen, agent_tts
@@ -2382,11 +2382,62 @@ class TodosPanel(QWidget):
         return row
 
 
+class _SessionStatusDelegate(QStyledItemDelegate):
+    """会话下拉项状态绘制：运行中显示转圈动画（深蓝弧线），待确认显示黄色圆点"""
+
+    def __init__(self, panel, parent=None):
+        super().__init__(parent)
+        self.panel = panel
+
+    def paint(self, painter, option, index):
+        sid = index.data(Qt.ItemDataRole.UserRole)
+        st = self.panel._sess.get(sid) if isinstance(sid, str) else None
+        running = bool(st and st.get("task_active"))
+        pending = bool(st and (st.get("pending_confirm") or st.get("pending_ask")))
+        name = str(index.data(Qt.ItemDataRole.DisplayRole) or "")
+        painter.save()
+        # 背景：选中 / 悬停
+        if option.state & QStyle.StateFlag.State_Selected:
+            painter.fillRect(option.rect, option.palette.highlight())
+        elif option.state & QStyle.StateFlag.State_MouseOver:
+            painter.fillRect(option.rect, QColor(HOVER))
+        rect = QRect(option.rect)
+        left = rect.left() + 4
+        cy = rect.center().y()
+        # 待确认黄色圆点（最左侧）
+        if pending:
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QColor(WARN))
+            painter.drawEllipse(QRect(left, cy - 4, 8, 8))
+            left += 14
+        # 运行中转圈（深蓝弧线，随 spin 角度转动）
+        if running:
+            cx = left + 6
+            pen = QPen(QColor(ACCENT_HOVER), 2)
+            pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+            painter.setPen(pen)
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawArc(QRect(cx - 6, cy - 6, 12, 12),
+                            self.panel._spin_angle * 16, 120 * 16)
+            left += 16
+        # 文本
+        painter.setFont(option.font)
+        painter.setPen(option.palette.text().color())
+        painter.drawText(QRect(left, rect.top(), max(0, rect.width() - (left - rect.left())),
+                               rect.height()),
+                         Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, name)
+        painter.restore()
+
+    def sizeHint(self, option, index):
+        sz = super().sizeHint(option, index)
+        return QSize(sz.width() + 44, sz.height())
+
+
 class AgentPanel(QDialog):
-    confirm_signal = pyqtSignal(str, str, str)  # name, args_json, risk
+    confirm_signal = pyqtSignal(str, str, str, str)  # sid, name, args_json, risk
     eval_signal = pyqtSignal(str)          # agnes-2.5-flash 任务难度评估结果（后台线程 → 主线程）
     switch_ready = pyqtSignal(str, object, object, object)  # 会话切换: sid, segs, ums, rows（带 sid，防止过期加载覆盖当前视图）
-    ask_signal = pyqtSignal(str)           # ask_user 提问（args_json）
+    ask_signal = pyqtSignal(str, str)      # sid, args_json（ask_user 提问）
     mcp_signal = pyqtSignal(str)
     compact_signal = pyqtSignal(int)   # /compact 压缩完成（后台线程 → 主线程，参数=合并条数）
     evt_signal = pyqtSignal(str, str, object)  # 会话事件路由: sid, kind(delta/status/result/reasoning/sub), payload
@@ -2575,6 +2626,13 @@ class AgentPanel(QDialog):
         self._timer.timeout.connect(self._refresh_meta)
         self._timer.start(400)
 
+        # 会话下拉转圈动画：全局角度递进，有运行中会话时刷新下拉视图
+        self._spin_angle = 0
+        self._combo_anim = QTimer(self)
+        self._combo_anim.timeout.connect(self._tick_combo_spin)
+        self._combo_anim.setInterval(120)
+        self._combo_anim.start()
+
         self._action_anim = QTimer(self)
         self._action_anim.timeout.connect(self._tick_action_anim)
         self._action_anim.setInterval(80)
@@ -2603,8 +2661,10 @@ class AgentPanel(QDialog):
 
         # 会话选择：切换对话（上下文隔离）+ 新对话按钮
         self.session_combo = QComboBox()
-        self.session_combo.setMinimumWidth(110)
-        self.session_combo.setMaximumWidth(180)
+        self.session_combo.setMinimumWidth(150)
+        self.session_combo.setMaximumWidth(200)
+        # 自定义 delegate：运行中会话显示转圈、待确认显示黄色圆点
+        self.session_combo.setItemDelegate(_SessionStatusDelegate(self))
         self.session_combo.currentIndexChanged.connect(self._on_session_selected)
         # 下拉列表右键菜单：删除对话
         self.session_combo.view().setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
@@ -2720,7 +2780,10 @@ class AgentPanel(QDialog):
         self._queue_preview = QLabel("")
         self._queue_preview.setStyleSheet(f"color: {TEXT_DIM}; font-size: 12px;")
         self._queue_preview.setWordWrap(True)
-        qb_lay.addWidget(self._queue_preview, 1)
+        # 自适应大小：不占满整行（不加 stretch），短消息窄、长消息限宽换行、高度随行数
+        self._queue_preview.setMaximumWidth(260)
+        self._queue_preview.setMinimumWidth(0)
+        qb_lay.addWidget(self._queue_preview)
         qb_edit = QPushButton("编辑")
         qb_edit.setCursor(Qt.CursorShape.PointingHandCursor)
         qb_edit.setAutoDefault(False)
@@ -2909,6 +2972,12 @@ class AgentPanel(QDialog):
             "think_start": 0.0,
             "task_active": False,
             "queued": None,           # 排队消息 payload：{text, images, files, ai_text, skill_names, shot}
+            "pending_confirm": None,  # 后台待确认命令：{name, args, risk, answered}（不弹窗打扰，切过去处理）
+            "confirm_evt": None,      # 该会话确认等待事件
+            "confirm_result": False,  # 该会话最近一次确认结果
+            "pending_ask": None,      # 后台待回答提问：{args, answered}
+            "ask_evt": None,          # 该会话提问等待事件
+            "ask_result": "",         # 该会话最近一次提问回答
         }
 
     def _bind_sess(self, sid: str):
@@ -2991,14 +3060,19 @@ class AgentPanel(QDialog):
             on_result=lambda n, t, im, _sid=sid: self.evt_signal.emit(_sid, "result", (n, t, im)),
             on_reasoning=lambda s, _sid=sid: self.evt_signal.emit(_sid, "reasoning", s),
             on_sub_event=lambda k, i, t, s, _sid=sid: self.evt_signal.emit(_sid, "sub", (k, i, t, s)),
-            confirm=self._confirm_tool,
-            ask_user=self._ask_user_tool,
+            confirm=lambda n, a, _sid=sid: self._confirm_tool(_sid, n, a),
+            ask_user=lambda a, _sid=sid: self._ask_user_tool(_sid, a),
             text_only=self._text_only,
             memory_enabled=self._memory_enabled,
             direct=self._mode == "yolo")
 
     def _route(self, sid: str, kind: str, payload):
         """会话事件路由（主线程）：前台会话走渲染，后台会话只更新内存缓冲"""
+        if kind == "pending":
+            # 后台会话挂起确认/提问：主线程刷新下拉标记 + 优雅通知（不弹窗）
+            self._refresh_session_combo()
+            self._notify_background(payload[0], payload[1])
+            return
         if sid != self._session_id:
             self._bg_event(sid, kind, payload)
             return
@@ -3358,6 +3432,8 @@ class AgentPanel(QDialog):
                 self.switch_ready.emit(sid, segs, ums, rows)
 
             threading.Thread(target=_load, daemon=True).start()
+        # 切到该会话后处理其挂起的确认/提问（后台会话不弹窗，切到前台才弹）
+        self._flush_pending(sid)
 
     def _finish_switch(self, sid: str, segs: list, ums: list, rows: list):
         """会话切换收尾（主线程）：用后台线程读到的数据一次性渲染"""
@@ -3682,6 +3758,21 @@ class AgentPanel(QDialog):
     def _tick_action_anim(self):
         self._action_anim_angle += 30
         self.action_btn.setIcon(self._spinner_icon(self._action_anim_angle, "#FFFFFF"))
+
+    def _tick_combo_spin(self):
+        """会话下拉转圈动画：有运行中/待确认会话才刷新视图（避免无谓重绘）"""
+        busy = False
+        for st in self._sess.values():
+            if st.get("task_active") or st.get("pending_confirm") or st.get("pending_ask"):
+                busy = True
+                break
+        if not busy:
+            return
+        self._spin_angle = (self._spin_angle + 30) % 360
+        try:
+            self.session_combo.view().viewport().update()
+        except Exception:
+            pass
 
     def _stop_button_anim(self):
         """任务结束：停止动画并恢复空闲发送状态"""
@@ -4653,6 +4744,11 @@ class AgentPanel(QDialog):
         # 停止并清理该会话的独立引擎与内存态
         st = self._sess.pop(sid, None)
         if st:
+            # 释放挂起的确认/提问等待，让后台引擎线程及时退出
+            if st.get("confirm_evt"):
+                st["confirm_evt"].set()
+            if st.get("ask_evt"):
+                st["ask_evt"].set()
             eng = st.get("engine")
             if eng:
                 eng.clear_history()
@@ -4724,6 +4820,10 @@ class AgentPanel(QDialog):
         old_id = self._session_id
         old_st = self._sess.pop(old_id, None)
         if old_st:
+            if old_st.get("confirm_evt"):
+                old_st["confirm_evt"].set()
+            if old_st.get("ask_evt"):
+                old_st["ask_evt"].set()
             eng = old_st.get("engine")
             if eng:
                 eng.clear_history()
@@ -5287,22 +5387,36 @@ class AgentPanel(QDialog):
             # 避免朗读相关的提示被静默丢弃导致用户误以为没有生效
             self._add_status(s, TEXT_DIM)
 
-    # ---------- 每步确认（engine 线程调用 → 信号 → 主线程弹窗） ----------
-    def _confirm_tool(self, name: str, args: dict) -> bool:
+    # ---------- 每步确认 / ask_user 提问（engine 线程调用 → 信号 → 主线程） ----------
+    # 前台会话：直接弹窗；后台会话：不弹窗打扰，挂起等待并置「待确认/待回答」标记，
+    # 在其他对话优雅通知提醒，用户切到该会话后处理。
+    def _confirm_tool(self, sid: str, name: str, args: dict) -> bool:
+        st = self._sess.get(sid) or {}
         level, reason = agent_sandbox.assess_tool(name, args)
         if self._mode == "yolo":
-            # YOLO 无人工确认，危险命令（删除/关机等）一律拒绝，保证安全底线
             return level != "dangerous"
         if self._mode == "edit":
-            # Edit 模式：仅非白名单 bash 命令弹确认；白名单命令与其他工具直接执行
             if name != "run_command" or level == "safe":
                 return True
+        if sid != self._session_id:
+            # 后台会话：挂起该确认，置待处理标记，优雅通知，不弹窗打扰当前对话
+            evt = threading.Event()
+            st["pending_confirm"] = {"name": name, "args": args, "risk": level,
+                                     "answered": False}
+            st["confirm_evt"] = evt
+            st["confirm_result"] = False
+            self.evt_signal.emit(sid, "pending",
+                                 (f"对话「{self._session_label(sid)}」有命令待确认：{name}",
+                                  "切换到该对话即可继续"))
+            evt.wait(timeout=600)
+            return st.get("confirm_result", False)
+        # 前台会话：直接弹窗确认
         self._confirm_evt.clear()
-        self.confirm_signal.emit(name, json.dumps(args, ensure_ascii=False), level)
+        self.confirm_signal.emit(sid, name, json.dumps(args, ensure_ascii=False), level)
         self._confirm_evt.wait(timeout=600)
         return self._confirm_result
 
-    def _on_confirm(self, name: str, args_json: str, risk: str):
+    def _on_confirm(self, sid: str, name: str, args_json: str, risk: str):
         try:
             args = json.loads(args_json)
         except json.JSONDecodeError:
@@ -5312,15 +5426,26 @@ class AgentPanel(QDialog):
         self._confirm_result = dlg.result_ok
         self._confirm_evt.set()
 
-    # ---------- ask_user 提问（engine 线程 → 信号 → 主线程弹窗） ----------
-    def _ask_user_tool(self, args: dict) -> str:
-        """阻塞式提问：engine 线程等待主线程弹窗选择结果"""
+    def _ask_user_tool(self, sid: str, args: dict) -> str:
+        st = self._sess.get(sid) or {}
+        if sid != self._session_id:
+            # 后台会话：挂起提问，置待处理标记，优雅通知，不弹窗打扰当前对话
+            evt = threading.Event()
+            st["pending_ask"] = {"args": args, "answered": False}
+            st["ask_evt"] = evt
+            st["ask_result"] = ""
+            self.evt_signal.emit(sid, "pending",
+                                 (f"对话「{self._session_label(sid)}」向你提问："
+                                  f"{str(args.get('question', ''))[:40]}",
+                                  "切换到该对话作答"))
+            evt.wait(timeout=600)
+            return st.get("ask_result", "")
         self._ask_evt.clear()
-        self.ask_signal.emit(json.dumps(args, ensure_ascii=False))
+        self.ask_signal.emit(sid, json.dumps(args, ensure_ascii=False))
         self._ask_evt.wait(timeout=600)
         return self._ask_result
 
-    def _on_ask(self, args_json: str):
+    def _on_ask(self, sid: str, args_json: str):
         try:
             args = json.loads(args_json)
         except json.JSONDecodeError:
@@ -5331,6 +5456,51 @@ class AgentPanel(QDialog):
         dlg.exec()
         self._ask_result = dlg.answer()
         self._ask_evt.set()
+
+    def _session_label(self, sid: str) -> str:
+        """取会话显示名（用于后台通知）"""
+        lst = self._load_session_list()
+        s = next((x for x in lst if x.get("id") == sid), None)
+        return s.get("name", "新对话") if s else "新对话"
+
+    def _notify_background(self, text: str, hint: str = ""):
+        """优雅通知：底部状态条 + 可选任务栏提示（不弹阻塞对话框）"""
+        self._add_status(text, WARN)
+        if hint:
+            self._add_status(hint, TEXT_DIM)
+        try:
+            from winapp_migrator.ui.main_window import MainWindow
+            src = self.parent()
+            if isinstance(src, MainWindow) and hasattr(src, "toast"):
+                src.toast.show_toast("后台对话提醒", text, True, 5000)
+        except Exception:
+            pass
+
+    def _flush_pending(self, sid: str):
+        """前台处理该会话的挂起确认/提问（切到该会话时调用）"""
+        st = self._sess.get(sid)
+        if st is None:
+            return
+        if st.get("pending_confirm"):
+            p = st["pending_confirm"]
+            dlg = _ConfirmDialog(p["name"], p["args"], p["risk"], self)
+            dlg.exec()
+            st["confirm_result"] = dlg.result_ok
+            st["pending_confirm"] = None
+            if st["confirm_evt"]:
+                st["confirm_evt"].set()
+        if st.get("pending_ask"):
+            pa = st["pending_ask"]
+            args = pa.get("args") or {}
+            dlg = _AskUserDialog(str(args.get("question", "")),
+                                 list(args.get("options") or []),
+                                 bool(args.get("multi_select", False)), self)
+            dlg.exec()
+            st["ask_result"] = dlg.answer()
+            st["pending_ask"] = None
+            if st["ask_evt"]:
+                st["ask_evt"].set()
+        self._refresh_session_combo()
 
     # ---------- 设置 ----------
     # 模型/接口/API Key 已写死，无需设置对话框

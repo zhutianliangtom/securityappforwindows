@@ -220,11 +220,14 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "write_file",
-            "description": "创建或覆盖写入文本文件（目录不存在自动创建，最大 500KB）；"
-                           "append=true 时追加到文件末尾。",
+            "description": "创建或覆盖写入文本文件（目录不存在自动创建，最大 500KB）。"
+                           "参数名必须为 path 与 content（content 是写入文件的完整内容文本，"
+                           "不是文件名，也不是对象）；append=true 时追加到文件末尾。",
             "parameters": {"type": "object",
-                           "properties": {"path": {"type": "string"},
-                                          "content": {"type": "string"},
+                           "properties": {"path": {"type": "string",
+                                                   "description": "文件路径（相对路径基于工作目录）"},
+                                          "content": {"type": "string",
+                                                      "description": "要写入文件的完整内容（文本字符串）"},
                                           "append": {"type": "boolean",
                                                      "description": "true 追加写入，默认 false 覆盖"}},
                            "required": ["path", "content"]},
@@ -235,12 +238,17 @@ TOOLS = [
         "function": {
             "name": "edit_file",
             "description": "编辑文件：把文件中的 old_text 精确替换为 new_text（多行匹配亦可）。"
+                           "参数名必须为 path、old_text、new_text（old_text 是文件中已有的原内容，"
+                           "new_text 是替换后的新内容，二者都是文本字符串，不是文件名）。"
                            "目标内容在文件中出现多处时会拒绝并提示出现次数，防止误替换；"
                            "多行或上下文匹配请用 search_replace。每次编辑前自动备份，可用 undo_file 回滚。",
             "parameters": {"type": "object",
-                           "properties": {"path": {"type": "string"},
-                                          "old_text": {"type": "string"},
-                                          "new_text": {"type": "string"}},
+                           "properties": {"path": {"type": "string",
+                                                   "description": "文件路径（相对路径基于工作目录）"},
+                                          "old_text": {"type": "string",
+                                                       "description": "文件中已有的原内容，将被替换（须与文件精确一致）"},
+                                          "new_text": {"type": "string",
+                                                       "description": "替换后的新内容"}},
                            "required": ["path", "old_text", "new_text"]},
         },
     },
@@ -249,12 +257,17 @@ TOOLS = [
         "function": {
             "name": "search_replace",
             "description": "多行精确替换文件内容：把 old_text（可含换行）替换为 new_text。"
+                           "参数名必须为 path、old_text、new_text（old_text 是文件中已有的原内容，"
+                           "new_text 是替换后的新内容）。"
                            "默认要求唯一匹配（出现多处拒绝并返回次数）；count=all 时替换全部出现。"
                            "自动备份，可用 undo_file 回滚。",
             "parameters": {"type": "object",
-                           "properties": {"path": {"type": "string"},
-                                          "old_text": {"type": "string"},
-                                          "new_text": {"type": "string"},
+                           "properties": {"path": {"type": "string",
+                                                   "description": "文件路径（相对路径基于工作目录）"},
+                                          "old_text": {"type": "string",
+                                                       "description": "文件中已有的原内容（可含换行），将被替换（须与文件精确一致）"},
+                                          "new_text": {"type": "string",
+                                                       "description": "替换后的新内容"},
                                           "count": {"type": "string",
                                                     "enum": ["once", "all"],
                                                     "description": "once 仅限唯一匹配（默认）；all 替换全部出现"}},
@@ -1233,6 +1246,48 @@ def _ask_user(args: dict, ask_user_cb) -> dict:
         return _blocked(f"[ask_user] 提问失败: {e}")
 
 
+def _normalize_file_args(name: str, args: dict) -> dict:
+    """文件写/改工具的参数名归一化：兼容 AI 常见的参数名漂移（别名），
+    避免因参数名不一致（如 text/data 代替 content、file 代替 path、
+    old/new 代替 old_text/new_text）被 _missing_required 误判为缺参。"""
+    if name not in ("write_file", "edit_file", "search_replace"):
+        return dict(args or {})
+    out = dict(args or {})
+    # 别名表：标准参数名 -> 候选别名（按优先级）
+    aliases = {
+        "path": ("file", "file_path", "filepath", "filename", "target"),
+        "content": ("text", "data", "file_content", "file_content_text", "body", "payload"),
+        "old_text": ("old", "old_content", "old_content_text", "before", "find", "original",
+                     "search", "oldText", "old_text_content"),
+        "new_text": ("new", "new_content", "new_content_text", "after", "replace",
+                     "replacement", "replace_with", "newText", "new_text_content"),
+        "append": ("is_append", "append_mode"),
+    }
+    for std, cands in aliases.items():
+        if std in out and out[std] not in (None, ""):
+            continue
+        for c in cands:
+            v = out.get(c)
+            if v not in (None, ""):
+                out[std] = v
+                break
+    return out
+
+
+def _param_hint(name: str, missing: list) -> str:
+    """缺参时给 AI 的纠错提示：明确正确参数名与用途，帮助其自纠后重新调用。"""
+    if name not in ("write_file", "edit_file", "search_replace"):
+        return ""
+    desc = {
+        "path": "path=文件路径",
+        "content": "content=要写入的完整内容",
+        "old_text": "old_text=待替换的原内容（须与文件中精确一致）",
+        "new_text": "new_text=替换后的新内容",
+    }
+    hints = [desc.get(m, m) for m in missing]
+    return "正确参数：" + "，".join(hints) + "。"
+
+
 def _missing_required(name: str, args: dict) -> list:
     """按工具 schema 的 required 字段校验必填参数（缺失/空值视为缺）。
     缺参直接拦截返回提示，避免空参误调用导致返工/失败。"""
@@ -1279,11 +1334,12 @@ def execute_tool(name: str, args: dict, allow_dangerous: bool = False,
     False 时危险操作硬拒绝（YOLO 自动放行场景的安全底线）。
     ask_user_cb: Callable[[dict], str] 提问回调（阻塞式，返回用户回答文本）。
     """
-    args = args or {}
+    args = _normalize_file_args(name, args or {})
     missing = _missing_required(name, args)
     if missing:
-        return _blocked(f"[工具参数缺失] {name} 缺少必填参数："
-                        f"{', '.join(missing)}，请补充后重新调用")
+        hint = _param_hint(name, missing)
+        return _blocked(f"[工具参数缺失] {name} 缺少必填参数：{', '.join(missing)}。"
+                        f"{hint}请补充后重新调用")
     if name == "ask_user":
         return _ask_user(args, ask_user_cb)
     if name in SUB_AGENT_TOOLS:
@@ -1753,7 +1809,10 @@ def _edit_file(path: str, old_text: str, new_text: str) -> dict:
             data = f.read()
         n = data.count(old_text)
         if n == 0:
-            return _blocked("[沙盒] 未找到要替换的内容")
+            return _blocked("[沙盒] 未找到要替换的内容。常见原因与对策："
+                            "1) old_text 须与文件内容精确一致（含空格/换行/缩进，多行内容请用 search_replace）；"
+                            "2) 可先用 read_file 读取文件确认实际内容后再编辑；"
+                            "3) 若需重写整个文件请改用 write_file。")
         if n > 1:
             return _blocked(f"[沙盒] 目标内容出现 {n} 处，为避免误替换请提供包含上下文的"
                             "更长匹配串，或用 search_replace(count=all) 替换全部")
@@ -1779,7 +1838,10 @@ def _search_replace(path: str, old_text: str, new_text: str, count: str = "once"
             data = f.read()
         n = data.count(old_text)
         if n == 0:
-            return _blocked("[沙盒] 未找到要替换的内容")
+            return _blocked("[沙盒] 未找到要替换的内容。常见原因与对策："
+                            "1) old_text 须与文件内容精确一致（含空格/换行/缩进）；"
+                            "2) 可先用 read_file 读取文件确认实际内容后再替换；"
+                            "3) 若需重写整个文件请改用 write_file。")
         if count == "all":
             _backup_for_undo(p)
             data = data.replace(old_text, new_text)

@@ -2613,6 +2613,7 @@ class TodosWindow(QWidget):
     def mousePressEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton:
             self._drag_start_pos = event.globalPosition().toPoint()
+            self._is_dragging = True
             event.accept()
 
     def mouseMoveEvent(self, event):
@@ -2624,6 +2625,7 @@ class TodosWindow(QWidget):
     def mouseReleaseEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton:
             self._drag_start_pos = None
+            self._is_dragging = False
             event.accept()
 
 
@@ -4094,9 +4096,13 @@ class AgentPanel(QDialog):
     def _sync_todos_win(self):
         """todos 独立窗口定位：非全屏停靠主窗口左侧（左移 5px 留间隙、顶部齐平）；
         全屏/最大化时移至屏幕右上角、顶部菜单栏下方（不遮挡菜单栏）。
-        设置中关闭任务清单窗口时隐藏且不显示。"""
+        设置中关闭任务清单窗口时隐藏且不显示。
+        用户拖拽期间跳过同步，避免飘移。"""
         tw = getattr(self, "todos_win", None)
         if tw is None:
+            return
+        # 用户正在拖拽时跳过位置同步
+        if getattr(tw, "_is_dragging", False):
             return
         if not self._todos_enabled():
             tw.hide()

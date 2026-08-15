@@ -2669,8 +2669,8 @@ class AgentPanel(QDialog):
                             | Qt.WindowType.WindowMinMaxButtonsHint
                             | Qt.WindowType.WindowMaximizeButtonHint
                             | Qt.WindowType.WindowMinimizeButtonHint)
-        self.setMinimumSize(760, 600)
-        self.resize(900, 660)
+        self.setMinimumSize(1074, 692)
+        self.resize(1074, 692)
         self.setFont(QFont("Microsoft YaHei UI", 10))
         self.setStyleSheet(
             f"QDialog {{ background: qlineargradient(x1:0, y1:0, x2:0, y2:1,"
@@ -2995,6 +2995,8 @@ class AgentPanel(QDialog):
         self.action_btn.setToolTip("发送")
         self.action_btn.clicked.connect(self._on_action_clicked)
         bottom.addWidget(self.action_btn)
+        # 输入区更靠底部：弹性空间置于输入行上方，排队面板紧随输入行
+        right.addStretch(1)
         right.addLayout(bottom)
         body.addLayout(right, 1)
         root.addLayout(body, 1)
@@ -3588,9 +3590,9 @@ class AgentPanel(QDialog):
             threading.Thread(target=_load, daemon=True).start()
         # 切到该会话后处理其挂起的确认/提问（后台会话不弹窗，切到前台才弹）
         self._flush_pending(sid)
-        # 切换会话复位排队编辑状态，并刷新 todos 面板（全局清单，无任务时自动隐藏）
+        # 切换对话：复位排队编辑状态，关闭 todos 面板并恢复默认大小（AI 再调用 todos 工具时重新弹出）
         self._cancel_queue_edit()
-        self.todos_panel.update_todos(agent_tools.load_todos())
+        self.todos_panel.update_todos([], force=False)
 
     def _finish_switch(self, sid: str, segs: list, ums: list, rows: list):
         """会话切换收尾（主线程）：用后台线程读到的数据一次性渲染"""
@@ -3651,6 +3653,8 @@ class AgentPanel(QDialog):
         self._add_status("已开启新对话，上下文与旧对话隔离", ACCENT)
         self._scroll_bottom()
         self._update_queue_bar()
+        # 新建对话：关闭 todos 面板并恢复默认大小（新对话调用 todos 工具时再弹出）
+        self.todos_panel.update_todos([], force=False)
 
     def _auto_name_session(self, text: str):
         """AI 自动命名：会话无名称时用首条消息前 20 字命名"""
@@ -5461,9 +5465,9 @@ class AgentPanel(QDialog):
         self._stop_send_spin()
         self._last_activity = time.time()
         self._ensure_ai_bubble()
-        # AI 使用任务清单工具时，同步左侧 TODOS 可视化面板（无任务自动隐藏）
+        # AI 使用任务清单工具时必须弹出左侧 TODOS 可视化面板（清单为空也弹出占位）
         if name in ("update_todo", "list_todo"):
-            self.todos_panel.update_todos(agent_tools.load_todos())
+            self.todos_panel.update_todos(agent_tools.load_todos(), force=True)
         shown = (text or "").strip()
         if len(shown) > 20000:
             shown = shown[:20000] + " …（输出过长已截断显示，完整内容已返回模型）"

@@ -737,12 +737,22 @@ class AgentEngine:
     def _system_prompt(self, agent_name: str = "") -> str:
         """构建系统提示词：每次都重新读取 settings.json，
         用户中途新增/修改的自定义规则在下一轮立即生效。
-        注意：任务清单（_sync_todo_msg）与任务技能（_sync_skill_msg）都不在此注入，
-        保证 system 前缀稳定，服务端上下文缓存持续命中，最大限度节省 token。"""
-        return agent_skills.build_system_prompt(agent_name,
-                                                text_only=self.text_only,
-                                                memory_enabled=self.memory_enabled,
-                                                direct=self.direct)
+        工作目录绝对路径强制注入 system（每轮必然发送给 AI），设置后整段保持
+        稳定不破坏服务端前缀缓存；任务清单/任务技能仍以末尾独立消息注入。"""
+        prompt = agent_skills.build_system_prompt(agent_name,
+                                                  text_only=self.text_only,
+                                                  memory_enabled=self.memory_enabled,
+                                                  direct=self.direct)
+        wd = agent_tools.get_workdir()
+        if wd:
+            prompt += (f"\n\n【当前工作目录】{wd}\n"
+                       "文件查找/创建/修改/删除、命令执行默认在此目录内进行；"
+                       "未指定绝对路径时，相对路径一律基于该工作目录解析。")
+        else:
+            prompt += ("\n\n【当前工作目录】未设置\n"
+                       "文件查找/创建/修改/删除、命令执行默认在当前进程目录内进行；"
+                       "未指定绝对路径时，相对路径一律基于当前进程目录解析。")
+        return prompt
 
     def _todo_text(self) -> str:
         """读取未完成任务清单，格式化为对话消息文本（无任务时返回空串）"""
@@ -859,11 +869,8 @@ class AgentEngine:
                                       "content": self._system_prompt(agent_name)})
         else:
             self._messages[0]["content"] = self._system_prompt(agent_name)
-        wd = agent_tools.get_workdir()
-        wd_hint = (f"\n\n【当前工作目录】{wd}\n文件查找/创建/修改/删除、命令执行默认在此目录内进行；"
-                   "未指定绝对路径时，相对路径一律基于该工作目录解析。") if wd else ""
         self._messages.append({"role": "user",
-                               "content": agent_llm.build_content(user_input + wd_hint + _PLAN_HINT,
+                               "content": agent_llm.build_content(user_input + _PLAN_HINT,
                                                                   images)})
         # 静默虚拟桌面：任务开始切到独立桌面，结束自动返回主桌面（finally 兜底所有结束路径）
         switched = False

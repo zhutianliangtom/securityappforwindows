@@ -2602,6 +2602,7 @@ class TodosWindow(QWidget):
         lay.addWidget(self.panel)
         # 鼠标拖拽状态
         self._drag_start_pos = None
+        self._is_dragging = False  # 拖拽中标志，防止_sync_todos_win干扰位置
 
     def _sync_height(self, h: int):
         """面板高度变化 → 窗口高度同步（顶部固定，窗口只增不减地向下生长）"""

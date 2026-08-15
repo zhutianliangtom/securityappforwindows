@@ -275,27 +275,36 @@ def is_default_provider(p: dict) -> bool:
 
 def test_provider_connection(base_url: str, api_key: str, model: str,
                              protocol: str = "chat", timeout: float = 15.0) -> tuple:
-    """真实连通性测试：用最小 chat/completions 请求验证 base_url + api_key + 模型可用。
+    """真实连通性测试：用最小 chat/completions 或 responses 请求验证 base_url + api_key + 模型可用。
     全程真实 API 调用，不 mock；返回 (ok, message)，失败附具体 HTTP/网络错误便于排障。"""
     base_url = (base_url or "").strip().rstrip("/")
     api_key = (api_key or "").strip()
     model = (model or "").strip()
+    protocol = (protocol or "chat").lower()
     if not base_url or not api_key or not model:
         return False, "请填写完整的接口地址、API Key 与模型名"
-    url = f"{base_url}/chat/completions"
-    payload = {"model": model,
-               "messages": [{"role": "user", "content": "ping"}],
-               "max_tokens": 1, "stream": False}
-    req = urllib.request.Request(
-        url, data=json.dumps(payload).encode("utf-8"),
-        headers={"Content-Type": "application/json",
-                 "User-Agent": _UA,
-                 "Authorization": f"Bearer {api_key}"},
-        method="POST")
     try:
+        if protocol == "responses":
+            # responses 协议：使用 /v1/responses 端点
+            url = f"{base_url}/responses"
+            payload = {"model": model, "input": [{"role": "user", "content": "ping"}],
+                       "stream": False}
+        else:
+            # chat/completions 协议
+            url = f"{base_url}/chat/completions"
+            payload = {"model": model,
+                       "messages": [{"role": "user", "content": "ping"}],
+                       "max_tokens": 1, "stream": False}
+        req = urllib.request.Request(
+            url, data=json.dumps(payload).encode("utf-8"),
+            headers={"Content-Type": "application/json",
+                     "User-Agent": _UA,
+                     "Authorization": f"Bearer {api_key}"},
+            method="POST")
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             resp.read()
-            return True, f"连接成功（HTTP {resp.status}），Key 与模型「{model}」可用"
+            ep_name = "Responses API" if protocol == "responses" else "Chat Completions"
+            return True, f"连接成功（HTTP {resp.status}），Key 与模型「{model}」可用（{ep_name}）"
     except urllib.error.HTTPError as e:
         detail = ""
         try:
@@ -758,6 +767,7 @@ class LLMClient:
         self.protocol = (protocol or "chat").lower() or "chat"
         # 由上层按工作力度设置；None 表示不发送（兼容不支持该参数的 API）
         self.reasoning_effort = None
+        self.effort_params = None  # 工作力度参数映射
 
     def chat_stream(self, messages: list,
                     tools: Optional[list] = None,

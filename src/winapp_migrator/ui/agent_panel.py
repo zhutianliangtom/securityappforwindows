@@ -1420,8 +1420,10 @@ class _AgentSettingsDialog(QDialog):
         self._mode = val or "ask"
         self._settings.setValue("agent_mode", self._mode)
         # 即时更新已缓存引擎的 direct（YOLO 直行），无需重建引擎
-        if self._engine is not None:
-            self._engine.direct = (self._mode == "yolo")
+        for st in self._sess.values():
+            eng = st.get("engine")
+            if eng is not None:
+                eng.direct = (self._mode == "yolo")
 
     def _browse_workdir(self, *_):
         """弹出目录选择框，写入工作目录输入框（保存时持久化）"""
@@ -2381,17 +2383,68 @@ class TodosPanel(QWidget):
 
 
 class AgentPanel(QDialog):
-    delta_signal = pyqtSignal(str)
-    status_signal = pyqtSignal(str)
-    result_signal = pyqtSignal(str, str, object)   # 工具名, 执行输出, 截图缩略图列表
-    reasoning_signal = pyqtSignal(str)     # 流式思考过程增量
-    sub_signal = pyqtSignal(str, int, str, str)  # 子Agent事件: kind, task_idx, title, text
     confirm_signal = pyqtSignal(str, str, str)  # name, args_json, risk
     eval_signal = pyqtSignal(str)          # agnes-2.5-flash 任务难度评估结果（后台线程 → 主线程）
-    switch_ready = pyqtSignal(object)      # 会话切换：后台线程读取完成后回主线程渲染
+    switch_ready = pyqtSignal(str, object, object, object)  # 会话切换: sid, segs, ums, rows（带 sid，防止过期加载覆盖当前视图）
     ask_signal = pyqtSignal(str)           # ask_user 提问（args_json）
     mcp_signal = pyqtSignal(str)
     compact_signal = pyqtSignal(int)   # /compact 压缩完成（后台线程 → 主线程，参数=合并条数）
+    evt_signal = pyqtSignal(str, str, object)  # 会话事件路由: sid, kind(delta/status/result/reasoning/sub), payload
+
+    # ---------- 会话感知状态（属性读写当前会话，支撑多对话并发） ----------
+    def _cur(self) -> dict:
+        """当前会话状态（无则返回空 dict 占位，读默认值）"""
+        return self._sess.get(self._session_id) or {}
+
+    @property
+    def _task_active(self):
+        return bool(self._cur().get("task_active"))
+
+    @_task_active.setter
+    def _task_active(self, v):
+        st = self._sess.get(self._session_id)
+        if st is not None:
+            st["task_active"] = bool(v)
+
+    @property
+    def _user_stopped(self):
+        return bool(self._cur().get("user_stopped"))
+
+    @_user_stopped.setter
+    def _user_stopped(self, v):
+        st = self._sess.get(self._session_id)
+        if st is not None:
+            st["user_stopped"] = bool(v)
+
+    @property
+    def _end_badge_shown(self):
+        return bool(self._cur().get("end_badge_shown"))
+
+    @_end_badge_shown.setter
+    def _end_badge_shown(self, v):
+        st = self._sess.get(self._session_id)
+        if st is not None:
+            st["end_badge_shown"] = bool(v)
+
+    @property
+    def _think_done(self):
+        return bool(self._cur().get("think_done"))
+
+    @_think_done.setter
+    def _think_done(self, v):
+        st = self._sess.get(self._session_id)
+        if st is not None:
+            st["think_done"] = bool(v)
+
+    @property
+    def _think_start(self):
+        return float(self._cur().get("think_start") or 0.0)
+
+    @_think_start.setter
+    def _think_start(self, v):
+        st = self._sess.get(self._session_id)
+        if st is not None:
+            st["think_start"] = float(v)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -2478,27 +2531,32 @@ class AgentPanel(QDialog):
         # /compact 压缩中的打字指示器行（与任务转圈独立，互不干扰）
         self._compact_row = None
 
-        # 任务结束徽章状态
+        # 会话运行时状态存储：属性 _task_active/_user_stopped/_think_* 读写当前会话，
+        # 必须先于其初始化（多对话并发：每会话独立引擎/段缓冲/排队消息）
+        self._session_id = ""          # 当前会话 id
+        self._session_name = "新对话"  # 当前会话名称
+        # st = {engine, loaded, segments, history_segments, rows, user_msgs,
+        #       sub_segs, user_stopped, end_badge_shown, think_done, think_start,
+        #       task_active, queued}
+        self._sess: dict = {}
+        self._user_msgs: list = []     # 当前会话的用户消息文本（用于切换时重绘）
+        self._rows: list = []          # 用户消息与 AI 回复的交错顺序行（[{"type": "user"/"ai", ...}]）
+
+        # 任务结束徽章状态（按会话存于 _sess，属性读写当前会话）
         self._user_stopped = False     # 用户手动点击停止
         self._end_badge_shown = False  # 防止重复显示结束徽章
 
-        # 流式思考过程状态
+        # 流式思考过程状态（按会话存于 _sess）
         self._think_start = 0.0        # 本轮思考开始时间（time.time）
         self._think_done = False       # 思考是否已完成（已输出"已思考 x 秒"）
 
         # 卡死兜底 hooks：最近一次有输出/状态的时间戳（供 UI 反馈，不再自动强停）
         self._last_activity = 0.0      # 最近一次有输出/状态的时间戳
         self._task_active = False      # 是否有任务在执行（结束收尾的可靠依据）
-        self._eval_pending = None      # 任务难度评估待启动参数 (ai_text, send_images, skill_names)
+        self._eval_pending = None      # 任务难度评估待启动参数 (sid, ai_text, send_images, skill_names)
         # 管理员权限下的原生拖放（UIPI 绕行，仅提权时启用）
         self._admin_dnd = False
         self._admin_drop_filter = None
-
-        # 多对话（会话）状态：切换隔离上下文，AI 自动命名
-        self._session_id = ""          # 当前会话 id
-        self._session_name = "新对话"  # 当前会话名称
-        self._user_msgs: list = []     # 当前会话的用户消息文本（用于切换时重绘）
-        self._rows: list = []          # 用户消息与 AI 回复的交错顺序行（[{"type": "user"/"ai", ...}]，持久化保证重启顺序正确）
         self._scroll_pending = False   # 滚动调度去重标志
         self._bubble_widgets: list = []  # 所有气泡 QLabel（窗口缩放时同步宽度）
         self._bubble_segs: dict = {}     # 气泡 id → 其 AI 段列表（思考折叠/展开局部重渲染用）
@@ -2650,6 +2708,36 @@ class AgentPanel(QDialog):
         self._attach_bar.setVisible(False)
         right.addWidget(self._attach_bar)
 
+        # 排队消息提示条：任务运行中发送的消息在此显示，可编辑/删除（无 emoji，矢量风格）
+        self._queue_bar = QWidget()
+        self._queue_bar.setStyleSheet("background: transparent;")
+        qb_lay = QHBoxLayout(self._queue_bar)
+        qb_lay.setContentsMargins(0, 0, 0, 0)
+        qb_lay.setSpacing(8)
+        qb_tag = QLabel("排队中")
+        qb_tag.setStyleSheet(f"color: {ACCENT_HOVER}; font-size: 12px; font-weight: 700;")
+        qb_lay.addWidget(qb_tag)
+        self._queue_preview = QLabel("")
+        self._queue_preview.setStyleSheet(f"color: {TEXT_DIM}; font-size: 12px;")
+        self._queue_preview.setWordWrap(True)
+        qb_lay.addWidget(self._queue_preview, 1)
+        qb_edit = QPushButton("编辑")
+        qb_edit.setCursor(Qt.CursorShape.PointingHandCursor)
+        qb_edit.setAutoDefault(False)
+        qb_edit.setStyleSheet(_BTN_GHOST)
+        qb_edit.setToolTip("把排队消息回填到输入框修改（修改后重新发送即替换）")
+        qb_edit.clicked.connect(self._on_queue_edit)
+        qb_lay.addWidget(qb_edit)
+        qb_del = QPushButton("删除")
+        qb_del.setCursor(Qt.CursorShape.PointingHandCursor)
+        qb_del.setAutoDefault(False)
+        qb_del.setStyleSheet(_BTN_GHOST)
+        qb_del.setToolTip("取消该排队消息")
+        qb_del.clicked.connect(self._on_queue_delete)
+        qb_lay.addWidget(qb_del)
+        self._queue_bar.setVisible(False)
+        right.addWidget(self._queue_bar)
+
         # 输入栏
         bottom = QHBoxLayout()
         bottom.setSpacing(10)
@@ -2711,16 +2799,12 @@ class AgentPanel(QDialog):
         add_brand_footer(self)
 
     def _connect_signals(self):
-        self.delta_signal.connect(self._on_delta)
-        self.status_signal.connect(self._on_status)
-        self.result_signal.connect(self._on_result)
-        self.reasoning_signal.connect(self._on_reasoning)
-        self.sub_signal.connect(self._on_sub_event)
         self.confirm_signal.connect(self._on_confirm)
         self.ask_signal.connect(self._on_ask)
         self.eval_signal.connect(self._on_assess_done)
         self.compact_signal.connect(self._on_compact_done)
         self.switch_ready.connect(self._finish_switch)
+        self.evt_signal.connect(self._route)
 
     # ---------- 欢迎页（无对话时居中介绍 AI 功能） ----------
 
@@ -2808,6 +2892,364 @@ class AgentPanel(QDialog):
         self._save_session_list(lst)
         return s
 
+    # ---------- 多对话并发：会话状态存储 / 引擎路由 / 排队消息 ----------
+    def _new_sess_state(self, sid: str) -> dict:
+        """新建会话运行时状态（内存段缓冲 + 独立引擎 + 排队消息）"""
+        return {
+            "engine": None,
+            "loaded": False,          # 是否已建立内存态（首次从磁盘加载后置 True）
+            "segments": [],
+            "history_segments": [],
+            "rows": [],
+            "user_msgs": [],
+            "sub_segs": {},
+            "user_stopped": False,
+            "end_badge_shown": False,
+            "think_done": False,
+            "think_start": 0.0,
+            "task_active": False,
+            "queued": None,           # 排队消息 payload：{text, images, files, ai_text, skill_names, shot}
+        }
+
+    def _bind_sess(self, sid: str):
+        """把当前工作属性指向指定会话的内存缓冲（切换会话时调用）"""
+        st = self._sess.setdefault(sid, self._new_sess_state(sid))
+        self._segments = st["segments"]
+        self._history_segments = st["history_segments"]
+        self._rows = st["rows"]
+        self._user_msgs = st["user_msgs"]
+        self._sub_segs = st["sub_segs"]
+
+    def _commit_sess(self):
+        """把当前工作属性回写进当前会话状态（在 reassign 后/切换前调用）"""
+        st = self._sess.get(self._session_id)
+        if st is None:
+            return
+        st["segments"] = self._segments
+        st["history_segments"] = self._history_segments
+        st["rows"] = self._rows
+        st["user_msgs"] = self._user_msgs
+        st["sub_segs"] = self._sub_segs
+
+    def _persist_sid(self, sid: str, st: dict):
+        """持久化指定会话到磁盘（后台任务结束/切换时调用，UI 线程轻量快存）"""
+        if not sid or not st:
+            return
+        d = self._sessions_dir()
+        d.mkdir(parents=True, exist_ok=True)
+        eng = st.get("engine")
+        if eng:
+            threading.Thread(target=lambda: eng.save_context(d / f"{sid}.json"),
+                             daemon=True).start()
+        try:
+            clean_segments = [
+                seg for seg in (st["history_segments"] + st["segments"])
+                if not (seg.get("type") == "mark" and seg.get("html") == "已停止")
+            ]
+            rows = [dict(r, segs=[s for s in r.get("segs") or []
+                                  if not (s.get("type") == "mark" and s.get("html") == "已停止")])
+                    if r.get("type") == "ai" else r
+                    for r in (st["rows"] or [])]
+            if st["segments"] and not (rows and rows[-1].get("type") == "ai"):
+                rows.append({"type": "ai", "segs": [
+                    s for s in st["segments"]
+                    if not (s.get("type") == "mark" and s.get("html") == "已停止")]})
+            with open(d / f"{sid}.ui.json", "w", encoding="utf-8") as f:
+                json.dump({"segments": clean_segments, "user_msgs": st["user_msgs"],
+                           "rows": rows}, f, ensure_ascii=False)
+        except Exception:
+            pass
+        lst = self._load_session_list()
+        for x in lst:
+            if x.get("id") == sid:
+                x["updated"] = time.time()
+        self._save_session_list(lst)
+
+    def _engine_for(self, sid: str):
+        """返回指定会话的引擎（不存在则创建）；当前会话同步 self._engine 引用"""
+        st = self._sess.setdefault(sid, self._new_sess_state(sid))
+        eng = st.get("engine")
+        if eng is None:
+            eng = self._build_engine(sid)
+            st["engine"] = eng
+        if sid == self._session_id:
+            self._engine = eng
+        return eng
+
+    def _build_engine(self, sid: str):
+        """按会话创建独立引擎：事件回调携带 sid 经信号路由到对应会话缓冲
+        （后台会话生成不中断、不污染当前视图，实现多对话并发）"""
+        cfg = self._llm_config()
+        client = agent_llm.LLMClient(
+            base_url=cfg.get("base_url"), api_key=cfg.get("api_key"),
+            model=cfg.get("model"), protocol=cfg.get("protocol", "chat"))
+        return agent_engine.AgentEngine(
+            client,
+            mcp_manager=self._mcp,
+            on_delta=lambda s, _sid=sid: self.evt_signal.emit(_sid, "delta", s),
+            on_status=lambda s, _sid=sid: self.evt_signal.emit(_sid, "status", s),
+            on_result=lambda n, t, im, _sid=sid: self.evt_signal.emit(_sid, "result", (n, t, im)),
+            on_reasoning=lambda s, _sid=sid: self.evt_signal.emit(_sid, "reasoning", s),
+            on_sub_event=lambda k, i, t, s, _sid=sid: self.evt_signal.emit(_sid, "sub", (k, i, t, s)),
+            confirm=self._confirm_tool,
+            ask_user=self._ask_user_tool,
+            text_only=self._text_only,
+            memory_enabled=self._memory_enabled,
+            direct=self._mode == "yolo")
+
+    def _route(self, sid: str, kind: str, payload):
+        """会话事件路由（主线程）：前台会话走渲染，后台会话只更新内存缓冲"""
+        if sid != self._session_id:
+            self._bg_event(sid, kind, payload)
+            return
+        if kind == "delta":
+            self._on_delta(payload)
+        elif kind == "status":
+            self._on_status(payload)
+        elif kind == "result":
+            name, text, images = payload
+            self._on_result(name, text, images)
+        elif kind == "reasoning":
+            self._on_reasoning(payload)
+        elif kind == "sub":
+            k, i, t, s = payload
+            self._on_sub_event(k, i, t, s)
+
+    def _bg_event(self, sid: str, kind: str, payload):
+        """后台会话任务事件：只更新该会话内存缓冲并在结束落盘，不渲染 UI"""
+        st = self._sess.get(sid)
+        if st is None:
+            return
+        segs = st["segments"]
+        if kind == "delta":
+            if segs and segs[-1].get("type") == "text":
+                segs[-1]["raw"] += payload
+            else:
+                segs.append({"type": "text", "raw": payload})
+            return
+        if kind == "reasoning":
+            if segs and segs[0].get("type") == "think":
+                segs[0]["html"] += payload
+            else:
+                segs.insert(0, {"type": "think", "html": payload})
+            return
+        if kind == "result":
+            name, text, images = payload
+            shown = (text or "").strip()
+            if len(shown) > 20000:
+                shown = shown[:20000] + " …（输出过长已截断显示，完整内容已返回模型）"
+            shown = _esc(shown).replace("\n", "<br/>")
+            segs.append({"type": "result", "html": shown, "collapsed": False})
+            for u in images or []:
+                segs.append({"type": "image", "url": u, "caption": "已截屏"})
+            return
+        if kind == "sub":
+            k, idx, title, text = payload
+            if k == "start":
+                seg = {"type": "sub", "title": title, "raw": ""}
+                st["sub_segs"][idx] = seg
+                segs.append(seg)
+            elif k == "delta":
+                seg = st["sub_segs"].get(idx)
+                if seg is None:
+                    for s in reversed(segs):
+                        if s.get("type") == "sub" and s.get("title") == title:
+                            seg = s
+                            break
+                if seg is None:
+                    seg = {"type": "sub", "title": title, "raw": ""}
+                    st["sub_segs"][idx] = seg
+                    segs.append(seg)
+                seg["raw"] += text
+            return
+        if kind == "status":
+            s = payload
+            if s == "正在思考…":
+                return
+            if s.startswith(("待执行工具:", "正在执行:", "正在调用技能:", "技能已调用:")):
+                name = s.split(":", 1)[1].strip()
+                segs.append({"type": "op", "html": f"▎{_esc(name)}"})
+                return
+            if s == "完成" or s == "已停止" or s.startswith("错误"):
+                st["task_active"] = False
+                self._persist_sid(sid, st)   # 后台任务结束立即落盘，切回即完整
+                self._flush_queue(sid)       # 本轮完成 → 自动发送排队消息
+            return
+
+    # ---------- 消息排队：任务运行中发消息 → 排队，本轮完成后自动发送 ----------
+    def _update_queue_bar(self):
+        """刷新当前会话的排队提示条（有排队消息显示，无则隐藏）"""
+        st = self._sess.get(self._session_id)
+        q = (st or {}).get("queued")
+        if q:
+            preview = (q.get("text") or "").strip().replace("\n", " ")
+            if len(preview) > 28:
+                preview = preview[:28] + "…"
+            self._queue_preview.setText(f"“{_esc(preview)}”")
+            self._queue_bar.setVisible(True)
+        else:
+            self._queue_bar.setVisible(False)
+
+    def _on_queue_edit(self, *_):
+        """编辑排队消息：内容回填输入框并取消排队"""
+        st = self._sess.get(self._session_id)
+        q = (st or {}).get("queued")
+        if not q:
+            return
+        self.input.setPlainText(q.get("text") or "")
+        st["queued"] = None
+        self._update_queue_bar()
+        self.input.setFocus()
+
+    def _on_queue_delete(self, *_):
+        """删除排队消息"""
+        st = self._sess.get(self._session_id)
+        if st:
+            st["queued"] = None
+        self._update_queue_bar()
+
+    def _flush_queue(self, sid: str):
+        """该会话本轮任务完成后：若存在排队消息则自动发送"""
+        st = self._sess.get(sid)
+        if not st or not st.get("queued"):
+            return
+        eng = st.get("engine")
+        if eng and eng._thread and eng._thread.is_alive():
+            return     # 该会话仍有任务在跑，继续等待
+        q = st["queued"]
+        st["queued"] = None
+        if sid == self._session_id:
+            self._update_queue_bar()
+            self._do_send(q)
+        else:
+            self._bg_send(sid, q)
+
+    def _build_payload(self, text: str, images: list, files: list):
+        """解析输入为发送 payload（排队/直接发送共用）；无法解析返回 None"""
+        ai_text = text
+        skill_names = []
+        skill, skill_prompt = self._match_skill(text)
+        if skill:
+            self._add_status(f"已调用技能「{skill.get('name')}」", ACCENT)
+            skill_names = [skill.get("name")]
+            ai_text = skill_prompt or f"请严格按技能「{skill.get('name')}」的流程执行。"
+        tool = self._match_tool(text)
+        shot = None
+        if tool:
+            tname, targs = tool
+            self._add_status(f"已指定工具「{tname}」", ACCENT)
+            if tname == "screenshot":
+                try:
+                    shot = agent_screen.capture_screen_data_url(grid=False)
+                    ai_text = "已截取当前屏幕并展示在对话中，请基于截图内容回答或继续执行。"
+                except Exception:
+                    shot = None
+            else:
+                ai_text = (f"请调用工具「{tname}」完成以下任务，参数必须按 JSON 传入。\n"
+                           f"工具参数说明：{self._tool_params_hint(tname)}\n"
+                           f"参数原始文本：{targs or '(无，可自行确定合理参数，不确定时先 ask_user 澄清)'}")
+        if files:
+            note = "以下为拖入的附件文件，请按需读取内容：\n" + \
+                "\n".join(f"- {p}" for p in files)
+            ai_text = (ai_text + "\n\n" if ai_text else "") + note
+        return {"text": text, "images": images, "files": files,
+                "ai_text": ai_text, "skill_names": skill_names, "shot": shot}
+
+    def _do_send(self, p: dict):
+        """按已解析的 payload 发送消息（前台：渲染用户气泡 + 启动任务）"""
+        text = p.get("text") or ""
+        ai_text = p.get("ai_text") or text
+        skill_names = p.get("skill_names") or []
+        images = list(p.get("images") or [])
+        files = list(p.get("files") or [])
+        shot = p.get("shot")
+        self._auto_name_session(ai_text)
+        # 归档上一轮 AI 回复到历史（须在追加新用户消息前完成，保证交错行顺序正确）
+        if self._segments:
+            self._history_segments.extend(self._segments)
+            self._history_segments.append({"type": "split"})
+            self._rows.append({"type": "ai", "segs": list(self._segments)})
+        self._ai_bubble = None
+        self._segments.clear()
+        self._user_msgs.append(text)
+        self._rows.append({"type": "user", "text": text})
+        self._update_welcome()          # 发消息后欢迎介绍立即消失
+        # 用户气泡：文字与拖入的图片/文件一并渲染进同一气泡
+        if images or files:
+            parts = ([f'<div style="font-size:14px;">{_esc(text).replace(chr(10), "<br/>")}</div>']
+                     if text else [])
+            parts += [f'<img src="{u}" width="200" style="border-radius:10px;'
+                      'border:1px solid #000000;display:block;margin:10px 0;">' for u in images]
+            for pth in files:
+                fname = os.path.basename(pth)
+                fsize = self._file_size_text(pth)
+                parts.append(
+                    f'<div style="display:inline-block;vertical-align:middle;'
+                    f'background:#152036;border:1px solid #000000;border-radius:10px;'
+                    'padding:7px 10px;margin:10px 8px 10px 0;">'
+                    f'<img src="{self._file_thumb_data_url(pth)}" width="34" height="34" '
+                    'style="vertical-align:middle;border-radius:6px;">'
+                    f'<span style="vertical-align:middle;margin-left:8px;">'
+                    f'<span style="color:{TEXT};font-size:13px;">{_esc(fname[:18])}</span>'
+                    f'<br><span style="color:{TEXT_DIM};font-size:10px;">{_esc(fsize or "文件")}</span>'
+                    f'</span></div>')
+            src = "<br/>".join(parts)
+            b = self._add_bubble(self._scale_user_html(src, self._font_scale()), "user", rich=True)
+            b.setProperty("rich_src", src)
+        else:
+            self._add_bubble(text, "user")
+        send_images = list(images)
+        if shot:
+            send_images.append(agent_screen.capture_screen_data_url(grid=True))
+        if shot:
+            self._segments.append({"type": "image", "url": shot, "caption": "已截屏"})
+        self._user_stopped = False
+        self._end_badge_shown = False
+        self._think_done = False
+        self._think_start = 0.0
+        self._last_activity = time.time()
+        self.input.clear()
+        self.input.setFocus()
+        est = agent_llm.estimate_tokens(text) + \
+            agent_llm.estimate_image_tokens() * len(send_images)
+        self.token_label.setText(f"~{est} tk")
+        self._set_action_busy()   # 发送后按钮变转圈（可点击停止）
+        self._clear_attachments()   # 发送后清空附件条
+        self._commit_sess()       # segments 已重建，回写当前会话状态
+        self._task_active = True
+        # 模型路由：自动选择模式（下拉「自动选择」未手动指定模型）先由内置
+        # agnes 评估任务难度（后台线程），评估后按难度+视觉需求自动选合适模型。
+        if not self._model_override:
+            self._eval_pending = (self._session_id, ai_text, send_images, skill_names)
+            threading.Thread(target=self._assess_worker, daemon=True).start()
+        else:
+            self._launch_task(ai_text, send_images, skill_names,
+                              self._resolve_effort(ai_text), sid=self._session_id)
+
+    def _bg_send(self, sid: str, q: dict):
+        """后台会话：直接在该会话引擎上启动排队消息任务（不渲染 UI）"""
+        st = self._sess.get(sid)
+        if not st:
+            return
+        segs = st["segments"]
+        if segs:
+            st["history_segments"].extend(segs)
+            st["history_segments"].append({"type": "split"})
+            st["rows"].append({"type": "ai", "segs": list(segs)})
+        st["segments"] = []
+        st["user_msgs"].append(q.get("text") or "")
+        st["rows"].append({"type": "user", "text": q.get("text") or ""})
+        st["task_active"] = True
+        ai_text = q.get("ai_text") or q.get("text") or ""
+        send_images = list(q.get("images") or [])
+        if q.get("shot"):
+            try:
+                send_images.append(agent_screen.capture_screen_data_url(grid=True))
+            except Exception:
+                pass
+        self._launch_task(ai_text, send_images, q.get("skill_names") or [],
+                          self._resolve_effort(ai_text), sid=sid)
+
     def _persist_current(self):
         """保存当前会话：模型消息 + 界面气泡（segments/用户消息）+ 更新时间。
         模型上下文（含图片压缩，耗时）后台线程异步落盘，UI 线程只做轻量 JSON 快存，
@@ -2865,84 +3307,106 @@ class AgentPanel(QDialog):
             self._switch_to(sid)
 
     def _switch_to(self, sid: str):
-        """切换会话：保存当前 → 清空当前 UI → 后台线程读取目标数据，加载完成一次性渲染
-        （文件读取/上下文恢复放后台，避免切换时主线程阻塞）"""
+        """切换会话（多对话并发）：当前会话后台任务不中断；目标会话若已有内存态
+        （可能仍在后台生成）直接恢复渲染，首次进入则后台读盘后一次性渲染。"""
+        self._commit_sess()
         self._persist_current()
         self._session_id = sid
         lst = self._load_session_list()
         s = next((x for x in lst if x.get("id") == sid), None)
         self._session_name = s.get("name", "新对话") if s else "新对话"
-        self._ai_bubble = None
-        self._segments = []
-        self._history_segments = []
-        self._sub_segs = {}
-        self._user_msgs = []
-        self._rows = []
         self._hide_spinner()
         while self.msg_lay.count() > 1:  # 清空消息流（保留末尾 stretch）
             item = self.msg_lay.takeAt(0)
             self._free_layout_item(item)
         self._bubble_widgets = []
         self._bubble_segs = {}
-        d = self._sessions_dir()
-        eng = self._ensure_engine()
+        st = self._sess.get(sid)
+        if st is not None and (st["segments"] or st["rows"] or st["queued"]):
+            # 内存态有实时内容（新建会话的任务/排队/后台生成中）：直接恢复，不覆盖
+            st["loaded"] = True
+            self._bind_sess(sid)
+            self._render_history_all()
+            self._end_badge_shown = False
+            self._refresh_session_combo()
+            self._update_welcome()
+            self._scroll_bottom()
+            self._update_queue_bar()
+        else:
+            # 首次进入（或内存态为空）：新建/复用内存态并后台读盘补齐历史
+            st = self._new_sess_state(sid) if st is None else st
+            self._sess[sid] = st
+            self._bind_sess(sid)
+            d = self._sessions_dir()
+            eng = self._engine_for(sid)
 
-        def _load():
-            try:
-                eng.load_context(d / f"{sid}.json")
-            except Exception:
-                pass
-            segs, ums, rows = [], [], []
-            data = {}
-            try:
-                with open(d / f"{sid}.ui.json", encoding="utf-8") as f:
-                    data = json.load(f)
-                segs, ums = data.get("segments") or [], data.get("user_msgs") or []
-            except Exception:
-                pass
-            rows = [r for r in (data.get("rows") or [])
-                    if isinstance(r, dict) and r.get("type") in ("user", "ai")]
-            return segs, ums, rows
+            def _load():
+                try:
+                    eng.load_context(d / f"{sid}.json")
+                except Exception:
+                    pass
+                segs, ums, rows = [], [], []
+                data = {}
+                try:
+                    with open(d / f"{sid}.ui.json", encoding="utf-8") as f:
+                        data = json.load(f)
+                    segs, ums = data.get("segments") or [], data.get("user_msgs") or []
+                except Exception:
+                    pass
+                rows = [r for r in (data.get("rows") or [])
+                        if isinstance(r, dict) and r.get("type") in ("user", "ai")]
+                self.switch_ready.emit(sid, segs, ums, rows)
 
-        threading.Thread(target=lambda: self.switch_ready.emit(_load()),
-                         daemon=True).start()
+            threading.Thread(target=_load, daemon=True).start()
 
-    def _finish_switch(self, res: tuple):
+    def _finish_switch(self, sid: str, segs: list, ums: list, rows: list):
         """会话切换收尾（主线程）：用后台线程读到的数据一次性渲染"""
-        segs, ums, rows = res
-        self._user_msgs = ums
-        self._rows = rows
+        if sid != self._session_id:
+            return   # 用户已切走，丢弃过期加载，防止覆盖当前视图
+        st = self._sess[sid]
+        # 读盘期间用户已发送/排队/后台生成产生了实时内容 → 以实时内容为准，不覆盖
+        if st["segments"] or st["rows"] or st["queued"]:
+            st["loaded"] = True
+            self._bind_sess(sid)
+            self._render_history_all()
+            self._end_badge_shown = False
+            self._refresh_session_combo()
+            self._update_welcome()
+            self._scroll_bottom()
+            self._update_queue_bar()
+            return
+        st["user_msgs"] = list(ums)
+        st["rows"] = list(rows)
         # 加载时过滤掉旧版本中持久化的“已停止”提示小字，避免重启后仍显示
-        self._history_segments = [
+        st["history_segments"] = [
             seg for seg in (segs or [])
             if not (seg.get("type") == "mark" and seg.get("html") == "已停止")
         ]
-        self._segments = []
+        st["segments"] = []
+        st["loaded"] = True
+        self._bind_sess(sid)
         # 旧版文件无 rows：按段流重建交错行，保证本会话后续持久化不回退
         if not self._rows:
             self._rows = self._reconstruct_rows()
+        self._commit_sess()
         self._render_history_all()   # 用户气泡与 AI 回复按轮次交错重绘（每条 AI 回复一个气泡）
         self._end_badge_shown = False
         self._refresh_session_combo()
         self._update_welcome()
         self._scroll_bottom()
+        self._update_queue_bar()
 
     def _new_session(self, *_):
-        """新开对话：保存当前 → 创建空会话（上下文与旧对话隔离）"""
-        if self._engine and self._engine._thread and self._engine._thread.is_alive():
-            self._engine.stop()
+        """新开对话：保存当前 → 创建空会话（当前会话后台任务不中断，多对话并发）"""
+        self._commit_sess()
         self._persist_current()
         s = self._create_session()
         self._session_id = s["id"]
         self._session_name = "新对话"
-        if self._engine:
-            self._engine.clear_history()
+        self._sess[s["id"]] = self._new_sess_state(s["id"])
+        self._bind_sess(s["id"])
         self._ai_bubble = None
-        self._segments = []
-        self._history_segments = []
-        self._sub_segs = {}
-        self._user_msgs = []
-        self._rows = []
+        self._seg_cache.clear()
         self._hide_spinner()
         while self.msg_lay.count() > 1:
             item = self.msg_lay.takeAt(0)
@@ -2953,6 +3417,7 @@ class AgentPanel(QDialog):
         self._update_welcome()
         self._add_status("已开启新对话，上下文与旧对话隔离", ACCENT)
         self._scroll_bottom()
+        self._update_queue_bar()
 
     def _auto_name_session(self, text: str):
         """AI 自动命名：会话无名称时用首条消息前 20 字命名"""
@@ -3194,7 +3659,8 @@ class AgentPanel(QDialog):
 
     def _sync_action_style(self, *_):
         """输入框内容变化：空闲时刷新发送按钮配色（空→灰蓝，有内容→深蓝）"""
-        if not self._task_active and self._eval_pending is None:
+        ep = self._eval_pending
+        if not self._task_active and not (ep is not None and ep[0] == self._session_id):
             self._set_action_idle()
 
     def _set_action_busy(self):
@@ -3223,7 +3689,8 @@ class AgentPanel(QDialog):
 
     def _on_action_clicked(self, *_):
         """融合按钮点击：空闲→发送；运行中→停止"""
-        if self._task_active or self._eval_pending is not None:
+        ep = self._eval_pending
+        if self._task_active or (ep is not None and ep[0] == self._session_id):
             self._stop()
         else:
             self._send()
@@ -3740,22 +4207,26 @@ class AgentPanel(QDialog):
         self._memory_enabled = bool(s.get("memory_enabled", True))
         if self._text_only:
             self._add_status("纯文本模型：已禁用图片上传与截图工具", WARN)
-        if self._engine is not None:
-            busy = self._engine._thread and self._engine._thread.is_alive()
+        if self._sess:
+            busy = any(st.get("engine") and st["engine"]._thread
+                       and st["engine"]._thread.is_alive() for st in self._sess.values())
             if busy:
                 self._add_status("当前有任务进行中，新设置将在任务结束后生效", WARN)
                 return
             # 复用引擎：仅更新连接参数与开关，不重建 → 对话上下文（_messages）
             # 与 token 统计完整保留；每次发送前 _launch_task 还会按模型路由重设连接参数
             cfg = self._llm_config()
-            eng = self._engine
-            eng.llm.base_url = (cfg.get("base_url") or agent_llm.DEFAULT_BASE_URL).rstrip("/")
-            eng.llm.api_key = cfg.get("api_key") or agent_llm.DEFAULT_API_KEY
-            eng.llm.protocol = cfg.get("protocol", "chat")
-            eng.llm.model = cfg.get("model") or agent_llm.DEFAULT_MODEL
-            eng.text_only = self._text_only
-            eng.memory_enabled = self._memory_enabled
-            eng.direct = self._mode == "yolo"
+            for st in self._sess.values():
+                eng = st.get("engine")
+                if not eng:
+                    continue
+                eng.llm.base_url = (cfg.get("base_url") or agent_llm.DEFAULT_BASE_URL).rstrip("/")
+                eng.llm.api_key = cfg.get("api_key") or agent_llm.DEFAULT_API_KEY
+                eng.llm.protocol = cfg.get("protocol", "chat")
+                eng.llm.model = cfg.get("model") or agent_llm.DEFAULT_MODEL
+                eng.text_only = self._text_only
+                eng.memory_enabled = self._memory_enabled
+                eng.direct = self._mode == "yolo"
             return
         self._ensure_engine()
 
@@ -3963,33 +4434,16 @@ class AgentPanel(QDialog):
         return self._model_cfg
 
     def _ensure_engine(self):
-        """复用同一引擎：保留跨任务对话上下文"""
-        if self._engine is None:
-            cfg = self._llm_config()
-            client = agent_llm.LLMClient(
-                base_url=cfg.get("base_url"), api_key=cfg.get("api_key"),
-                model=cfg.get("model"), protocol=cfg.get("protocol", "chat"))
-            self._engine = agent_engine.AgentEngine(
-                client,
-                mcp_manager=self._mcp,
-                on_delta=lambda s: self.delta_signal.emit(s),
-                on_status=lambda s: self.status_signal.emit(s),
-                on_result=lambda n, t, im: self.result_signal.emit(n, t, im),
-                on_reasoning=lambda s: self.reasoning_signal.emit(s),
-                on_sub_event=lambda k, i, t, s: self.sub_signal.emit(k, i, t, s),
-                confirm=self._confirm_tool,
-                ask_user=self._ask_user_tool,
-                text_only=self._text_only,
-                memory_enabled=self._memory_enabled,
-                direct=self._mode == "yolo")
-        return self._engine
+        """复用当前会话的引擎（多对话并发：每会话独立引擎，保留各自上下文）"""
+        return self._engine_for(self._session_id)
 
     def _send(self):
+        """发送消息：任务运行中（含评估阶段）则进入排队，本轮完成后自动发送；
+        空闲则直接发送。排队消息可在提示条编辑或删除。"""
         text = self.input.toPlainText().strip()
         images = list(self._pending_images)
         files = list(self._pending_files)
-        if (not text and not images) or \
-                (self._engine and self._engine._thread and self._engine._thread.is_alive()):
+        if not text and not images:
             return
         if text.lower().startswith("/compact"):
             self._do_compact()
@@ -3997,112 +4451,33 @@ class AgentPanel(QDialog):
         if text.lower().startswith("/clear"):
             self._clear_chat()
             return
-        ai_text = text                       # 传给 AI 的文本（默认=原文）；原文用于用户气泡显示
-        skill_names = []
-        # 手动调用内置技能：/技能名 [提示] → 技能 instruction 注入本次系统提示词，提示作为用户消息
-        skill, skill_prompt = self._match_skill(text)
-        if skill:
-            self._add_status(f"已调用技能「{skill.get('name')}」", ACCENT)
-            skill_names = [skill.get("name")]
-            ai_text = skill_prompt or f"请严格按技能「{skill.get('name')}」的流程执行。"
-        # 手动指定工具：/工具名 [参数] → 转成指令由 AI 调用对应工具
-        tool = self._match_tool(text)
-        shot = None
-        if tool:
-            tname, targs = tool
-            self._add_status(f"已指定工具「{tname}」", ACCENT)
-            if tname == "screenshot":
-                # 手动截屏：面板直接截图并展示（不依赖 AI 调用工具，保证必定出图）
-                try:
-                    shot = agent_screen.capture_screen_data_url(grid=False)   # 展示用干净原图
-                    ai_text = "已截取当前屏幕并展示在对话中，请基于截图内容回答或继续执行。"
-                except Exception:
-                    shot = None
-            else:
-                ai_text = (f"请调用工具「{tname}」完成以下任务，参数必须按 JSON 传入。\n"
-                           f"工具参数说明：{self._tool_params_hint(tname)}\n"
-                           f"参数原始文本：{targs or '(无，可自行确定合理参数，不确定时先 ask_user 澄清)'}")
-        # 非图片附件：把路径文本附加给 AI（不显示源内容），AI 可按需 read_file
-        if files:
-            note = "以下为拖入的附件文件，请按需读取内容：\n" + \
-                "\n".join(f"- {p}" for p in files)
-            ai_text = (ai_text + "\n\n" if ai_text else "") + note
-        self._auto_name_session(ai_text)   # 无名称会话：用首条消息自动命名
-        # 归档上一轮 AI 回复到历史（须在追加新用户消息前完成，保证交错行顺序正确）
-        if self._segments:
-            self._history_segments.extend(self._segments)
-            self._history_segments.append({"type": "split"})
-            self._rows.append({"type": "ai", "segs": list(self._segments)})
-        self._ai_bubble = None
-        self._segments = []
-        self._user_msgs.append(text)
-        self._rows.append({"type": "user", "text": text})
-        self._update_welcome()          # 发消息后欢迎介绍立即消失
-
-        # 用户气泡：文字与拖入的图片/文件一并渲染进同一气泡
-        # 图片为圆角缩略图；文件为紧凑卡片（徽章+文件名+大小）横排，统一深色卡片风
-        if images or files:
-            parts = ([f'<div style="font-size:14px;">{_esc(text).replace(chr(10), "<br/>")}</div>']
-                     if text else [])
-            parts += [f'<img src="{u}" width="200" style="border-radius:10px;'
-                      'border:1px solid #000000;display:block;margin:10px 0;">' for u in images]
-            for p in files:
-                fname = os.path.basename(p)
-                fsize = self._file_size_text(p)
-                parts.append(
-                    f'<div style="display:inline-block;vertical-align:middle;'
-                    f'background:#152036;border:1px solid #000000;border-radius:10px;'
-                    'padding:7px 10px;margin:10px 8px 10px 0;">'
-                    f'<img src="{self._file_thumb_data_url(p)}" width="34" height="34" '
-                    'style="vertical-align:middle;border-radius:6px;">'
-                    f'<span style="vertical-align:middle;margin-left:8px;">'
-                    f'<span style="color:{TEXT};font-size:13px;">{_esc(fname[:18])}</span>'
-                    f'<br><span style="color:{TEXT_DIM};font-size:10px;">{_esc(fsize or "文件")}</span>'
-                    f'</span></div>')
-            src = "<br/>".join(parts)
-            b = self._add_bubble(self._scale_user_html(src, self._font_scale()),
-                                 "user", rich=True)
-            b.setProperty("rich_src", src)   # 存未缩放原文，窗口全屏时按缩放系数重渲染
-        else:
-            self._add_bubble(text, "user")
-        # 手动截屏：截图段进 AI 气泡（缩略图融入主对话气泡，不额外显示提示小字）
-        send_images = list(images)
-        if shot:
-            # 喂给模型时带坐标网格（精确点击定位），展示用干净原图
-            send_images.append(agent_screen.capture_screen_data_url(grid=True))
-        if shot:
-            self._segments.append({"type": "image", "url": shot, "caption": "已截屏"})
-        self._user_stopped = False
-        self._end_badge_shown = False
-        self._think_done = False
-        self._think_start = 0.0
-        self._last_activity = time.time()
-        self.input.clear()
-        self.input.setFocus()
-
-        est = agent_llm.estimate_tokens(text) + \
-            agent_llm.estimate_image_tokens() * len(send_images)
-        self.token_label.setText(f"~{est} tk")
-
-        self._set_action_busy()   # 发送后按钮变转圈（可点击停止）
-
-        self._clear_attachments()   # 发送后清空附件条
-        self._task_active = True
-        # 模型路由：自动选择模式（下拉「自动选择」未手动指定模型）先由内置
-        # agnes 评估任务难度（后台线程），评估后按难度+视觉需求自动选合适模型。
-        # 手动指定模型则直接启动（不再评估）。
-        if not self._model_override:
-            self._eval_pending = (ai_text, send_images, skill_names)
-            # 评估静默进行，不显示任何评估提示语/动画；任务正式启动后由引擎触发转圈
-            threading.Thread(target=self._assess_worker, daemon=True).start()
-        else:
-            self._launch_task(ai_text, send_images, skill_names,
-                              self._resolve_effort(ai_text))
+        payload = self._build_payload(text, images, files)
+        if payload is None:
+            return
+        # 本会话有任务运行中/评估中 → 消息排队
+        busy = self._task_active
+        ep = self._eval_pending
+        if ep is not None and ep[0] == self._session_id:
+            busy = True
+        eng = self._engine_for(self._session_id)
+        if eng._thread and eng._thread.is_alive():
+            busy = True
+        if busy:
+            self._sess[self._session_id]["queued"] = payload
+            self.input.clear()
+            self._clear_attachments()
+            self._update_queue_bar()
+            self._add_status("消息已排队，当前任务完成后自动发送（可编辑或删除）", ACCENT)
+            return
+        self._do_send(payload)
 
     def _launch_task(self, ai_text: str, send_images: list, skill_names: list,
-                     effort: str):
-        """按力度/评估结果路由模型并启动任务（评估完成或手动模式时调用）"""
-        engine = self._ensure_engine()
+                     effort: str, sid: str = None):
+        """按力度/评估结果路由模型并启动任务（评估完成或手动模式时调用）。
+        sid：目标会话（默认当前会话）；后台会话（排队消息）也可启动任务"""
+        sid = sid or self._session_id
+        engine = self._engine_for(sid)
+        fg = sid == self._session_id
         cfg = self._llm_config()
         providers = cfg.get("providers") or []
         # 手动选中的模型 → 使用其所属服务商的连接参数；否则当前服务商 + 力度路由
@@ -4133,9 +4508,10 @@ class AgentPanel(QDialog):
         # agnes 视觉模型（内置默认服务）处理图片而非丢弃
         if (not self._model_override and send_images
                 and agent_llm.is_text_only_model(model)):
-            self._add_status(
-                f"路由模型 {model} 不支持图片，已改用视觉模型 "
-                f"{agent_llm.DEFAULT_MODEL} 处理图片", WARN)
+            if fg:
+                self._add_status(
+                    f"路由模型 {model} 不支持图片，已改用视觉模型 "
+                    f"{agent_llm.DEFAULT_MODEL} 处理图片", WARN)
             model = agent_llm.DEFAULT_MODEL
             base_url = agent_llm.DEFAULT_BASE_URL
             api_key = agent_llm.DEFAULT_API_KEY
@@ -4150,13 +4526,14 @@ class AgentPanel(QDialog):
         engine.text_only = agent_llm.is_text_only_model(model)
         # 手动指定纯文本模型时剥离图片（混配模型场景逐次判断）
         if engine.text_only and send_images:
-            self._add_status("当前模型为纯文本模型，已忽略图片输入", WARN)
+            if fg:
+                self._add_status("当前模型为纯文本模型，已忽略图片输入", WARN)
             send_images = []
         engine.start(ai_text, "zhuzhu Copilot", send_images, skills=skill_names)
 
     def _assess_worker(self):
         """后台线程：用默认 agnes-2.5-flash 评估任务难度（失败回退本地估算）"""
-        ai_text = (self._eval_pending or ("", [], []))[0]
+        ai_text = (self._eval_pending or (None, "", [], []))[1]
         try:
             effort = agent_llm.assess_effort(ai_text)
         except Exception:
@@ -4167,15 +4544,15 @@ class AgentPanel(QDialog):
         """评估完成：按难度路由模型并启动任务（不显示评估文字，保持滑动动画）"""
         if not self._eval_pending:
             return
-        ai_text, send_images, skill_names = self._eval_pending
+        sid, ai_text, send_images, skill_names = self._eval_pending
         self._eval_pending = None
-        if self._user_stopped:
+        if sid == self._session_id and self._user_stopped:
             # 用户已在评估期间点击停止：放弃启动并复位按钮
             self._task_active = False
             self._hide_spinner()
             self._set_action_idle()
             return
-        self._launch_task(ai_text, send_images, skill_names, effort)
+        self._launch_task(ai_text, send_images, skill_names, effort, sid=sid)
 
     def _stop(self):
         if self._engine:
@@ -4196,7 +4573,10 @@ class AgentPanel(QDialog):
         eng.on_result = None
         eng.on_reasoning = None
         eng._stop.set()
-        self._engine = None   # 下次发送时重建全新引擎
+        st = self._sess.get(self._session_id)
+        if st and st.get("engine") is eng:
+            st["engine"] = None   # 下次发送时重建全新引擎
+        self._engine = None
         self._add_status("AI 线程无法中断，已强制隔离（后台线程已断开，新任务将自动重建）", ERR)
         self._task_active = False
         self._hide_spinner()
@@ -4270,13 +4650,17 @@ class AgentPanel(QDialog):
                                  f"确定永久删除对话「{name}」吗？\n所有记录将无法恢复！"):
             return
         self._delete_session(sid)
+        # 停止并清理该会话的独立引擎与内存态
+        st = self._sess.pop(sid, None)
+        if st:
+            eng = st.get("engine")
+            if eng:
+                eng.clear_history()
+                eng.clear_context()
+                if eng._thread and eng._thread.is_alive():
+                    eng.stop()
         if sid == self._session_id:
-            # 删除当前对话：停止引擎并清理内存（_session_id 先置空，防止切会话时复活文件）
-            if self._engine:
-                self._engine.clear_history()
-                self._engine.clear_context()
-                if self._engine._thread and self._engine._thread.is_alive():
-                    self._engine.stop()
+            # 删除当前对话：清理内存（_session_id 先置空，防止切会话时复活文件）
             self._session_id = None
             self._segments = []
             self._user_msgs = []
@@ -4336,13 +4720,16 @@ class AgentPanel(QDialog):
         if not self._confirm_box("永久删除对话",
                                  "该对话将连同所有记录被永久删除，无法恢复！\n确定继续吗？"):
             return
-        # ---- 执行：停止引擎 + 清空上下文与气泡 + tokens 归零 ----
+        # ---- 执行：停止该会话引擎 + 清空上下文与气泡 + tokens 归零 ----
         old_id = self._session_id
-        if self._engine:
-            self._engine.clear_history()
-            self._engine.clear_context()   # 同时删除磁盘上的持久化上下文
-            if self._engine._thread and self._engine._thread.is_alive():
-                self._engine.stop()
+        old_st = self._sess.pop(old_id, None)
+        if old_st:
+            eng = old_st.get("engine")
+            if eng:
+                eng.clear_history()
+                eng.clear_context()   # 同时删除磁盘上的持久化上下文
+                if eng._thread and eng._thread.is_alive():
+                    eng.stop()
         self._ai_bubble = None
         self._segments = []
         self._history_segments = []
@@ -4371,8 +4758,11 @@ class AgentPanel(QDialog):
         s = self._create_session()
         self._session_id = s["id"]
         self._session_name = "新对话"
+        self._sess[s["id"]] = self._new_sess_state(s["id"])
+        self._bind_sess(s["id"])
         self._refresh_session_combo()
         self._update_welcome()
+        self._update_queue_bar()
         self._add_status("已清空上下文并永久删除该对话", TEXT_DIM)
 
     # ---------- 拖拽/粘贴/上传附件（图片/文件） ----------
@@ -4684,8 +5074,9 @@ class AgentPanel(QDialog):
         running = bool(self._eval_pending is not None
                        or (self._engine and self._engine._thread
                            and self._engine._thread.is_alive()))
-        # 下载任务实时进度：轮询快照渲染到 AI 气泡内进度条
-        self._sync_download_progress()
+        # 下载任务实时进度：仅当前会话有任务时渲染进其气泡（避免后台会话下载进度串台）
+        if self._task_active:
+            self._sync_download_progress()
         # 任务结束即清理：只要任务标志开启且线程已退出，就执行收尾
         # （不依赖 spinner/按钮状态判断，避免切换模式等路径下漏清理）
         if not running and self._task_active:
@@ -4696,6 +5087,7 @@ class AgentPanel(QDialog):
                 self._end_badge_shown = True
                 self._show_end_badge()
             self._persist_current()   # 任务结束即持久化当前会话（重启可恢复）
+            self._flush_queue(self._session_id)   # 本轮完成 → 自动发送排队消息
             self._scroll_bottom()   # 结束执行时自动滚动到最下方
 
     def _sync_download_progress(self):
@@ -4937,9 +5329,12 @@ class AgentPanel(QDialog):
                 mw.show()
                 mw.raise_()
                 mw.activateWindow()
-        if self._engine:
-            self._engine.stop()
-            self._engine.join(1)   # 缩短等待：持久化改后台线程收尾，避免关闭窗口长时间阻塞
+        # 关闭面板：停止所有会话的引擎（多对话并发各自独立）
+        for st in self._sess.values():
+            eng = st.get("engine")
+            if eng:
+                eng.stop()
+                eng.join(1)   # 缩短等待：持久化改后台线程收尾，避免关闭窗口长时间阻塞
         self._persist_current()   # 关闭前持久化当前会话（上下文异步落盘，UI 只快速保存）
         try:
             self._mcp.close_all()

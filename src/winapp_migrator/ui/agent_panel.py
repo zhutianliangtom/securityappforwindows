@@ -2334,10 +2334,14 @@ class TodosPanel(QWidget):
         self._list_lay.addStretch(1)
         self._scroll.setWidget(self._list)
         lay.addWidget(self._scroll, 1)
+        self._limit = 360      # 面板最大高度（普通窗口约窗口一半，resizeEvent 随窗口更新）
+        self._last_h = -1      # 上次应用的高度，避免重复 relayout
         self.update_todos([])
 
-    def update_todos(self, todos: list):
-        """全量刷新任务列表；无任务时自动隐藏面板"""
+    def update_todos(self, todos: list, force: bool = False):
+        """全量刷新任务列表。
+        force=True（AI 调用 todos 工具时）：即使清单为空也弹出面板（显示占位）；
+        否则无任务时自动隐藏面板。"""
         while self._list_lay.count() > 1:
             item = self._list_lay.takeAt(0)
             w = item.widget()
@@ -2354,7 +2358,33 @@ class TodosPanel(QWidget):
             self._list_lay.insertWidget(0, empty)
         done = sum(1 for t in todos if t.get("status") == "completed")
         self._count.setText(f"{done}/{len(todos)}" if todos else "")
-        self.setVisible(bool(todos))
+        self.setVisible(bool(todos) or force)
+        self._resize_to_content()
+
+    def _content_height(self) -> int:
+        """按任务行实际换行高度估算列表自然高度（含行间距）"""
+        total, rows = 0, 0
+        # 行宽 = 面板宽 - 面板内边距(24) - 列表边距(4) - 行边距(8)
+        #           - 状态标记宽(14) - 行内间距(8)
+        row_w = max(80, self.width() - 24 - 4 - 8 - 14 - 8 - 4)
+        for i in range(self._list_lay.count() - 1):   # 末尾保留 stretch
+            w = self._list_lay.itemAt(i).widget()
+            if w is None:
+                continue
+            rows += 1
+            lbl = w.findChild(QLabel, "todoTitle")
+            h = lbl.heightForWidth(row_w) if lbl is not None else 20
+            total += max(20, h + 4)                    # 行高 + 行上下内边距
+        total += max(0, rows - 1) * self._list_lay.spacing()
+        return total
+
+    def _resize_to_content(self):
+        """自适应高度：内容少时矮、内容多时受限高（约窗口一半）内部滚动"""
+        total = 28 + self._content_height() + 22       # header + 面板上下内边距
+        h = max(56, min(int(total), self._limit))
+        if h != self._last_h:
+            self._last_h = h
+            self.setFixedHeight(h)
 
     def _row(self, t: dict) -> QWidget:
         title = str(t.get("title") or "")
@@ -2375,6 +2405,7 @@ class TodosPanel(QWidget):
             mark.setStyleSheet(f"color: {TEXT_DIM}; font-size: 12px;")
         rl.addWidget(mark, 0, Qt.AlignmentFlag.AlignTop)
         lbl = QLabel(_esc(title))
+        lbl.setObjectName("todoTitle")
         lbl.setWordWrap(True)
         color = TEXT_DIM if st == "completed" else TEXT
         lbl.setStyleSheet(f"color: {color}; font-size: 12px;")
@@ -2643,6 +2674,9 @@ class AgentPanel(QDialog):
         self._resize_timer.timeout.connect(self._rebuild_bubbles_after_resize)
         self._last_bw = self._last_bmn = -1     # 上次已同步的气泡宽度缓存
         self._last_img_w = -1                   # 上次重渲染时的截图宽度缓存
+        self._last_scale = 0.0                  # 上次底部输入行等比缩放系数（0=未初始化）
+        self._last_todos_limit = -1             # 上次 todos 面板限高缓存
+        self._btn_icon_sz = 16                  # 发送/转圈按钮图标尺寸（随窗口缩放）
 
         threading.Thread(target=self._init_mcp, daemon=True).start()
 
@@ -2803,14 +2837,14 @@ class AgentPanel(QDialog):
 
         # 输入栏
         bottom = QHBoxLayout()
-        bottom.setSpacing(10)
+        bottom.setSpacing(6)
         self.input = _DropTextEdit()
         self.input.setPlaceholderText("描述任务，例如：帮我打开百度搜索天气（输入 / 查看命令）")
-        self.input.setMinimumHeight(42)
-        self.input.setMaximumHeight(140)
+        self.input.setMinimumHeight(32)
+        self.input.setMaximumHeight(110)
         self.input.setStyleSheet(
             f"QPlainTextEdit {{ background: {PANEL}; color: {TEXT}; border: 1px solid {BORDER};"
-            "border-radius: 10px; padding: 8px 12px; font-size: 14px; }}"
+            "border-radius: 10px; padding: 5px 10px; font-size: 14px; }}"
             f"QPlainTextEdit:focus {{ border: 1px solid {ACCENT}; }}")
         self.input.submit.connect(self._send)   # Enter 发送（Shift+Enter 换行）
         self.input.textChanged.connect(self._update_cmd_suggestions)
@@ -2847,11 +2881,11 @@ class AgentPanel(QDialog):
         bottom.addWidget(self.model_combo)
 
         # 发送/停止融合按钮：空闲=发送（深蓝），运行中=转圈可点击停止，停止中=红底转圈
-        self.action_btn = QPushButton(_line_icon("send", 18, "#FFFFFF"), "")
+        self.action_btn = QPushButton(_line_icon("send", 16, "#FFFFFF"), "")
         self.action_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.action_btn.setAutoDefault(False)
-        self.action_btn.setFixedSize(42, 42)
-        self.action_btn.setIconSize(QSize(18, 18))
+        self.action_btn.setFixedSize(34, 34)
+        self.action_btn.setIconSize(QSize(16, 16))
         self.action_btn.setStyleSheet(_BTN_PRIMARY)
         self.action_btn.setToolTip("发送")
         self.action_btn.clicked.connect(self._on_action_clicked)
@@ -3434,6 +3468,8 @@ class AgentPanel(QDialog):
             threading.Thread(target=_load, daemon=True).start()
         # 切到该会话后处理其挂起的确认/提问（后台会话不弹窗，切到前台才弹）
         self._flush_pending(sid)
+        # 刷新 todos 面板（全局清单，无任务时自动隐藏）
+        self.todos_panel.update_todos(agent_tools.load_todos())
 
     def _finish_switch(self, sid: str, segs: list, ums: list, rows: list):
         """会话切换收尾（主线程）：用后台线程读到的数据一次性渲染"""
@@ -3561,6 +3597,9 @@ class AgentPanel(QDialog):
     def resizeEvent(self, e):
         super().resizeEvent(e)
         self._apply_topbar_layout()
+        # 底部输入行等比缩放 + todos 面板限高（随窗口高度变化，全屏自动放大）
+        self._apply_bottom_scale()
+        self._apply_todos_limit()
         # 气泡宽度同步（轻量 setter）；文本/截图重渲染交给防抖定时器合并。
         # 宽度未变化（仅高度变动）时直接跳过，避免最大化↔正常来回切换时反复遍历气泡
         mw = self._bubble_max_width()
@@ -3579,6 +3618,28 @@ class AgentPanel(QDialog):
             except RuntimeError:
                 pass
         self._resize_timer.start()
+
+    def _apply_bottom_scale(self):
+        """底部输入行等比缩放：普通窗口(基准高660)为紧凑值，窗口越高按比例放大"""
+        k = max(1.0, self.height() / 660.0)
+        if abs(k - self._last_scale) < 0.01:
+            return
+        self._last_scale = k
+        self._btn_icon_sz = int(16 * k)
+        s = int(34 * k)
+        self.input.setMinimumHeight(int(32 * k))
+        self.input.setMaximumHeight(int(110 * k))
+        for b in (self.attach_btn, self.action_btn):
+            b.setFixedSize(s, s)
+            b.setIconSize(QSize(self._btn_icon_sz, self._btn_icon_sz))
+
+    def _apply_todos_limit(self):
+        """todos 面板限高 = 窗口高度约一半（等比，全屏/大窗口自动更大）"""
+        limit = max(140, int(self.height() * 0.5))
+        if limit != self._last_todos_limit:
+            self._last_todos_limit = limit
+            self.todos_panel._limit = limit
+            self.todos_panel._resize_to_content()
 
     def _rebuild_bubbles_after_resize(self):
         """resize 停止后重渲染。字体固定 14px 不随窗口缩放（_font_scale 恒 1.0），
@@ -3727,7 +3788,7 @@ class AgentPanel(QDialog):
     def _set_action_idle(self):
         """空闲：输入框为空显示灰蓝发送按钮，有内容切换深蓝（可发送）"""
         self._action_anim.stop()
-        self.action_btn.setIcon(_line_icon("send", 18, "#FFFFFF"))
+        self.action_btn.setIcon(_line_icon("send", self._btn_icon_sz, "#FFFFFF"))
         self.action_btn.setStyleSheet(
             _BTN_PRIMARY if self.input.toPlainText().strip() else _BTN_DIM)
         self.action_btn.setEnabled(True)

@@ -1849,6 +1849,7 @@ class _ProviderDialog(QDialog):
         if pidx >= 0:
             self.protocol_combo.setCurrentIndex(pidx)
         self.preset_hint.setText(p.get("desc", ""))
+        self._invalidate()   # 预设变更需重新测试
 
     def _current_params(self) -> dict:
         models = [x.strip() for x in self.models_edit.text().replace("，", ",").split(",")

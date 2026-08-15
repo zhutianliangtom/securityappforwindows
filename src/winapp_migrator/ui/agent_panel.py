@@ -1842,8 +1842,13 @@ class _ProviderDialog(QDialog):
 
     def closeEvent(self, e):
         t = self._test_thread
-        if t is not None and t.isRunning():
-            t.wait(2000)   # 等待后台测试线程收尾，避免 QThread 运行中销毁
+        if t is not None:
+            try:
+                # 线程 finished 已 deleteLater，可能已被销毁 → 捕获 RuntimeError 避免崩溃
+                if t.isRunning():
+                    t.wait(2000)   # 等待后台测试线程收尾，避免 QThread 运行中销毁
+            except RuntimeError:
+                pass
         super().closeEvent(e)
 
     def provider_data(self) -> dict:
@@ -2300,9 +2305,11 @@ class TodosPanel(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setObjectName("todosPanel")
+        # QWidget 默认不绘制 stylesheet 背景 → 加 WA_StyledBackground 才能画出纯黑底
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self.setStyleSheet(
-            f"QWidget#todosPanel {{ background: {PANEL};"
-            f"border: 1px solid {ACCENT}; border-radius: 10px; }}")
+            f"QWidget#todosPanel {{ background: {BG};"
+            f"border: 1px solid {ACCENT}; }}")
         lay = QVBoxLayout(self)
         lay.setContentsMargins(12, 12, 12, 10)
         lay.setSpacing(8)
@@ -2316,17 +2323,17 @@ class TodosPanel(QWidget):
         self._count.setStyleSheet(f"color: {TEXT_DIM}; font-size: 11px;")
         header.addWidget(self._count)
         header.addStretch(1)
-        # 右上角清空小按钮：鼠标悬停面板时显示
+        # 右上角清空按钮：常显、尺寸足够大便于点击（鼠标激活区域不再过小）
         self._close_btn = QPushButton("×")
         self._close_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self._close_btn.setAutoDefault(False)
-        self._close_btn.setFixedSize(18, 18)
+        self._close_btn.setFixedSize(30, 26)
         self._close_btn.setStyleSheet(
-            f"QPushButton {{ background: transparent; color: {TEXT_DIM};"
-            "border: none; border-radius: 9px; font-size: 14px; }}"
-            f"QPushButton:hover {{ background: #1A2740; color: #FFFFFF; }}")
+            f"QPushButton {{ background: {PANEL}; color: {TEXT_DIM};"
+            f"border: 1px solid {BORDER}; border-radius: 6px; font-size: 15px; }}"
+            f"QPushButton:hover {{ background: #1A2740; color: #FFFFFF;"
+            f"border-color: {ACCENT_HOVER}; }}")
         self._close_btn.setToolTip("清空任务清单")
-        self._close_btn.setVisible(False)
         self._close_btn.clicked.connect(self.clear_requested.emit)
         header.addWidget(self._close_btn)
         lay.addLayout(header)
@@ -2375,14 +2382,6 @@ class TodosPanel(QWidget):
         self.setVisible(True)   # 面板默认常显
         self._resize_to_content()
 
-    def enterEvent(self, e):
-        super().enterEvent(e)
-        self._close_btn.setVisible(True)   # 鼠标悬停面板：显示右上角清空按钮
-
-    def leaveEvent(self, e):
-        super().leaveEvent(e)
-        self._close_btn.setVisible(False)  # 鼠标移出：隐藏清空按钮
-
     def _content_height(self) -> int:
         """按任务行实际换行高度估算列表自然高度（含行间距）"""
         total, rows = 0, 0
@@ -2406,7 +2405,8 @@ class TodosPanel(QWidget):
         # widgetResizable 会把内部列表压缩到视口，minimumHeight 设为内容高度，
         # 窗口高度恰好等于内容时不出现滚动条（不被裁剪、不留空白）。
         self._list.setMinimumHeight(content)
-        total = 28 + content + 22              # header + 面板上下内边距
+        # 面板高 = 上边距(12) + header(26 按钮) + 间距(8) + 内容 + 下边距(10)
+        total = 34 + content + 22
         h = max(56, int(total))
         if h != self._last_h:
             self._last_h = h
@@ -2451,16 +2451,23 @@ class TodosWindow(QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        # 无边框 + Tool：独立悬浮窗口，不占任务栏、随主窗口隐藏/最小化
+        # 无边框 + Tool + 置顶：独立悬浮窗口，不占任务栏、随主窗口隐藏/最小化、
+        # 始终浮于其他窗口之上不被遮挡（与全局反馈层/Toast 悬浮窗一致）
         self.setWindowFlags(Qt.WindowType.FramelessWindowHint
-                            | Qt.WindowType.Tool)
-        # 透明背景：仅显示内部圆角卡片，四角透出桌面（避免黑方块）
-        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+                            | Qt.WindowType.Tool
+                            | Qt.WindowType.WindowStaysOnTopHint)
+        # 纯黑实心底（不透明）：面板铺满整个窗口，杜绝透出桌面
+        self.setObjectName("todosWin")
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self.setStyleSheet(f"QWidget#todosWin {{ background: {BG}; }}")
         self.setFixedWidth(self.WIDTH)
         self.resize(self.WIDTH, 100)
         self.panel = TodosPanel(self)
         self.panel.clear_requested.connect(self.clear_requested.emit)
         self.panel.height_changed.connect(self._sync_height)
+        # 初始同步：TodosPanel 构造时已完成首次测量并 setFixedHeight，
+        # 但此时 height_changed 尚未连接 → 这里补一次，窗口高度跟随面板（不限高）
+        self._sync_height(self.panel.height())
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(0)
@@ -3886,13 +3893,16 @@ class AgentPanel(QDialog):
         tw.move(max(0, self.x() - tw.width()), self.y())
         if not tw.isVisible():
             tw.show()
+            tw.raise_()   # 置顶浮层，避免被其他窗口遮挡
 
     def showEvent(self, e):
         super().showEvent(e)   # 统一补丁已为 QDialog 深色化标题栏
         # 强制任务栏缩略图（owned window 默认不显示，需手动加 WS_EX_APPWINDOW）
         self._ensure_taskbar_entry()
-        # 打开面板时同步显示 todos 独立窗口（停靠左侧、顶部齐平）
+        # 打开面板时同步显示 todos 独立窗口（停靠左侧、顶部齐平）；
+        # 延迟再同步一次兜底面板完全就绪前的时序问题
         self._sync_todos_win()
+        QTimer.singleShot(50, self._sync_todos_win)
         # 面板复用（关闭再打开不销毁），滚动位置不会自动重置 → 打开时自动滚到对话底部
         QTimer.singleShot(0, self._scroll_bottom)
         QTimer.singleShot(300, self._scroll_bottom)

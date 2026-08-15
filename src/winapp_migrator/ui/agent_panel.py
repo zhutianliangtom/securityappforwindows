@@ -38,6 +38,7 @@ from PyQt6.QtWidgets import (
     QRadioButton, QCheckBox, QListWidgetItem,
     QStackedWidget, QMenu, QFileDialog, QPlainTextEdit, QSlider,
     QLayout, QWidgetItem, QInputDialog, QFrame, QStyledItemDelegate,
+    QSizePolicy,
 )
 
 from winapp_migrator.core import agent_llm, agent_engine, agent_skills, agent_sandbox, agent_tools, agent_screen, agent_tts
@@ -2508,7 +2509,6 @@ class QueuePanel(QWidget):
             self._list_lay.insertWidget(self._list_lay.count() - 1, self._item(i, q))
         self._count.setText(f"{len(items or [])} 条" if items else "")
         self.setVisible(bool(items))
-        self._resize_to_content()
         if items:
             # 排队消息从下至上：自动滚动到底部，最新排队消息始终可见
             QTimer.singleShot(0, self._scroll_to_bottom)
@@ -2542,6 +2542,7 @@ class QueuePanel(QWidget):
         edit.setAutoDefault(False)
         edit.setStyleSheet(_BTN_GHOST)
         edit.setFixedHeight(22)
+        edit.setFixedWidth(46)
         edit.setToolTip("回填到输入框修改，发送后回到原队列位置")
         edit.clicked.connect(lambda _=False, i=idx: self.edit_clicked.emit(i))
         rl.addWidget(edit)
@@ -2550,6 +2551,7 @@ class QueuePanel(QWidget):
         dele.setAutoDefault(False)
         dele.setStyleSheet(_BTN_GHOST)
         dele.setFixedHeight(22)
+        dele.setFixedWidth(46)
         dele.setToolTip("取消该条排队消息")
         dele.clicked.connect(lambda _=False, i=idx: self.delete_clicked.emit(i))
         rl.addWidget(dele)
@@ -2559,15 +2561,6 @@ class QueuePanel(QWidget):
     def clear_all(self):
         """清空全部排队消息（仅发信号，由 AgentPanel 负责数据与 UI 同步）"""
         self.clear_clicked.emit()
-
-    def _resize_to_content(self):
-        """高度自适应：内容少时矮，多条时封顶 _limit 内部滚动"""
-        n = self._list_lay.count() - 1
-        content = n * 26 + max(0, n - 1) * self._list_lay.spacing()
-        h = max(0, min(18 + 12 + content, self._limit))
-        if h != self._last_h:
-            self._last_h = h
-            self.setFixedHeight(h)
 
 
 class _SessionStatusDelegate(QStyledItemDelegate):
@@ -3027,8 +3020,6 @@ class AgentPanel(QDialog):
         self.action_btn.setToolTip("发送")
         self.action_btn.clicked.connect(self._on_action_clicked)
         bottom.addWidget(self.action_btn)
-        # 输入区更靠底部：弹性空间置于输入行上方，排队面板紧随输入行
-        right.addStretch(1)
         right.addLayout(bottom)
         body.addLayout(right, 1)
         root.addLayout(body, 0)   # 底部区域按内容高度贴底，聊天区占满其余空间
@@ -3379,7 +3370,7 @@ class AgentPanel(QDialog):
             self._cancel_queue_edit()
 
     def _flush_queue(self, sid: str):
-        """该会话本轮任务完成后：按队列顺序逐条自动发送（一次一条，下轮继续）"""
+        """该会话本轮任务完成后：发送排队消息中最新的一条（一次一条，下轮继续）"""
         st = self._sess.get(sid)
         qs = (st or {}).get("queued") or []
         if not qs:
@@ -3387,7 +3378,7 @@ class AgentPanel(QDialog):
         eng = st.get("engine")
         if eng and eng._thread and eng._thread.is_alive():
             return     # 该会话仍有任务在跑，继续等待
-        q = qs.pop(0)
+        q = qs.pop()   # 最新一条优先发送
         if sid == self._session_id:
             self._update_queue_bar()
             self._do_send(q)

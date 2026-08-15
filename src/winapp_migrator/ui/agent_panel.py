@@ -1832,8 +1832,11 @@ class _ProviderDialog(QDialog):
 
     def _invalidate(self, *_):
         self._test_ok = False
+        self.test_btn.setEnabled(True)   # 配置变化后重新启用测试按钮
+        self.test_btn.setText("测试连接")
         self.test_result.setStyleSheet(f"color: {self._DIM}; font-size: 12px;")
         self.test_result.setText("配置已变化，需重新测试连接")
+        self.ai_hint.setText("")
 
     def _apply_preset(self, idx):
         p = self.preset_combo.itemData(idx)

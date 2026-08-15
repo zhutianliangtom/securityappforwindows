@@ -3755,8 +3755,8 @@ class AgentPanel(QDialog):
             b.setIconSize(QSize(self._btn_icon_sz, self._btn_icon_sz))
 
     def _apply_todos_limit(self):
-        """todos 面板限高 = 窗口高度约一半（等比，全屏/大窗口自动更大）"""
-        limit = max(140, int(self.height() * 0.5))
+        """todos 面板限高 = 窗口高度约 1/3（功能区独立列、固定高度，互不影响）"""
+        limit = max(120, int(self.height() * 0.33))
         if limit != self._last_todos_limit:
             self._last_todos_limit = limit
             self.todos_panel._limit = limit

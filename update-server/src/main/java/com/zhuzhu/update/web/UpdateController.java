@@ -10,6 +10,7 @@ import com.zhuzhu.update.service.UpdateService;
 import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.core.io.FileSystemResource;
 import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpRange;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
@@ -17,6 +18,7 @@ import org.springframework.web.bind.annotation.*;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 
 /** 客户端更新检查与安装包下载 */
@@ -61,10 +63,10 @@ public class UpdateController {
         return out;
     }
 
-    /** 安装包下载：返回文件流并记录一条下载日志 */
+    /** 安装包下载：支持 HTTP Range 请求（断点续传） */
     @GetMapping("/download/{id}")
-    public ResponseEntity<FileSystemResource> download(@PathVariable Long id,
-                                                       HttpServletRequest request) {
+    public ResponseEntity<?> download(@PathVariable Long id,
+                                      HttpServletRequest request) {
         AppVersion v = versionRepo.findById(id).orElse(null);
         if (v == null) {
             return ResponseEntity.notFound().build();
@@ -74,11 +76,52 @@ public class UpdateController {
             return ResponseEntity.notFound().build();
         }
         recordDownload(v, request);
-        return ResponseEntity.ok()
-                .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"" + v.getFileName() + "\"")
-                .contentType(MediaType.APPLICATION_OCTET_STREAM)
-                .contentLength(v.getFileSize())
-                .body(new FileSystemResource(file));
+
+        long fileSize = v.getFileSize();
+        String filename = v.getFileName();
+
+        // 读取 Range 请求头
+        List<HttpRange> ranges = request.getHeaders(HttpHeaders.RANGE)
+                .stream()
+                .flatMap(h -> HttpRange.parseHttpRange(h).stream())
+                .toList();
+
+        if (ranges.isEmpty()) {
+            // 无 Range 请求：返回完整文件 200
+            return ResponseEntity.ok()
+                    .header(HttpHeaders.ACCEPT_RANGES, "bytes")
+                    .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"" + filename + "\"")
+                    .contentType(MediaType.APPLICATION_OCTET_STREAM)
+                    .contentLength(fileSize)
+                    .body(new FileSystemResource(file));
+        }
+
+        // 有 Range 请求：返回部分内容 206
+        HttpRange range = ranges.get(0);
+        long start = range.getRangeStart(fileSize);
+        long end = range.getRangeEnd(fileSize);
+
+        if (start < 0 || end >= fileSize || start > end) {
+            // 范围无效
+            return ResponseEntity.status(416)
+                    .header(HttpHeaders.CONTENT_RANGE, "bytes */" + fileSize)
+                    .build();
+        }
+
+        long contentLength = end - start + 1;
+
+        try {
+            // 使用 RangeFileResource 支持断点续传
+            return ResponseEntity.status(206)
+                    .header(HttpHeaders.CONTENT_RANGE, "bytes " + start + "-" + end + "/" + fileSize)
+                    .header(HttpHeaders.ACCEPT_RANGES, "bytes")
+                    .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"" + filename + "\"")
+                    .contentType(MediaType.APPLICATION_OCTET_STREAM)
+                    .contentLength(contentLength)
+                    .body(new RangeFileResource(file, start, contentLength));
+        } catch (Exception e) {
+            return ResponseEntity.internalServerError().build();
+        }
     }
 
     private void recordDownload(AppVersion v, HttpServletRequest request) {

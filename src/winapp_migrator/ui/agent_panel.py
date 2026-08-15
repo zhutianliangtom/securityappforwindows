@@ -889,6 +889,11 @@ class _AgentSettingsDialog(QDialog):
         self.hide_main_check.setStyleSheet(f"color: {self._TEXT}; font-size: 13px; spacing: 8px;")
         self.hide_main_check.toggled.connect(self._on_hide_main_toggled)
         lay.addWidget(self.hide_main_check)
+        # 任务清单窗口：关闭后 AI 面板不再显示 todos 独立窗口（连续清空提示中可一键跳转此处）
+        self.todos_check = QCheckBox("显示任务清单窗口（todos）")
+        self.todos_check.setChecked(self._todos_enabled())
+        self.todos_check.setStyleSheet(f"color: {self._TEXT}; font-size: 13px; spacing: 8px;")
+        lay.addWidget(self.todos_check)
         # 执行模式：AskBeforeEdit / Edit / YOLO（原面板顶栏下拉，迁入设置页）
         mode_row = QHBoxLayout()
         mode_row.setSpacing(10)
@@ -937,6 +942,10 @@ class _AgentSettingsDialog(QDialog):
     def _hide_main_enabled(self) -> bool:
         return str(QSettings("WinAppMigrator", "WinAppMigrator")
                    .value("hide_main_window", "0")).strip().lower() in ("1", "true", "yes")
+
+    def _todos_enabled(self) -> bool:
+        return str(QSettings("WinAppMigrator", "WinAppMigrator")
+                   .value("agent_show_todos", "1")).strip().lower() in ("1", "true", "yes")
 
     def _main_window(self):
         # 本对话框 parent=AgentPanel，AgentPanel 的 parent=MainWindow
@@ -1475,6 +1484,7 @@ class _AgentSettingsDialog(QDialog):
             q = QSettings("WinAppMigrator", "WinAppMigrator")
             q.setValue("agent_mode", self.mode_combo.currentData() or "ask")
             q.setValue("agent_workdir", self.workdir_edit.text().strip())
+            q.setValue("agent_show_todos", "1" if self.todos_check.isChecked() else "0")
             if not mcp_ok:
                 QMessageBox.warning(self, "提示", "MCP 配置保存失败（无写入权限），其余设置已保存")
             # 音色与自动朗读：独立写入 tts.json，避免被 settings.json 覆写
@@ -2307,9 +2317,7 @@ class TodosPanel(QWidget):
         self.setObjectName("todosPanel")
         # QWidget 默认不绘制 stylesheet 背景 → 加 WA_StyledBackground 才能画出纯黑底
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
-        self.setStyleSheet(
-            f"QWidget#todosPanel {{ background: {BG};"
-            f"border: 1px solid {ACCENT}; }}")
+        self.setStyleSheet(f"QWidget#todosPanel {{ background: {BG}; }}")
         lay = QVBoxLayout(self)
         lay.setContentsMargins(12, 12, 12, 10)
         lay.setSpacing(8)
@@ -2451,11 +2459,10 @@ class TodosWindow(QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        # 无边框 + Tool + 置顶：独立悬浮窗口，不占任务栏、随主窗口隐藏/最小化、
-        # 始终浮于其他窗口之上不被遮挡（与全局反馈层/Toast 悬浮窗一致）
+        # 无边框 + Tool：独立悬浮窗口，不占任务栏、随主窗口隐藏/最小化。
+        # 不加 WindowStaysOnTopHint → 不显示在任何窗口最顶层（仅随 AI 面板停靠）
         self.setWindowFlags(Qt.WindowType.FramelessWindowHint
-                            | Qt.WindowType.Tool
-                            | Qt.WindowType.WindowStaysOnTopHint)
+                            | Qt.WindowType.Tool)
         # 纯黑实心底（不透明）：面板铺满整个窗口，杜绝透出桌面
         self.setObjectName("todosWin")
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
@@ -3415,12 +3422,31 @@ class AgentPanel(QDialog):
         self._update_queue_bar()
 
     def _on_todos_clear(self):
-        """用户手动清空 todos：清空清单文件并刷新窗口（AI 下次 update_todo 全量恢复）"""
+        """用户手动清空 todos：清空清单文件并刷新窗口（AI 下次 update_todo 全量恢复）。
+        1 秒内连续清空 3 次 → 提示可前往设置关闭任务清单窗口。"""
+        now = time.time()
+        clicks = [t for t in getattr(self, "_clear_clicks", []) if now - t < 1.0]
+        clicks.append(now)
+        self._clear_clicks = clicks
         try:
             agent_tools.TODO_FILE.write_text("[]", encoding="utf-8")
         except OSError:
             pass
         self.todos_win.update_todos([])
+        if len(clicks) >= 3:
+            self._clear_clicks = []
+            self._suggest_disable_todos()
+
+    def _suggest_disable_todos(self):
+        """弹窗提示可关闭任务清单窗口，并提供一键跳转设置"""
+        box = QMessageBox(self)
+        box.setWindowTitle("提示")
+        box.setText("1 秒内连续清空了 3 次任务清单。\n如不需要该窗口，可在设置中关闭任务清单窗口。")
+        go = box.addButton("前往设置", QMessageBox.ButtonRole.AcceptRole)
+        box.addButton("取消", QMessageBox.ButtonRole.RejectRole)
+        box.exec()
+        if box.clickedButton() is go:
+            self._open_settings()
 
     def _cancel_queue_edit(self):
         """取消编辑状态并恢复输入框占位提示"""
@@ -3885,15 +3911,24 @@ class AgentPanel(QDialog):
         except Exception:
             pass
 
+    def _todos_enabled(self) -> bool:
+        """任务清单窗口是否启用（设置-通用页开关，默认启用）"""
+        return str(QSettings("WinAppMigrator", "WinAppMigrator")
+                   .value("agent_show_todos", "1")).strip().lower() in ("1", "true", "yes")
+
     def _sync_todos_win(self):
-        """todos 独立窗口停靠主窗口左侧、顶部齐平；主窗口移动/显示时跟随"""
+        """todos 独立窗口停靠主窗口左侧、顶部齐平；主窗口移动/显示时跟随。
+        设置中关闭任务清单窗口时隐藏且不显示。"""
         tw = getattr(self, "todos_win", None)
         if tw is None:
+            return
+        if not self._todos_enabled():
+            tw.hide()
             return
         tw.move(max(0, self.x() - tw.width()), self.y())
         if not tw.isVisible():
             tw.show()
-            tw.raise_()   # 置顶浮层，避免被其他窗口遮挡
+            tw.raise_()   # 显示时抬到面板之上（非置顶，可被其他窗口覆盖）
 
     def showEvent(self, e):
         super().showEvent(e)   # 统一补丁已为 QDialog 深色化标题栏
@@ -4578,6 +4613,7 @@ class AgentPanel(QDialog):
         dlg = _AgentSettingsDialog(parent=self)
         if dlg.exec():
             self._apply_agent_settings()
+            self._sync_todos_win()   # 任务清单窗口开关即时生效（立即隐藏/恢复）
 
     def _apply_agent_settings(self):
         """设置变更后：刷新模式/工作目录/多模型/力度/纯文本状态；

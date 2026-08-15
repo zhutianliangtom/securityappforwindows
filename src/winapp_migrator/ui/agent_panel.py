@@ -3020,6 +3020,8 @@ class AgentPanel(QDialog):
         self.action_btn.setToolTip("发送")
         self.action_btn.clicked.connect(self._on_action_clicked)
         bottom.addWidget(self.action_btn)
+        # 输入行始终贴底：排队面板显示时由 Expanding 占满，隐藏时由弹性空间撑起
+        right.addStretch(1)
         right.addLayout(bottom)
         body.addLayout(right, 1)
         root.addLayout(body, 0)   # 底部区域按内容高度贴底，聊天区占满其余空间

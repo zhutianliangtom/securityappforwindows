@@ -1,0 +1,3 @@
+LIBRARY fast_download.cp313-win_amd64.pyd
+EXPORTS
+PyInit_fast_download

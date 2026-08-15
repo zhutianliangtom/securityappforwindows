@@ -1,0 +1,3 @@
+LIBRARY data_dirs.cp313-win_amd64.pyd
+EXPORTS
+PyInit_data_dirs

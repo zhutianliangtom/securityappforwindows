@@ -1,0 +1,3 @@
+LIBRARY agent_llm.cp313-win_amd64.pyd
+EXPORTS
+PyInit_agent_llm

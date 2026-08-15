@@ -2570,9 +2570,10 @@ class TodosWindow(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         # 无边框 + Tool：独立悬浮窗口，不占任务栏、随主窗口隐藏/最小化。
-        # 不加 WindowStaysOnTopHint → 不显示在任何窗口最顶层（仅随 AI 面板停靠）
+        # 加 WindowStaysOnTopHint：点击主窗口时不消失
         self.setWindowFlags(Qt.WindowType.FramelessWindowHint
-                            | Qt.WindowType.Tool)
+                            | Qt.WindowType.Tool
+                            | Qt.WindowType.WindowStaysOnTopHint)
         # 纯黑实心底（不透明）：面板铺满整个窗口，杜绝透出桌面
         self.setObjectName("todosWin")
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
@@ -4140,6 +4141,11 @@ class AgentPanel(QDialog):
         tw = getattr(self, "todos_win", None)
         if tw is not None:
             tw.hide()
+
+    def focusInEvent(self, e):
+        super().focusInEvent(e)
+        # 用户点击主窗口或设置页时，面板获得焦点 → 重新显示并定位 todos
+        self._sync_todos_win()
 
     def _add_bubble(self, text: str, align: str, rich: bool = False,
                     animate: bool = True) -> QLabel:

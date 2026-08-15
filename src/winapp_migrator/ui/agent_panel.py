@@ -1105,6 +1105,8 @@ class _AgentSettingsDialog(QDialog):
         self.effort_slider.setValue(agent_llm.EFFORTS.index(self._effort)
                                     if self._effort in agent_llm.EFFORTS else 0)
         self.effort_slider.blockSignals(False)
+        # 自动按难度开启时手动力度不生效 → 置灰提示，避免误以为「没保存」
+        self._sync_effort_ui()
         tip = QLabel("工作强度会自动按模型映射：DeepSeek V4 思考模式（high/max）、"
                      "GLM-4.5+ 深度思考、OpenAI o 系列 reasoning_effort，无需手动开启")
         tip.setStyleSheet(f"color: {self._DIM}; font-size: 12px;")
@@ -1459,9 +1461,16 @@ class _AgentSettingsDialog(QDialog):
             self.workdir_edit.setText(d)
 
     def _on_effort_changed(self, *_):
-        """力度滑块/自动开关变更：刷新当前力度标签"""
+        """力度滑块/自动开关变更：刷新当前力度标签并同步置灰状态"""
         self._effort = agent_llm.EFFORTS[self.effort_slider.value()]
         self.effort_label.setText(self._effort)
+        self._sync_effort_ui()
+
+    def _sync_effort_ui(self):
+        """自动按难度开启时手动力度不生效：滑块与力度标签置灰，避免误以为「没保存」"""
+        auto = self.auto_effort_check.isChecked()
+        self.effort_slider.setEnabled(not auto)
+        self.effort_label.setEnabled(not auto)
 
     def _save(self, *_):
         # 多服务商：基于卡片列表持久化，全部服务商统一参与路由

@@ -2561,7 +2561,7 @@ class TodosPanel(QWidget):
 class TodosWindow(QWidget):
     """TODOS 独立无边框悬浮窗口：停靠 AI 主窗口左侧、顶部与主窗口齐平。
     保留任务清单面板（标题+计数+右上角清空按钮），高度随清单长短自适应（不限高度）。
-    纯黑+淡灰+白+深蓝四色极简风格，无 emoji。"""
+    纯黑+淡灰+白+深蓝四色极简风格，无 emoji。支持鼠标拖拽移动，但重启后重置为默认位置。"""
 
     clear_requested = pyqtSignal()   # 用户手动清空任务清单
 
@@ -2590,6 +2590,8 @@ class TodosWindow(QWidget):
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(0)
         lay.addWidget(self.panel)
+        # 鼠标拖拽状态
+        self._drag_start_pos = None
 
     def _sync_height(self, h: int):
         """面板高度变化 → 窗口高度同步（顶部固定，窗口只增不减地向下生长）"""
@@ -2597,6 +2599,22 @@ class TodosWindow(QWidget):
 
     def update_todos(self, todos: list):
         self.panel.update_todos(todos)
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._drag_start_pos = event.globalPosition().toPoint()
+            event.accept()
+
+    def mouseMoveEvent(self, event):
+        if self._drag_start_pos is not None:
+            delta = event.globalPosition().toPoint() - self._drag_start_pos
+            self.move(self.x() + delta.x(), self.y() + delta.y())
+            event.accept()
+
+    def mouseReleaseEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._drag_start_pos = None
+            event.accept()
 
 
 class QueuePanel(QWidget):
